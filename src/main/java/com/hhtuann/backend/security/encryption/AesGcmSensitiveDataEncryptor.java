@@ -143,8 +143,12 @@ public class AesGcmSensitiveDataEncryptor implements SensitiveDataEncryptor {
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("Ciphertext body is not valid Base64URL", ex);
         }
-        if (combined.length < NONCE_LENGTH_BYTES + 1) {
-            throw new IllegalArgumentException("Ciphertext is too short to contain a nonce and tag");
+        // Minimum valid payload is a 12-byte nonce plus a 16-byte GCM tag (a
+        // ciphertext that decrypts to zero plaintext bytes is exactly these 28
+        // bytes). Anything shorter cannot be a well-formed AES-GCM payload.
+        if (combined.length < NONCE_LENGTH_BYTES + TAG_LENGTH_BITS / Byte.SIZE) {
+            throw new IllegalArgumentException(
+                    "Ciphertext is too short: must contain a 12-byte nonce and a 16-byte GCM tag");
         }
         byte[] nonce = Arrays.copyOfRange(combined, 0, NONCE_LENGTH_BYTES);
         byte[] ciphertextWithTag = Arrays.copyOfRange(combined, NONCE_LENGTH_BYTES, combined.length);

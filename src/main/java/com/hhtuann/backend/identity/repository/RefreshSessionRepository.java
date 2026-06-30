@@ -1,9 +1,13 @@
 package com.hhtuann.backend.identity.repository;
 
 import com.hhtuann.backend.identity.domain.model.RefreshSession;
+import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
@@ -40,6 +44,33 @@ public interface RefreshSessionRepository extends JpaRepository<RefreshSession, 
             where rs.tokenHash = :tokenHash
             """)
     Optional<RefreshSession> findByTokenHashWithUser(
+            @Param("tokenHash") String tokenHash
+    );
+
+    /**
+     * Finds a refresh session by its token hash with a pessimistic write lock,
+     * eagerly fetching the owning user.
+     *
+     * <p>Used by refresh-token rotation so that two concurrent refreshes of the
+     * same opaque token are serialized by the database row lock: the second
+     * caller blocks until the first transaction commits (or the 5 s lock timeout
+     * elapses), then observes the rotated (replaced) session and trips reuse
+     * detection rather than creating a second live session. As with
+     * {@link #findByTokenHashWithUser}, no filtering on {@code revokedAt},
+     * {@code expiresAt} or user status is performed.
+     *
+     * @param tokenHash the hash of the opaque refresh token to look up
+     * @return the locked session with its user initialized, or empty if none
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000")})
+    @Query("""
+            select rs
+            from RefreshSession rs
+            join fetch rs.user
+            where rs.tokenHash = :tokenHash
+            """)
+    Optional<RefreshSession> findForUpdateByTokenHashWithUser(
             @Param("tokenHash") String tokenHash
     );
 

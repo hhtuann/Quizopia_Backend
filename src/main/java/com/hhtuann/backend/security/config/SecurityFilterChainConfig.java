@@ -1,57 +1,71 @@
 package com.hhtuann.backend.security.config;
 
+import com.hhtuann.backend.security.authentication.QuizopiaJwtAuthenticationConverter;
+import com.hhtuann.backend.security.web.OriginCheckFilter;
+import com.hhtuann.backend.security.web.QuizopiaAccessDeniedHandler;
+import com.hhtuann.backend.security.web.QuizopiaAuthenticationEntryPoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 
 /**
- * Minimal Spring Security configuration for Batch 1.
+ * Spring Security configuration for the authentication API.
  *
- * <p>It is intentionally restrictive:
+ * <p>Stateless token-based API: CSRF disabled (the stateless Bearer API does not
+ * need it; the cookie-based refresh/logout endpoints are instead defended by
+ * HttpOnly + SameSite=Lax cookies plus the {@link OriginCheckFilter}), form
+ * login / HTTP Basic / OAuth2 client all disabled, resource-server JWT enabled
+ * with a custom converter that loads authorities and enforces token-version
+ * checks.
+ *
+ * <p>Authorization rules:
  * <ul>
- *   <li>Stateless sessions (token-based API).</li>
- *   <li>Form login, HTTP Basic and CSRF disabled.</li>
- *   <li>No OAuth2 client / social login is enabled.</li>
- *   <li>OAuth2 resource server JWT is enabled using the shared {@code JwtDecoder}
- *       bean, so tokens can be validated once authentication endpoints exist.</li>
- *   <li>Only Actuator health is public; every other request is denied. The
- *       {@code /api/auth/**} paths are <em>not</em> permitted here because no
- *       authentication controller exists yet in Batch 1.</li>
+ *   <li>public: POST {@code /api/auth/{register,login,refresh,logout}} and
+ *       {@code GET /actuator/health/**},</li>
+ *   <li>authenticated: {@code GET /api/auth/me},</li>
+ *   <li>everything else is denied by default until its module is opened.</li>
  * </ul>
- *
- * <p>CORS, CSRF for cookie-based refresh/logout, origin validation, role and
- * permission authorities, and the authentication endpoints are completed in
- * Batch 2.
  */
 @Configuration
 public class SecurityFilterChainConfig {
 
-    /**
-     * Actuator health path permitted without authentication.
-     */
-    static final String[] PUBLIC_HEALTH_PATHS = new String[] {
-            "/actuator/health",
-            "/actuator/health/**"
-    };
-
-    /**
-     * @param http the security builder
-     * @return the security filter chain
-     * @throws Exception if the chain cannot be configured
-     */
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                            CorsConfigurationSource corsConfigurationSource,
+                                            QuizopiaJwtAuthenticationConverter jwtAuthenticationConverter,
+                                            QuizopiaAuthenticationEntryPoint authenticationEntryPoint,
+                                            QuizopiaAccessDeniedHandler accessDeniedHandler,
+                                            OriginCheckFilter originCheckFilter) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                // OriginCheckFilter runs before Spring's CorsFilter so a disallowed
+                // origin is answered with AUTH_ORIGIN_NOT_ALLOWED instead of the
+                // default "Invalid CORS request" body.
+                .addFilterBefore(originCheckFilter, CorsFilter.class)
+                .exceptionHandling(eh -> eh
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(
+                        jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter)))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(PUBLIC_HEALTH_PATHS).permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/auth/register",
+                                "/api/auth/login",
+                                "/api/auth/refresh",
+                                "/api/auth/logout").permitAll()
+                        .requestMatchers(HttpMethod.GET,
+                                "/actuator/health",
+                                "/actuator/health/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

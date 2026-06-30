@@ -42,7 +42,14 @@ public class Sha256RefreshTokenHasher implements RefreshTokenHasher {
             hex[i * 2 + 1] = HEX_DIGITS[value & 0x0F];
         }
         String result = new String(hex);
-        assert result.length() == EXPECTED_HEX_LENGTH;
+        // SHA-256 always yields 32 bytes (64 hex chars). This is a real runtime
+        // check, not a disabled-by-default assert: if the JVM's MessageDigest is
+        // somehow misconfigured we must fail loudly rather than silently return a
+        // hash that violates the refresh_sessions.token_hash CHECK constraint.
+        if (result.length() != EXPECTED_HEX_LENGTH) {
+            throw new IllegalStateException(
+                    "SHA-256 produced an unexpected digest length: " + result.length());
+        }
         return result;
     }
 }

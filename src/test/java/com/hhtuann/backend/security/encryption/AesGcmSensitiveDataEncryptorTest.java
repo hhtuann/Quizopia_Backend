@@ -131,4 +131,23 @@ class AesGcmSensitiveDataEncryptorTest {
         assertThatThrownBy(() -> encryptor.decrypt(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void truncatedCiphertextBelowNoncePlusTagIsRejected() {
+        // Minimum well-formed payload is a 12-byte nonce plus a 16-byte GCM tag
+        // (28 bytes). A 20-byte body is too short and must be rejected before any
+        // crypto operation, rather than producing a misleading decode error.
+        byte[] tooShort = new byte[20];
+        String body = Base64.getUrlEncoder().withoutPadding().encodeToString(tooShort);
+
+        assertThatThrownBy(() -> encryptor.decrypt("v1:" + body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("12-byte nonce");
+    }
+
+    @Test
+    void blankKeyFailsFast() {
+        assertThatThrownBy(() -> new AesGcmSensitiveDataEncryptor(""))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

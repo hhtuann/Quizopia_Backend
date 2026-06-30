@@ -122,9 +122,6 @@ public class SecurityProperties {
         @NotBlank
         private String audience = "quizopia-web";
 
-        @NotBlank
-        private String algorithm = "HS256";
-
         public String getSecretBase64() {
             return secretBase64;
         }
@@ -155,14 +152,6 @@ public class SecurityProperties {
 
         public void setAudience(String audience) {
             this.audience = audience;
-        }
-
-        public String getAlgorithm() {
-            return algorithm;
-        }
-
-        public void setAlgorithm(String algorithm) {
-            this.algorithm = algorithm;
         }
     }
 
@@ -309,12 +298,29 @@ public class SecurityProperties {
         @NotNull
         private List<String> allowedOrigins = new ArrayList<>(List.of("http://localhost:3000"));
 
+        /**
+         * When {@code false} (default), cookie-based refresh and logout require a
+         * non-empty {@code Origin} header that matches {@link #allowedOrigins}.
+         * Set to {@code true} only for server-to-server tests where no browser
+         * {@code Origin} header is present; in production a browser must send a
+         * valid origin.
+         */
+        private boolean allowMissingOrigin = false;
+
         public List<String> getAllowedOrigins() {
             return allowedOrigins;
         }
 
         public void setAllowedOrigins(List<String> allowedOrigins) {
             this.allowedOrigins = allowedOrigins;
+        }
+
+        public boolean isAllowMissingOrigin() {
+            return allowMissingOrigin;
+        }
+
+        public void setAllowMissingOrigin(boolean allowMissingOrigin) {
+            this.allowMissingOrigin = allowMissingOrigin;
         }
     }
 
