@@ -30,6 +30,28 @@ public class User {
     @Column(name = "display_name", nullable = false, length = 150)
     private String displayName;
 
+    /**
+     * AES-256-GCM ciphertext of the user's phone number.
+     * <p>
+     * <strong>Security:</strong> This is ciphertext, never plaintext. The
+     * encryption key lives outside the database (environment variable). This
+     * value must never be logged or exposed through the API. It is therefore
+     * intentionally excluded from {@link #toString()}.
+     */
+    @Column(name = "phone_encrypted", columnDefinition = "text")
+    private String phoneEncrypted;
+
+    /**
+     * AES-256-GCM ciphertext of the user's national identifier.
+     * <p>
+     * <strong>Security:</strong> This is ciphertext, never plaintext. The
+     * encryption key lives outside the database (environment variable). This
+     * value must never be logged or exposed through the API. It is therefore
+     * intentionally excluded from {@link #toString()}.
+     */
+    @Column(name = "national_id_encrypted", columnDefinition = "text")
+    private String nationalIdEncrypted;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private UserStatus status = UserStatus.ACTIVE;
@@ -128,6 +150,36 @@ public class User {
 
     public void setDisplayName(String displayName) {
         this.displayName = displayName;
+    }
+
+    /**
+     * Returns the phone ciphertext.
+     * <p>
+     * <strong>Security:</strong> Never log or expose this value.
+     *
+     * @return the AES-256-GCM ciphertext of the phone number, or {@code null}
+     */
+    public String getPhoneEncrypted() {
+        return phoneEncrypted;
+    }
+
+    public void setPhoneEncrypted(String phoneEncrypted) {
+        this.phoneEncrypted = phoneEncrypted;
+    }
+
+    /**
+     * Returns the national identifier ciphertext.
+     * <p>
+     * <strong>Security:</strong> Never log or expose this value.
+     *
+     * @return the AES-256-GCM ciphertext of the national identifier, or {@code null}
+     */
+    public String getNationalIdEncrypted() {
+        return nationalIdEncrypted;
+    }
+
+    public void setNationalIdEncrypted(String nationalIdEncrypted) {
+        this.nationalIdEncrypted = nationalIdEncrypted;
     }
 
     public UserStatus getStatus() {

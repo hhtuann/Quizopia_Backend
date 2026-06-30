@@ -86,6 +86,22 @@
             <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
         </dependency>
 
+        <!--
+            Bouncy Castle provider for Argon2id password hashing
+            (org.springframework.security.crypto.argon2.Argon2PasswordEncoder
+            relies on org.bouncycastle.crypto.generators.Argon2BytesGenerator,
+            which lives in bcprov). Spring Boot 4.1.0's dependency BOM does not
+            manage Bouncy Castle, so the version is declared explicitly here
+            (matching org.bouncycastle:bc-jdk18on-bom:1.84). Only the provider
+            module is added because that is all Argon2 requires (bcpkix is not
+            needed).
+        -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.84</version>
+        </dependency>
+
         <!-- Spring Mail -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
