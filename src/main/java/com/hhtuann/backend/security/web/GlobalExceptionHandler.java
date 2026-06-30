@@ -3,10 +3,15 @@ package com.hhtuann.backend.security.web;
 import com.hhtuann.backend.authentication.exception.ApiError;
 import com.hhtuann.backend.authentication.exception.AuthErrorCode;
 import com.hhtuann.backend.authentication.exception.AuthenticationException;
+import com.hhtuann.backend.question.exception.QuestionErrorCode;
+import com.hhtuann.backend.question.exception.QuestionException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+
+import java.time.Instant;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -37,6 +42,15 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleAuthenticationException(AuthenticationException ex, HttpServletRequest request) {
         ApiError body = apiErrorWriter.build(ex.getErrorCode(), request);
         return ResponseEntity.status(ex.getErrorCode().statusCode()).body(body);
+    }
+
+    @ExceptionHandler(QuestionException.class)
+    public ResponseEntity<ApiError> handleQuestionException(QuestionException ex, HttpServletRequest request) {
+        QuestionErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
     }
 
     @ExceptionHandler({

@@ -66,6 +66,8 @@ public class SecurityFilterChainConfig {
                                 "/actuator/health",
                                 "/actuator/health/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        .requestMatchers("/api/question-banks/**").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/questions/import-template").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

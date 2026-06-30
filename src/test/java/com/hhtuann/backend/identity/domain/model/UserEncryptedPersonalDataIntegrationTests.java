@@ -42,8 +42,8 @@ class UserEncryptedPersonalDataIntegrationTests {
                 .createNativeQuery("SELECT version FROM flyway_schema_history WHERE type = 'SQL' ORDER BY installed_rank", String.class)
                 .getResultList();
 
-        assertThat(versions).contains("1", "2", "3", "4", "5");
-        assertThat(versions).endsWith("5");
+        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7");
+        assertThat(versions).endsWith("7");
     }
 
     @Test

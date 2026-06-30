@@ -1,5 +1,12 @@
 package com.hhtuann.backend.authentication.application;
 
+import com.hhtuann.backend.academic.application.DemoDataSeeder;
+import com.hhtuann.backend.academic.domain.model.School;
+import com.hhtuann.backend.academic.domain.model.StudentProfile;
+import com.hhtuann.backend.academic.domain.model.TeacherProfile;
+import com.hhtuann.backend.academic.repository.SchoolRepository;
+import com.hhtuann.backend.academic.repository.StudentProfileRepository;
+import com.hhtuann.backend.academic.repository.TeacherProfileRepository;
 import com.hhtuann.backend.authentication.dto.AccountType;
 import com.hhtuann.backend.authentication.dto.RegisterRequest;
 import com.hhtuann.backend.authentication.dto.RegisterResponse;
@@ -14,6 +21,7 @@ import com.hhtuann.backend.identity.repository.UserRoleRepository;
 import com.hhtuann.backend.security.config.SecurityProperties;
 import com.hhtuann.backend.security.encryption.SensitiveDataEncryptor;
 import com.hhtuann.backend.security.password.PasswordHasher;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,19 +49,31 @@ public class RegistrationService {
     private final PasswordHasher passwordHasher;
     private final SensitiveDataEncryptor encryptor;
     private final SecurityProperties properties;
+    private final SchoolRepository schoolRepository;
+    private final TeacherProfileRepository teacherProfileRepository;
+    private final StudentProfileRepository studentProfileRepository;
+    private final boolean demoEnabled;
 
     public RegistrationService(UserRepository userRepository,
                                 UserRoleRepository userRoleRepository,
                                 RoleRepository roleRepository,
                                 PasswordHasher passwordHasher,
                                 SensitiveDataEncryptor encryptor,
-                                SecurityProperties properties) {
+                                SecurityProperties properties,
+                                SchoolRepository schoolRepository,
+                                TeacherProfileRepository teacherProfileRepository,
+                                StudentProfileRepository studentProfileRepository,
+                                @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.encryptor = encryptor;
         this.properties = properties;
+        this.schoolRepository = schoolRepository;
+        this.teacherProfileRepository = teacherProfileRepository;
+        this.studentProfileRepository = studentProfileRepository;
+        this.demoEnabled = demoEnabled;
     }
 
     @Transactional
@@ -101,6 +121,10 @@ public class RegistrationService {
 
         userRoleRepository.save(new UserRole(user, role, null, null));
 
+        if (demoEnabled) {
+            assignDemoProfile(user, accountType);
+        }
+
         return new RegisterResponse(
                 user.getId(),
                 user.getUsername(),
@@ -132,5 +156,28 @@ public class RegistrationService {
 
     private static String trimmed(String value) {
         return value == null ? null : value.trim();
+    }
+
+    /**
+     * Creates the academic profile that matches the account type, attached to
+     * the single demo school provisioned by {@link DemoDataSeeder}. Runs only
+     * when {@code quizopia.demo.data.enabled=true}. The profile code is derived
+     * deterministically from the (globally unique) username, so it is unique
+     * within the demo school. Any failure here rolls back the whole
+     * user + role + profile transaction.
+     */
+    private void assignDemoProfile(User user, AccountType accountType) {
+        School demoSchool = schoolRepository.findByCodeIgnoreCase(DemoDataSeeder.DEMO_SCHOOL_CODE)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Demo data not seeded but quizopia.demo.data.enabled=true; "
+                                + "ensure DemoDataSeeder ran at startup"));
+        Long schoolId = demoSchool.getId();
+        if (accountType == AccountType.TEACHER) {
+            teacherProfileRepository.saveAndFlush(
+                    new TeacherProfile(user.getId(), schoolId, user.getUsername()));
+        } else {
+            studentProfileRepository.saveAndFlush(
+                    new StudentProfile(user.getId(), schoolId, user.getUsername()));
+        }
     }
 }
