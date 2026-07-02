@@ -5,6 +5,8 @@ import com.hhtuann.backend.authentication.exception.AuthErrorCode;
 import com.hhtuann.backend.authentication.exception.AuthenticationException;
 import com.hhtuann.backend.question.exception.QuestionErrorCode;
 import com.hhtuann.backend.question.exception.QuestionException;
+import com.hhtuann.backend.exam.exception.ExamErrorCode;
+import com.hhtuann.backend.exam.exception.ExamException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -47,6 +49,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(QuestionException.class)
     public ResponseEntity<ApiError> handleQuestionException(QuestionException ex, HttpServletRequest request) {
         QuestionErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
+    @ExceptionHandler(ExamException.class)
+    public ResponseEntity<ApiError> handleExamException(ExamException ex, HttpServletRequest request) {
+        ExamErrorCode code = ex.getErrorCode();
         String path = request != null ? request.getRequestURI() : null;
         ApiError body = new ApiError(
                 Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));

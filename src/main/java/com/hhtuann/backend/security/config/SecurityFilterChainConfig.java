@@ -68,6 +68,9 @@ public class SecurityFilterChainConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/questions/import-template").authenticated()
+                        .requestMatchers("/api/exam-purposes/**").authenticated()
+                        .requestMatchers("/api/exams/**").authenticated()
+                        .requestMatchers("/api/exam-sessions/**").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

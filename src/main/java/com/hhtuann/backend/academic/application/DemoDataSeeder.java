@@ -6,6 +6,8 @@ import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.repository.GradeLevelRepository;
 import com.hhtuann.backend.academic.repository.SchoolRepository;
 import com.hhtuann.backend.academic.repository.SubjectRepository;
+import com.hhtuann.backend.exam.domain.model.ExamPurpose;
+import com.hhtuann.backend.exam.repository.ExamPurposeRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,15 +48,18 @@ public class DemoDataSeeder implements ApplicationRunner {
     private final SchoolRepository schoolRepository;
     private final GradeLevelRepository gradeLevelRepository;
     private final SubjectRepository subjectRepository;
+    private final ExamPurposeRepository examPurposeRepository;
     private final boolean demoEnabled;
 
     public DemoDataSeeder(SchoolRepository schoolRepository,
                           GradeLevelRepository gradeLevelRepository,
                           SubjectRepository subjectRepository,
+                          ExamPurposeRepository examPurposeRepository,
                           @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.schoolRepository = schoolRepository;
         this.gradeLevelRepository = gradeLevelRepository;
         this.subjectRepository = subjectRepository;
+        this.examPurposeRepository = examPurposeRepository;
         this.demoEnabled = demoEnabled;
     }
 
@@ -84,7 +89,29 @@ public class DemoDataSeeder implements ApplicationRunner {
                 .orElseGet(() -> subjectRepository.saveAndFlush(
                         new Subject(schoolId, gradeLevelId, DEMO_SUBJECT_CODE, "General Mathematics")));
 
+        seedExamPurposes(schoolId);
+
         log.info("Demo academic data ensured (school={}, gradeLevel={}, subject={})",
                 DEMO_SCHOOL_CODE, DEMO_GRADE_LEVEL_CODE, DEMO_SUBJECT_CODE);
+    }
+
+    /**
+     * Idempotently ensures the 4 default exam purposes for the demo school.
+     * Uses case-insensitive code check to prevent duplicates.
+     */
+    private void seedExamPurposes(Long schoolId) {
+        String[][] purposes = {
+                {"MIDTERM", "Giữa kỳ", "0"},
+                {"FINAL", "Cuối kỳ", "1"},
+                {"QUIZ", "Bài kiểm tra", "2"},
+                {"PRACTICE", "Luyện tập", "3"}
+        };
+        for (String[] p : purposes) {
+            if (!examPurposeRepository.existsBySchoolIdAndCodeIgnoreCase(schoolId, p[0])) {
+                ExamPurpose purpose = new ExamPurpose(schoolId, p[0], p[1]);
+                purpose.setPosition(Integer.parseInt(p[2]));
+                examPurposeRepository.saveAndFlush(purpose);
+            }
+        }
     }
 }
