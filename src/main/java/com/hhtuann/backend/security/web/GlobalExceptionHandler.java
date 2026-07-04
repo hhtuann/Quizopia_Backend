@@ -7,6 +7,8 @@ import com.hhtuann.backend.question.exception.QuestionErrorCode;
 import com.hhtuann.backend.question.exception.QuestionException;
 import com.hhtuann.backend.exam.exception.ExamErrorCode;
 import com.hhtuann.backend.exam.exception.ExamException;
+import com.hhtuann.backend.academic.exception.AcademicErrorCode;
+import com.hhtuann.backend.academic.exception.AcademicException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -58,6 +60,25 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ExamException.class)
     public ResponseEntity<ApiError> handleExamException(ExamException ex, HttpServletRequest request) {
         ExamErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
+    @ExceptionHandler(AcademicException.class)
+    public ResponseEntity<ApiError> handleAcademicException(AcademicException ex, HttpServletRequest request) {
+        AcademicErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
+    @ExceptionHandler(com.hhtuann.backend.attempt.exception.AttemptException.class)
+    public ResponseEntity<ApiError> handleAttemptException(
+            com.hhtuann.backend.attempt.exception.AttemptException ex, HttpServletRequest request) {
+        com.hhtuann.backend.attempt.exception.AttemptErrorCode code = ex.getErrorCode();
         String path = request != null ? request.getRequestURI() : null;
         ApiError body = new ApiError(
                 Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));

@@ -65,12 +65,21 @@ public class SecurityFilterChainConfig {
                         .requestMatchers(HttpMethod.GET,
                                 "/actuator/health",
                                 "/actuator/health/**").permitAll()
+                        // WebSocket handshake upgrade: permitAll is only the HTTP upgrade; the STOMP
+                        // CONNECT frame authenticates with a Bearer access token (StompConnectInterceptor).
+                        // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
+                        .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/questions/import-template").authenticated()
+                        // School-scoped subject list (teacher question-bank / exam creation). SUBJECT_READ
+                        // is enforced in AcademicService (deny-by-default); this rule only lets an
+                        // authenticated JWT reach the controller (default is denyAll).
+                        .requestMatchers(HttpMethod.GET, "/api/subjects").authenticated()
                         .requestMatchers("/api/exam-purposes/**").authenticated()
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()
+                        .requestMatchers("/api/attempts/**").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }
