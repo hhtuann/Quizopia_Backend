@@ -7,6 +7,9 @@ import com.hhtuann.backend.exam.exception.ExamErrorCode;
 import com.hhtuann.backend.exam.exception.ExamException;
 import com.hhtuann.backend.exam.repository.*;
 import com.hhtuann.backend.question.dto.PageResponse;
+import com.hhtuann.backend.realtime.event.RealtimeEventType;
+import com.hhtuann.backend.realtime.event.SessionRealtimeEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -43,17 +46,20 @@ public class ExamSessionService {
     private final ExamVersionRepository versionRepository;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ExamSessionService(ExamAuthorizationService auth,
                               ExamRepository examRepository,
                               ExamVersionRepository versionRepository,
                               ExamSessionRepository sessionRepository,
-                              ExamSessionParticipantRepository participantRepository) {
+                              ExamSessionParticipantRepository participantRepository,
+                              ApplicationEventPublisher eventPublisher) {
         this.auth = auth;
         this.examRepository = examRepository;
         this.versionRepository = versionRepository;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     // ============================================================
@@ -169,6 +175,9 @@ public class ExamSessionService {
         if (session.getStatus() == ExamSessionStatus.OPEN && now.isAfter(session.getEndsAt())) {
             session.close(now);
             sessionRepository.saveAndFlush(session);
+            // SESSION_CLOSED only on a real OPEN→CLOSED transition (AFTER_COMMIT). Bulk list lazy-close
+            // does NOT publish (documented MVP exception — no session IDs).
+            eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
         }
 
         long participantCount = participantRepository.countByExamSessionId(sessionId);
@@ -261,6 +270,7 @@ public class ExamSessionService {
         }
         session.open(now); // SCHEDULED → OPEN + openedAt (V8 invariant: openedAt set, closedAt NULL)
         sessionRepository.saveAndFlush(session);
+        eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 
@@ -279,8 +289,10 @@ public class ExamSessionService {
         if (session.getStatus() != ExamSessionStatus.OPEN) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
-        session.close(Instant.now()); // OPEN → CLOSED + closedAt (V8 invariant: openedAt & closedAt set)
+        Instant now = Instant.now();
+        session.close(now); // OPEN → CLOSED + closedAt (V8 invariant: openedAt & closedAt set)
         sessionRepository.saveAndFlush(session);
+        eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 
