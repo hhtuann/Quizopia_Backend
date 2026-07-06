@@ -42,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * assert zero outbound events before release, then the full event matrix after commit. Rollback uses
  * {@code setRollbackOnly()}. No {@code Thread.sleep}; every wait is a bounded latch/future.
  */
+@SuppressWarnings({"null"})
 class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
 
     @Autowired private AttemptService attemptService;

@@ -39,24 +39,29 @@ import java.util.stream.Collectors;
 /**
  * Application service for the Exam API — 5 endpoints (A3.2-1 + A3.2-2A):
  * <ul>
- *   <li>GET /api/exam-purposes — list purposes for caller's school</li>
- *   <li>POST /api/exams — create exam + DRAFT v1 in one transaction</li>
- *   <li>GET /api/exams/my — paginated owner-scoped list with search/filter</li>
- *   <li>GET /api/exams/{examId} — editor detail (DRAFT + published summaries)</li>
- *   <li>PUT /api/exams/{examId}/draft/composition — replace DRAFT snapshot, PIN source versions</li>
+ * <li>GET /api/exam-purposes — list purposes for caller's school</li>
+ * <li>POST /api/exams — create exam + DRAFT v1 in one transaction</li>
+ * <li>GET /api/exams/my — paginated owner-scoped list with search/filter</li>
+ * <li>GET /api/exams/{examId} — editor detail (DRAFT + published
+ * summaries)</li>
+ * <li>PUT /api/exams/{examId}/draft/composition — replace DRAFT snapshot, PIN
+ * source versions</li>
  * </ul>
  *
- * <p>Authorization (deny by default): active TEACHER role (DB) + effective
+ * <p>
+ * Authorization (deny by default): active TEACHER role (DB) + effective
  * permission (DB) + TeacherProfile. No JWT-claim authority, no role hierarchy.
  *
- * <p>JsonNode fields mapped to DTOs use deepCopy to prevent mutable aliasing.
+ * <p>
+ * JsonNode fields mapped to DTOs use deepCopy to prevent mutable aliasing.
  */
 @Service
 public class ExamService {
 
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
-    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status", "currentVersionNumber");
+    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status",
+            "currentVersionNumber");
     private static final String CODE_CONFLICT_CONSTRAINT = "uk_exams_owner_code_ci";
 
     private final ExamAuthorizationService auth;
@@ -73,17 +78,17 @@ public class ExamService {
     private final QuestionOptionRepository sourceOptionRepository;
 
     public ExamService(ExamAuthorizationService auth,
-                       SubjectRepository subjectRepository,
-                       ExamPurposeRepository purposeRepository,
-                       ExamRepository examRepository,
-                       ExamVersionRepository versionRepository,
-                       ExamSectionRepository sectionRepository,
-                       ExamQuestionRepository questionRepository,
-                       ExamQuestionOptionRepository optionRepository,
-                       QuestionRepository sourceQuestionRepository,
-                       QuestionBankRepository sourceBankRepository,
-                       QuestionVersionRepository sourceVersionRepository,
-                       QuestionOptionRepository sourceOptionRepository) {
+            SubjectRepository subjectRepository,
+            ExamPurposeRepository purposeRepository,
+            ExamRepository examRepository,
+            ExamVersionRepository versionRepository,
+            ExamSectionRepository sectionRepository,
+            ExamQuestionRepository questionRepository,
+            ExamQuestionOptionRepository optionRepository,
+            QuestionRepository sourceQuestionRepository,
+            QuestionBankRepository sourceBankRepository,
+            QuestionVersionRepository sourceVersionRepository,
+            QuestionOptionRepository sourceOptionRepository) {
         this.auth = auth;
         this.subjectRepository = subjectRepository;
         this.purposeRepository = purposeRepository;
@@ -169,6 +174,7 @@ public class ExamService {
     // GET /api/exams/my
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional(readOnly = true)
     public PageResponse<ExamListItem> listMyExams(
             Long userId, String search, Long subjectId, String statusStr,
@@ -188,7 +194,8 @@ public class ExamService {
         Map<Long, SubjectSummary> subjectMap = batchSubjects(exams.getContent());
         Map<Long, ExamPurposeSummary> purposeMap = batchPurposes(exams.getContent());
 
-        // Batch load hasDraft/hasPublished flags — single query for ALL exam IDs (no N+1)
+        // Batch load hasDraft/hasPublished flags — single query for ALL exam IDs (no
+        // N+1)
         List<Long> examIds = exams.getContent().stream().map(Exam::getId).toList();
         Set<Long> hasDraft = new HashSet<>();
         Set<Long> hasPublished = new HashSet<>();
@@ -242,13 +249,14 @@ public class ExamService {
 
     @Transactional
     public TeacherExamEditorResponse updateDraftComposition(Long userId, Long examId,
-                                                             UpdateDraftCompositionRequest request) {
+            UpdateDraftCompositionRequest request) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_UPDATE");
 
         // Pessimistic-lock the exam row before reading/mutating the DRAFT.
         Exam exam = examRepository.findByIdForUpdate(examId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        // Mutation endpoints deny foreign owners with 403 (reads use 404 anti-enumeration).
+        // Mutation endpoints deny foreign owners with 403 (reads use 404
+        // anti-enumeration).
         if (!exam.getOwnerTeacherId().equals(profile.getId())) {
             throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
         }
@@ -257,19 +265,23 @@ public class ExamService {
         ExamVersion draft = versionRepository.findFirstByExamIdAndStatus(examId, ExamVersionStatus.DRAFT)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT));
 
-        // Optimistic token: expectedVersionNumber must equal the DRAFT content version number.
+        // Optimistic token: expectedVersionNumber must equal the DRAFT content version
+        // number.
         if (!draft.getVersionNumber().equals(request.expectedVersionNumber())) {
             throw new ExamException(ExamErrorCode.EXAM_CONCURRENT_MODIFICATION);
         }
 
-        // Structural validation BEFORE any destructive work (old graph survives on error).
+        // Structural validation BEFORE any destructive work (old graph survives on
+        // error).
         validateCompositionStructure(request);
 
-        // Resolve + validate sources, pinning each current QuestionVersion (batch, no per-source query).
+        // Resolve + validate sources, pinning each current QuestionVersion (batch, no
+        // per-source query).
         Long draftVersionId = draft.getId();
         List<StagedSection> staged = resolveAndStageSources(request, exam, draftVersionId);
 
-        // ATOMIC REPLACE: delete old DRAFT graph in FK-safe order, then insert the new graph.
+        // ATOMIC REPLACE: delete old DRAFT graph in FK-safe order, then insert the new
+        // graph.
         replaceDraftComposition(draftVersionId, staged);
 
         // Apply optional DRAFT settings (nullable => keep existing value).
@@ -282,12 +294,13 @@ public class ExamService {
     }
 
     // ============================================================
-    // POST /api/exams/{examId}/versions — create next DRAFT (clone a PUBLISHED version)
+    // POST /api/exams/{examId}/versions — create next DRAFT (clone a PUBLISHED
+    // version)
     // ============================================================
 
     @Transactional
     public CreateExamVersionResponse createNextVersion(Long userId, Long examId,
-                                                       CreateExamVersionRequest request) {
+            CreateExamVersionRequest request) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_VERSION_CREATE");
 
         // Pessimistic-lock the exam row before reading/deciding version numbers.
@@ -313,35 +326,45 @@ public class ExamService {
                 throw new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT); // explicit source is not PUBLISHED
             }
         } else {
-            // Latest PUBLISHED by versionNumber DESC (ordered query — do NOT use unordered findFirstByExamIdAndStatus).
+            // Latest PUBLISHED by versionNumber DESC (ordered query — do NOT use unordered
+            // findFirstByExamIdAndStatus).
             source = versionRepository
                     .findFirstByExamIdAndStatusOrderByVersionNumberDesc(examId, ExamVersionStatus.PUBLISHED)
-                    .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT)); // no PUBLISHED to clone
+                    .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT)); // no PUBLISHED to
+                                                                                                 // clone
         }
 
-        // New DRAFT version number = currentVersionNumber + 1 (NOT Exam.@Version; currentVersionNumber
+        // New DRAFT version number = currentVersionNumber + 1 (NOT Exam.@Version;
+        // currentVersionNumber
         // is NOT bumped before publish — frozen contract).
         int newVersionNumber = exam.getCurrentVersionNumber() + 1;
         ExamVersion draft = cloneVersion(exam, source, newVersionNumber, userId);
-        // Exam stays as-is: READY remains READY; currentVersionNumber unchanged until publish.
+        // Exam stays as-is: READY remains READY; currentVersionNumber unchanged until
+        // publish.
         return new CreateExamVersionResponse(draft.getVersionNumber(), draft.getStatus().name(),
                 source.getVersionNumber());
     }
 
     /**
-     * Deep-copies a PUBLISHED version's composition into a fresh DRAFT. Pinned source IDs
-     * (sourceQuestionId/sourceQuestionVersionId) are preserved verbatim — NO Question Bank
-     * current-version resolution, NO refresh. All children get new ids; JsonNode fields are
-     * deep-copied (no shared references between versions). DRAFT totalPoints stays 0
+     * Deep-copies a PUBLISHED version's composition into a fresh DRAFT. Pinned
+     * source IDs
+     * (sourceQuestionId/sourceQuestionVersionId) are preserved verbatim — NO
+     * Question Bank
+     * current-version resolution, NO refresh. All children get new ids; JsonNode
+     * fields are
+     * deep-copied (no shared references between versions). DRAFT totalPoints stays
+     * 0
      * (the published totalPoints is NOT copied; DRAFT invariant allows 0).
      */
+    @SuppressWarnings("null")
     private ExamVersion cloneVersion(Exam exam, ExamVersion source, int newVersionNumber, Long createdBy) {
         ExamVersion draft = new ExamVersion(exam.getSchoolId(), exam.getId(), newVersionNumber, createdBy);
         draft.updateDraftSettings(source.getDurationMinutes(), source.getInstructions(), source.getTitle());
         draft = versionRepository.saveAndFlush(draft);
         Long newVersionId = draft.getId();
 
-        // Batch-load the source graph (sections -> questions -> options); no per-row query.
+        // Batch-load the source graph (sections -> questions -> options); no per-row
+        // query.
         List<ExamSection> sourceSections = sectionRepository.findAllByExamVersionIdOrderByPositionAsc(source.getId());
         List<Long> sourceSectionIds = sourceSections.stream().map(ExamSection::getId).toList();
         List<ExamQuestion> sourceQuestions = sourceSectionIds.isEmpty()
@@ -389,6 +412,7 @@ public class ExamService {
     // POST /api/exams/{examId}/publish — refresh from PINNED + PUBLISHED (1 tx)
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional
     public PublishedExamSummary publishExam(Long userId, Long examId, PublishExamRequest request) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_PUBLISH");
@@ -400,8 +424,10 @@ public class ExamService {
             throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
         }
 
-        // Resolve the single DRAFT. If none: a PUBLISHED version existing alongside no DRAFT
-        // means the DRAFT was already published (concurrent winner OR repeat) -> PUBLISH_CONFLICT.
+        // Resolve the single DRAFT. If none: a PUBLISHED version existing alongside no
+        // DRAFT
+        // means the DRAFT was already published (concurrent winner OR repeat) ->
+        // PUBLISH_CONFLICT.
         ExamVersion draft = versionRepository.findFirstByExamIdAndStatus(examId, ExamVersionStatus.DRAFT)
                 .orElse(null);
         if (draft == null) {
@@ -424,7 +450,8 @@ public class ExamService {
             throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR); // empty composition
         }
         List<Long> sectionIds = sections.stream().map(ExamSection::getId).toList();
-        List<ExamQuestion> questions = questionRepository.findAllByExamSectionIdInOrderByExamSectionIdAscPositionAsc(sectionIds);
+        List<ExamQuestion> questions = questionRepository
+                .findAllByExamSectionIdInOrderByExamSectionIdAscPositionAsc(sectionIds);
         Map<Long, List<ExamQuestion>> questionsBySection = questions.stream()
                 .collect(Collectors.groupingBy(ExamQuestion::getExamSectionId));
         for (ExamSection s : sections) {
@@ -434,15 +461,20 @@ public class ExamService {
         }
         List<Long> questionIds = questions.stream().map(ExamQuestion::getId).toList();
 
-        // Batch-load pinned QuestionVersions (by sourceQuestionVersionId), source Questions+Banks,
-        // and pinned options (by version ids) — revalidate + refresh from the PINNED immutable version.
-        List<Long> pinnedVersionIds = questions.stream().map(ExamQuestion::getSourceQuestionVersionId).distinct().toList();
+        // Batch-load pinned QuestionVersions (by sourceQuestionVersionId), source
+        // Questions+Banks,
+        // and pinned options (by version ids) — revalidate + refresh from the PINNED
+        // immutable version.
+        List<Long> pinnedVersionIds = questions.stream().map(ExamQuestion::getSourceQuestionVersionId).distinct()
+                .toList();
         Map<Long, QuestionVersion> pinnedVersions = sourceVersionRepository.findAllById(pinnedVersionIds).stream()
                 .collect(Collectors.toMap(QuestionVersion::getId, v -> v));
-        Set<Long> sourceQuestionIdSet = questions.stream().map(ExamQuestion::getSourceQuestionId).collect(Collectors.toSet());
+        Set<Long> sourceQuestionIdSet = questions.stream().map(ExamQuestion::getSourceQuestionId)
+                .collect(Collectors.toSet());
         Map<Long, Question> sourceQuestions = sourceQuestionRepository.findAllById(sourceQuestionIdSet).stream()
                 .collect(Collectors.toMap(Question::getId, q -> q));
-        Set<Long> bankIds = sourceQuestions.values().stream().map(Question::getQuestionBankId).collect(Collectors.toSet());
+        Set<Long> bankIds = sourceQuestions.values().stream().map(Question::getQuestionBankId)
+                .collect(Collectors.toSet());
         Map<Long, QuestionBank> sourceBanks = sourceBankRepository.findAllById(bankIds).stream()
                 .collect(Collectors.toMap(QuestionBank::getId, b -> b));
         Map<Long, List<QuestionOption>> pinnedOptionsByVersion = sourceOptionRepository
@@ -471,15 +503,20 @@ public class ExamService {
                     || !bank.getSubjectId().equals(exam.getSubjectId())) {
                 throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED); // ownership drift since PUT
             }
-            // Refresh settable snapshot fields from the PINNED immutable version (idempotent).
-            // content/type/questionCode/defaultPoints have no setter but are already correct:
-            // PUT snapshotted them from this same immutable pinned version, and the composite FK
-            // (source_question_id, source_question_version_id) + version immutability guarantee it.
+            // Refresh settable snapshot fields from the PINNED immutable version
+            // (idempotent).
+            // content/type/questionCode/defaultPoints have no setter but are already
+            // correct:
+            // PUT snapshotted them from this same immutable pinned version, and the
+            // composite FK
+            // (source_question_id, source_question_version_id) + version immutability
+            // guarantee it.
             eq.setDifficulty(pv.getDifficulty());
             eq.setExplanation(pv.getExplanation());
             eq.setAnswerKey(deepCopy(pv.getAnswerKey()));
             eq.setMetadata(deepCopy(pv.getMetadata()));
-            // Validate question-type shape against the pinned options (the refresh source of truth).
+            // Validate question-type shape against the pinned options (the refresh source
+            // of truth).
             validatePublishedQuestionType(pv.getQuestionType(),
                     pinnedOptionsByVersion.getOrDefault(pv.getId(), List.of()), pv.getAnswerKey());
             totalPoints = totalPoints.add(eq.getDefaultPoints());
@@ -489,13 +526,15 @@ public class ExamService {
         }
         questionRepository.flush(); // persist refreshed snapshot fields before the PUBLISHED transition
 
-        // Replace options from the pinned options (idempotent: pinned immutable == PUT snapshot).
+        // Replace options from the pinned options (idempotent: pinned immutable == PUT
+        // snapshot).
         if (!questionIds.isEmpty()) {
             optionRepository.deleteAllByExamQuestionIdIn(questionIds);
             optionRepository.flush();
         }
         for (ExamQuestion eq : questions) {
-            List<QuestionOption> pinnedOpts = pinnedOptionsByVersion.getOrDefault(eq.getSourceQuestionVersionId(), List.of());
+            List<QuestionOption> pinnedOpts = pinnedOptionsByVersion.getOrDefault(eq.getSourceQuestionVersionId(),
+                    List.of());
             if (!pinnedOpts.isEmpty()) {
                 optionRepository.saveAll(pinnedOpts.stream()
                         .map(po -> new ExamQuestionOption(eq.getId(), po.getOptionKey(), po.getContent(),
@@ -509,7 +548,8 @@ public class ExamService {
         Instant publishedAt = Instant.now();
         draft.markPublished(publishedAt, totalPoints);
         versionRepository.saveAndFlush(draft);
-        // Exam: READY + currentVersionNumber = published version number (NOT bumped before publish).
+        // Exam: READY + currentVersionNumber = published version number (NOT bumped
+        // before publish).
         exam.markReady();
         exam.advanceCurrentVersion(draft.getVersionNumber());
         examRepository.saveAndFlush(exam);
@@ -518,7 +558,11 @@ public class ExamService {
                 publishedAt, totalPoints, questions.size(), draft.getDurationMinutes());
     }
 
-    /** Publish-time question-type shape validation against the pinned options + numeric answerKey. */
+    /**
+     * Publish-time question-type shape validation against the pinned options +
+     * numeric answerKey.
+     */
+    @SuppressWarnings("deprecation")
     private void validatePublishedQuestionType(QuestionType type, List<QuestionOption> options, JsonNode answerKey) {
         int count = options.size();
         long correct = options.stream().filter(o -> o.getIsCorrect() != null && o.getIsCorrect()).count();
@@ -542,11 +586,11 @@ public class ExamService {
                 if (count != 0
                         || answerKey == null
                         || !answerKey.path("expectedAnswer").isTextual()
-                        || answerKey.path("expectedAnswer").asText().length() != 4
+                        || answerKey.path("expectedAnswer").asString().length() != 4
                         || !answerKey.path("requiredInputLength").isNumber()
                         || answerKey.path("requiredInputLength").asInt() != 4
                         || !answerKey.path("roundingInstruction").isTextual()
-                        || answerKey.path("roundingInstruction").asText().isBlank()) {
+                        || answerKey.path("roundingInstruction").asString().isBlank()) {
                     throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR);
                 }
             }
@@ -561,7 +605,8 @@ public class ExamService {
     private TeacherExamEditorResponse buildEditorResponse(Exam exam) {
         Subject subject = subjectRepository.findById(exam.getSubjectId()).orElse(null);
         ExamPurpose purpose = exam.getPurposeId() != null
-                ? purposeRepository.findById(exam.getPurposeId()).orElse(null) : null;
+                ? purposeRepository.findById(exam.getPurposeId()).orElse(null)
+                : null;
         ExamDraftVersionResponse draftResponse = loadDraft(exam.getId());
         List<PublishedExamVersionSummary> publishedSummaries = versionRepository
                 .findAllByExamIdOrderByVersionNumberDesc(exam.getId()).stream()
@@ -582,7 +627,10 @@ public class ExamService {
     // Composition helpers
     // ============================================================
 
-    /** Cross-field uniqueness: section positions, per-section question positions, source across draft. */
+    /**
+     * Cross-field uniqueness: section positions, per-section question positions,
+     * source across draft.
+     */
     private void validateCompositionStructure(UpdateDraftCompositionRequest request) {
         Set<Integer> sectionPositions = new HashSet<>();
         Set<Long> sourceIds = new HashSet<>();
@@ -603,12 +651,14 @@ public class ExamService {
     }
 
     /**
-     * Batch-loads + validates every source question, pins each current QuestionVersion,
+     * Batch-loads + validates every source question, pins each current
+     * QuestionVersion,
      * and stages the new composition graph in memory. All source reads are batched
      * (questions, banks, versions, options) — no per-source query.
      */
+    @SuppressWarnings("null")
     private List<StagedSection> resolveAndStageSources(UpdateDraftCompositionRequest request,
-                                                       Exam exam, Long draftVersionId) {
+            Exam exam, Long draftVersionId) {
         List<Long> sourceQuestionIds = request.sections().stream()
                 .flatMap(s -> s.questions().stream())
                 .map(rq -> rq.sourceQuestionId())
@@ -654,7 +704,8 @@ public class ExamService {
             }
         }
 
-        // Pin each question's current version (single batch query; pick by currentVersionNumber).
+        // Pin each question's current version (single batch query; pick by
+        // currentVersionNumber).
         Map<Long, QuestionVersion> currentVersions = new HashMap<>();
         for (QuestionVersion v : sourceVersionRepository.findAllByQuestionIdIn(sourceQuestionIds)) {
             Question q = questions.get(v.getQuestionId());
@@ -668,13 +719,15 @@ public class ExamService {
             }
         }
 
-        // Batch-load options for all pinned versions (deepCopy preserves numeric representation).
+        // Batch-load options for all pinned versions (deepCopy preserves numeric
+        // representation).
         List<Long> pinnedVersionIds = currentVersions.values().stream().map(QuestionVersion::getId).toList();
         Map<Long, List<QuestionOption>> optionsByVersion = sourceOptionRepository
                 .findAllByQuestionVersionIdInOrderByQuestionVersionIdAscPositionAsc(pinnedVersionIds).stream()
                 .collect(Collectors.groupingBy(QuestionOption::getQuestionVersionId));
 
-        // Stage the new graph (entities not yet persisted; ids assigned at replace time).
+        // Stage the new graph (entities not yet persisted; ids assigned at replace
+        // time).
         List<StagedSection> staged = new ArrayList<>();
         for (var sec : request.sections()) {
             ExamSection section = new ExamSection(draftVersionId, sec.title(), sec.position());
@@ -698,7 +751,11 @@ public class ExamService {
         return staged;
     }
 
-    /** Atomic DRAFT composition replace: delete old graph (FK-safe order) then insert new graph. */
+    /**
+     * Atomic DRAFT composition replace: delete old graph (FK-safe order) then
+     * insert new graph.
+     */
+    @SuppressWarnings("null")
     private void replaceDraftComposition(Long draftVersionId, List<StagedSection> staged) {
         // Delete old DRAFT graph in FK-safe order: options -> questions -> sections.
         List<Long> oldQuestionIds = questionRepository.findAllByExamVersionId(draftVersionId).stream()
@@ -741,9 +798,9 @@ public class ExamService {
     }
 
     private record ResolvedQuestion(Long sourceQuestionId, Long pinnedVersionId, String code,
-                                    QuestionType type, String content, BigDecimal points, Integer position,
-                                    QuestionDifficulty difficulty, String explanation,
-                                    JsonNode answerKey, JsonNode metadata, List<ResolvedOption> options) {
+            QuestionType type, String content, BigDecimal points, Integer position,
+            QuestionDifficulty difficulty, String explanation,
+            JsonNode answerKey, JsonNode metadata, List<ResolvedOption> options) {
     }
 
     private record ResolvedOption(String optionKey, String content, boolean correct, Integer position) {
@@ -753,6 +810,7 @@ public class ExamService {
     // Detail loading (no N+1)
     // ============================================================
 
+    @SuppressWarnings("null")
     private ExamDraftVersionResponse loadDraft(Long examId) {
         Optional<ExamVersion> draft = versionRepository.findFirstByExamIdAndStatus(examId, ExamVersionStatus.DRAFT);
         if (draft.isEmpty()) {
@@ -840,7 +898,8 @@ public class ExamService {
             String[] parts = sort.split(",");
             String prop = parts[0].trim();
             Sort.Direction dir = (parts.length > 1 && parts[1].trim().equalsIgnoreCase("asc"))
-                    ? Sort.Direction.ASC : Sort.Direction.DESC;
+                    ? Sort.Direction.ASC
+                    : Sort.Direction.DESC;
             if (SORT_ALLOWLIST.contains(prop)) {
                 safeSort = Sort.by(dir, prop).and(Sort.by(Sort.Direction.DESC, "id"));
             } else {
@@ -852,17 +911,21 @@ public class ExamService {
         return PageRequest.of(safePage, safeSize, safeSort);
     }
 
+    @SuppressWarnings("null")
     private Map<Long, SubjectSummary> batchSubjects(List<Exam> exams) {
         Set<Long> ids = exams.stream().map(Exam::getSubjectId).filter(Objects::nonNull).collect(Collectors.toSet());
-        if (ids.isEmpty()) return Map.of();
+        if (ids.isEmpty())
+            return Map.of();
         return subjectRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(Subject::getId,
                         s -> new SubjectSummary(s.getId(), s.getCode(), s.getName())));
     }
 
+    @SuppressWarnings("null")
     private Map<Long, ExamPurposeSummary> batchPurposes(List<Exam> exams) {
         Set<Long> ids = exams.stream().map(Exam::getPurposeId).filter(Objects::nonNull).collect(Collectors.toSet());
-        if (ids.isEmpty()) return Map.of();
+        if (ids.isEmpty())
+            return Map.of();
         return purposeRepository.findAllById(ids).stream()
                 .collect(Collectors.toMap(ExamPurpose::getId,
                         p -> new ExamPurposeSummary(p.getId(), p.getCode(), p.getTitle())));

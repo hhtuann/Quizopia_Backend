@@ -1,11 +1,6 @@
 package com.hhtuann.backend.exam;
 
-import com.hhtuann.backend.academic.domain.model.School;
-import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.repository.*;
-import com.hhtuann.backend.exam.repository.ExamRepository;
-import com.hhtuann.backend.identity.domain.model.User;
-import com.hhtuann.backend.identity.repository.UserRepository;
 import com.hhtuann.backend.testsupport.PostgresTestContainerConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

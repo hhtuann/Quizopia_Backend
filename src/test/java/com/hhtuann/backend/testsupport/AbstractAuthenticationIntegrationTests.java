@@ -83,7 +83,7 @@ public abstract class AbstractAuthenticationIntegrationTests {
 
     protected String extractAccessToken(MvcResult loginResult) throws Exception {
         JsonNode root = objectMapper.readTree(loginResult.getResponse().getContentAsString());
-        return root.get("accessToken").asText();
+        return root.get("accessToken").asString();
     }
 
     /**

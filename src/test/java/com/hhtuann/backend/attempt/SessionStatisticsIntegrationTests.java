@@ -84,7 +84,7 @@ class SessionStatisticsIntegrationTests {
 
     @Test
     void oneStudentBestResultHasStats() {
-        long[] ids = createStudentAndSubmit();
+        createStudentAndSubmit();
         em.flush(); em.clear();
         SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
         assertThat(s.bestResultCount()).isEqualTo(1);

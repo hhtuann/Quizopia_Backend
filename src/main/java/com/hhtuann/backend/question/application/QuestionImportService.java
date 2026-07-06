@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.*;
@@ -23,15 +22,18 @@ import java.util.*;
 /**
  * Application service that persists parser-validated question rows into a bank.
  *
- * <p>Authorization (deny by default): active TEACHER role → QUESTION_CREATE
+ * <p>
+ * Authorization (deny by default): active TEACHER role → QUESTION_CREATE
  * permission → TeacherProfile → bank ownership + school scope + ACTIVE state.
  *
- * <p>Duplicate detection: existing bank codes are loaded in a single batch
+ * <p>
+ * Duplicate detection: existing bank codes are loaded in a single batch
  * query; parser-valid rows matching an existing code are reported as row errors
  * (not persisted). Concurrent duplicate race is caught at flush time via the
  * database unique constraint and rolls back the entire valid batch.
  *
- * <p>Persistence is all-or-nothing: every row that survives both parser and
+ * <p>
+ * Persistence is all-or-nothing: every row that survives both parser and
  * DB-duplicate checks is persisted in a single transaction.
  */
 @Service
@@ -49,13 +51,13 @@ public class QuestionImportService {
     private final Clock clock;
 
     public QuestionImportService(UserRoleRepository userRoleRepository,
-                                 RolePermissionRepository rolePermissionRepository,
-                                 TeacherProfileRepository teacherProfileRepository,
-                                 QuestionBankRepository questionBankRepository,
-                                 QuestionRepository questionRepository,
-                                 QuestionVersionRepository versionRepository,
-                                 QuestionOptionRepository optionRepository,
-                                 Clock clock) {
+            RolePermissionRepository rolePermissionRepository,
+            TeacherProfileRepository teacherProfileRepository,
+            QuestionBankRepository questionBankRepository,
+            QuestionRepository questionRepository,
+            QuestionVersionRepository versionRepository,
+            QuestionOptionRepository optionRepository,
+            Clock clock) {
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
         this.teacherProfileRepository = teacherProfileRepository;
@@ -66,6 +68,7 @@ public class QuestionImportService {
         this.clock = clock;
     }
 
+    @SuppressWarnings("null")
     @Transactional
     public ImportResponse importParsedQuestions(Long userId, Long bankId, ImportResult parseResult) {
         // --- Authorization (deny by default) ---
@@ -133,13 +136,15 @@ public class QuestionImportService {
      * opening a persistence transaction, so the controller can reject an
      * unauthorized caller <em>before</em> spending cycles parsing the workbook.
      *
-     * <p>The {@code @Transactional} {@code importParsedQuestions} re-runs these
+     * <p>
+     * The {@code @Transactional} {@code importParsedQuestions} re-runs these
      * same checks inside its transaction; this method is purely an early-out
      * optimisation and security gate at the API layer.
      *
      * @throws QuestionException QUESTION_BANK_ACCESS_DENIED (role / permission /
-     *         ownership / school / non-ACTIVE), QUESTION_TEACHER_PROFILE_NOT_FOUND,
-     *         or QUESTION_BANK_NOT_FOUND
+     *                           ownership / school / non-ACTIVE),
+     *                           QUESTION_TEACHER_PROFILE_NOT_FOUND,
+     *                           or QUESTION_BANK_NOT_FOUND
      */
     public void authorizeImportAccess(Long userId, Long bankId) {
         Instant now = Instant.now(clock);
@@ -253,7 +258,7 @@ public class QuestionImportService {
     private List<QuestionOption> buildChoiceOptions(ValidQuestionRow row, Long versionId) {
         List<QuestionOption> options = new ArrayList<>();
         int position = 0;
-        for (String key : new String[]{"A", "B", "C", "D", "E", "F"}) {
+        for (String key : new String[] { "A", "B", "C", "D", "E", "F" }) {
             String text = row.options().get(key);
             if (text == null || text.isBlank()) {
                 continue;
@@ -268,7 +273,7 @@ public class QuestionImportService {
     private List<QuestionOption> buildTrueFalseOptions(ValidQuestionRow row, Long versionId) {
         List<QuestionOption> options = new ArrayList<>();
         int position = 0;
-        for (String key : new String[]{"A", "B", "C", "D"}) {
+        for (String key : new String[] { "A", "B", "C", "D" }) {
             String text = row.statements().get(key);
             Boolean answer = row.statementAnswers().get(key);
             options.add(new QuestionOption(versionId, key, text, position,

@@ -55,7 +55,6 @@ class QuestionVersionJsonNodeIntegrationTests {
     void persistNumericFillAnswerKey_preservesJsonTypesOnReadBack() {
         long[] ids = seedPrerequisites();
         long bankId = ids[0];
-        long teacherProfileId = ids[1];
         long userId = ids[2];
 
         Question question = questionRepo.saveAndFlush(

@@ -2,7 +2,6 @@ package com.hhtuann.backend.attempt;
 
 import com.hhtuann.backend.attempt.application.AttemptService;
 import com.hhtuann.backend.attempt.dto.StartAttemptRequest;
-import com.hhtuann.backend.attempt.exception.AttemptException;
 import com.hhtuann.backend.testsupport.MutableClock;
 import com.hhtuann.backend.testsupport.PostgresTestContainerConfiguration;
 import com.hhtuann.backend.testsupport.TestClockConfig;

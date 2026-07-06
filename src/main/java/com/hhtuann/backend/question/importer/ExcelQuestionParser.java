@@ -28,19 +28,23 @@ import java.util.Set;
 /**
  * Parses a Quizopia question-import xlsx workbook into an {@link ImportResult}.
  *
- * <p>This component performs <strong>structural and content validation only</strong>
+ * <p>
+ * This component performs <strong>structural and content validation
+ * only</strong>
  * — it never touches a repository (database duplicate detection is deferred to
- * Batch B2.2). Row-level errors are collected rather than aborting the workbook;
+ * Batch B2.2). Row-level errors are collected rather than aborting the
+ * workbook;
  * only unrecoverable structural problems (corrupt file, missing sheet, wrong
  * header) throw a {@link QuestionException}.
  *
- * <p>Strict rules enforced:
+ * <p>
+ * Strict rules enforced:
  * <ul>
- *   <li>Only the {@code "Questions"} sheet (index 0) is read.</li>
- *   <li>The header row must match exactly 23 columns in a fixed order.</li>
- *   <li>{@code numeric_answer} must be a STRING cell — never NUMERIC, never a
- *       FORMULA, never trimmed, never read through a DataFormatter.</li>
- *   <li>Any FORMULA cell in a data field invalidates its row.</li>
+ * <li>Only the {@code "Questions"} sheet (index 0) is read.</li>
+ * <li>The header row must match exactly 23 columns in a fixed order.</li>
+ * <li>{@code numeric_answer} must be a STRING cell — never NUMERIC, never a
+ * FORMULA, never trimmed, never read through a DataFormatter.</li>
+ * <li>Any FORMULA cell in a data field invalidates its row.</li>
  * </ul>
  */
 @Component
@@ -87,10 +91,8 @@ public class ExcelQuestionParser {
     private static final String KEY_PATTERN = "^[A-F]$";
     private static final String NUMERIC_PATTERN = "^-?[0-9]+([,.][0-9]+)?$";
     private static final int NUMERIC_RAW_LENGTH = 4;
-    private static final Set<String> OPTION_KEYS =
-            Set.of("A", "B", "C", "D", "E", "F");
-    private static final Set<String> STATEMENT_KEYS =
-            Set.of("A", "B", "C", "D");
+    private static final Set<String> OPTION_KEYS = Set.of("A", "B", "C", "D", "E", "F");
+    private static final Set<String> STATEMENT_KEYS = Set.of("A", "B", "C", "D");
 
     /**
      * Parses the given xlsx stream. The caller owns the InputStream; this
@@ -98,8 +100,10 @@ public class ExcelQuestionParser {
      * via try-with-resources after the {@link ImportResult} is fully built.
      *
      * @throws QuestionException with QUESTION_IMPORT_FILE_INVALID if the stream
-     *         is not a readable xlsx workbook, or QUESTION_IMPORT_TEMPLATE_INVALID
-     *         if the structure (sheet/header) does not match the template.
+     *                           is not a readable xlsx workbook, or
+     *                           QUESTION_IMPORT_TEMPLATE_INVALID
+     *                           if the structure (sheet/header) does not match the
+     *                           template.
      */
     public ImportResult parse(InputStream inputStream) {
         // Only the Workbook is managed here; the InputStream belongs to the caller.
@@ -224,7 +228,7 @@ public class ExcelQuestionParser {
     }
 
     private ValidQuestionRow parseRow(Row row, int rowNumber, Set<String> seenCodes,
-                                      List<RowError> errors) {
+            List<RowError> errors) {
         String code = readStringTrimmed(row.getCell(COL_QUESTION_CODE));
         String typeRaw = readStringTrimmed(row.getCell(COL_QUESTION_TYPE));
         String content = readStringTrimmed(row.getCell(COL_CONTENT));
@@ -272,15 +276,13 @@ public class ExcelQuestionParser {
             }
         } else {
             switch (type) {
-                case SINGLE_CHOICE, MULTIPLE_CHOICE -> valid =
-                        parseChoiceRow(row, rowNumber, code, type, content, points,
-                                difficulty, explanation, errors);
-                case TRUE_FALSE_MATRIX -> valid =
-                        parseTrueFalseRow(row, rowNumber, code, type, content, points,
-                                difficulty, explanation, errors);
-                case NUMERIC_FILL -> valid =
-                        parseNumericRow(row, rowNumber, code, type, content, points,
-                                difficulty, explanation, errors);
+                case SINGLE_CHOICE, MULTIPLE_CHOICE ->
+                    valid = parseChoiceRow(row, rowNumber, code, type, content, points,
+                            difficulty, explanation, errors);
+                case TRUE_FALSE_MATRIX -> valid = parseTrueFalseRow(row, rowNumber, code, type, content, points,
+                        difficulty, explanation, errors);
+                case NUMERIC_FILL -> valid = parseNumericRow(row, rowNumber, code, type, content, points,
+                        difficulty, explanation, errors);
             }
         }
 
@@ -300,7 +302,7 @@ public class ExcelQuestionParser {
     }
 
     private BigDecimal parsePoints(String raw, int rowNumber, String code,
-                                   List<RowError> errors) {
+            List<RowError> errors) {
         if (raw.isBlank()) {
             return null;
         }
@@ -314,7 +316,7 @@ public class ExcelQuestionParser {
     }
 
     private QuestionDifficulty parseDifficulty(String raw, int rowNumber, String code,
-                                               List<RowError> errors) {
+            List<RowError> errors) {
         if (raw.isBlank()) {
             return null;
         }
@@ -330,9 +332,9 @@ public class ExcelQuestionParser {
     // ==================== CHOICE rows (SINGLE / MULTIPLE) ====================
 
     private ValidQuestionRow parseChoiceRow(Row row, int rowNumber, String code,
-                                            QuestionType type, String content,
-                                            BigDecimal points, QuestionDifficulty difficulty,
-                                            String explanation, List<RowError> errors) {
+            QuestionType type, String content,
+            BigDecimal points, QuestionDifficulty difficulty,
+            String explanation, List<RowError> errors) {
         Map<String, String> options = new LinkedHashMap<>();
         readOption(row, COL_OPTION_A, "A", options);
         readOption(row, COL_OPTION_B, "B", options);
@@ -393,7 +395,7 @@ public class ExcelQuestionParser {
     }
 
     private void validateNoOptionGaps(Map<String, String> options, int rowNumber,
-                                      String code, List<RowError> errors) {
+            String code, List<RowError> errors) {
         boolean gap = false;
         for (String k : List.of("A", "B", "C", "D", "E", "F")) {
             String v = options.get(k);
@@ -411,8 +413,8 @@ public class ExcelQuestionParser {
     }
 
     private void validateCorrectAnswersForChoice(Set<String> correct, Set<String> presentKeys,
-                                                 QuestionType type, int rowNumber, String code,
-                                                 List<RowError> errors) {
+            QuestionType type, int rowNumber, String code,
+            List<RowError> errors) {
         if (correct == null) {
             return; // malformed correct_answers already recorded
         }
@@ -445,7 +447,7 @@ public class ExcelQuestionParser {
     }
 
     private Set<String> parseCorrectAnswers(Cell cell, int rowNumber, String code,
-                                            List<RowError> errors) {
+            List<RowError> errors) {
         if (cell == null || cell.getCellType() == CellType.BLANK) {
             return Set.of();
         }
@@ -466,9 +468,9 @@ public class ExcelQuestionParser {
     // ==================== TRUE_FALSE_MATRIX rows ====================
 
     private ValidQuestionRow parseTrueFalseRow(Row row, int rowNumber, String code,
-                                               QuestionType type, String content,
-                                               BigDecimal points, QuestionDifficulty difficulty,
-                                               String explanation, List<RowError> errors) {
+            QuestionType type, String content,
+            BigDecimal points, QuestionDifficulty difficulty,
+            String explanation, List<RowError> errors) {
         Map<String, String> statements = new LinkedHashMap<>();
         Map<String, Boolean> answers = new LinkedHashMap<>();
         statements.put("A", readStringTrimmed(row.getCell(COL_STATEMENT_A)));
@@ -532,10 +534,11 @@ public class ExcelQuestionParser {
 
     // ==================== NUMERIC_FILL rows ====================
 
+    @SuppressWarnings("null")
     private ValidQuestionRow parseNumericRow(Row row, int rowNumber, String code,
-                                             QuestionType type, String content,
-                                             BigDecimal points, QuestionDifficulty difficulty,
-                                             String explanation, List<RowError> errors) {
+            QuestionType type, String content,
+            BigDecimal points, QuestionDifficulty difficulty,
+            String explanation, List<RowError> errors) {
         Cell numericCell = row.getCell(COL_NUMERIC_ANSWER);
         // MUST be a STRING cell — reject NUMERIC and FORMULA.
         if (numericCell == null || numericCell.getCellType() == CellType.BLANK) {
@@ -595,7 +598,7 @@ public class ExcelQuestionParser {
     }
 
     private void validateNumericAnswer(String raw, int rowNumber, String code,
-                                       List<RowError> errors) {
+            List<RowError> errors) {
         if (raw == null || raw.length() != NUMERIC_RAW_LENGTH) {
             errors.add(new RowError(rowNumber, code, "numeric_answer",
                     QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
@@ -619,7 +622,7 @@ public class ExcelQuestionParser {
     // ==================== Shared helpers ====================
 
     private void rejectExcessFields(Row row, int rowNumber, String code,
-                                    List<RowError> errors, List<Integer> cols, String message) {
+            List<RowError> errors, List<Integer> cols, String message) {
         for (int col : cols) {
             Cell cell = row.getCell(col);
             if (cell != null && cell.getCellType() != CellType.BLANK) {

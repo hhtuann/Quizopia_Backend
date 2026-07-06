@@ -31,6 +31,7 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSocketMessageBroker
+@SuppressWarnings({"null"})
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final SecurityProperties properties;

@@ -105,7 +105,7 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
             assertNoExtraFrame(cap, 4);
 
             // DELIVERY_ORDER_UNSPECIFIED — find by type, not by index.
-            RealtimeEventEnvelope submitEv = findExactlyOne(parse(cap.payloads), RealtimeEventType.ATTEMPT_SUBMITTED);
+            findExactlyOne(parse(cap.payloads), RealtimeEventType.ATTEMPT_SUBMITTED);
             RealtimeEventEnvelope countEv = findExactlyOne(parse(cap.payloads), RealtimeEventType.ACTIVE_COUNT_CHANGED,
                     e -> e.activeCount() != null && e.activeCount() == 0);
             assertThat(countEv.activeCount()).as("submit → N-1 (does not count SUBMITTED)").isZero();

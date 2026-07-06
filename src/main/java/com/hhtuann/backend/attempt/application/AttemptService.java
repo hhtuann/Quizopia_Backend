@@ -41,12 +41,18 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Application service for the attempt module: available-sessions query + start/resume.
+ * Application service for the attempt module: available-sessions query +
+ * start/resume.
  *
- * <p><b>Lock order</b> (start): session → participant → attempt. Matches Day 6.
- * <p><b>No answer leak:</b> the available and start responses never expose answerKey,
+ * <p>
+ * <b>Lock order</b> (start): session → participant → attempt. Matches Day 6.
+ * <p>
+ * <b>No answer leak:</b> the available and start responses never expose
+ * answerKey,
  * isCorrect, explanation, TF ladder, or score.
- * <p><b>No WebSocket</b> in this checkpoint — events are pending the realtime integration.
+ * <p>
+ * <b>No WebSocket</b> in this checkpoint — events are pending the realtime
+ * integration.
  */
 @Service
 @Transactional(readOnly = true)
@@ -64,9 +70,9 @@ public class AttemptService {
     private final ApplicationEventPublisher eventPublisher;
 
     public AttemptService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
-                          AttemptQuestionRepository aqRepo, ExamSessionRepository sessionRepo,
-                          JdbcTemplate jdbc, EntityManager em, Clock clock,
-                          ApplicationEventPublisher eventPublisher) {
+            AttemptQuestionRepository aqRepo, ExamSessionRepository sessionRepo,
+            JdbcTemplate jdbc, EntityManager em, Clock clock,
+            ApplicationEventPublisher eventPublisher) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.aqRepo = aqRepo;
@@ -108,7 +114,8 @@ public class AttemptService {
             int remaining = Math.max(0, maxAttempts - used);
             Long activeId = (Long) rs.getObject("active_id");
             Instant activeDeadline = rs.getTimestamp("active_deadline") != null
-                    ? rs.getTimestamp("active_deadline").toInstant() : null;
+                    ? rs.getTimestamp("active_deadline").toInstant()
+                    : null;
             String status = rs.getString("status");
             Instant startsAt = rs.getTimestamp("starts_at").toInstant();
             Instant endsAt = rs.getTimestamp("ends_at").toInstant();
@@ -136,7 +143,8 @@ public class AttemptService {
         ExamSession session = sessionRepo.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.EXAM_SESSION_NOT_FOUND));
 
-        // 2. Lock participant (FOR UPDATE via JdbcTemplate — V8 repo has no findByStudentForUpdate).
+        // 2. Lock participant (FOR UPDATE via JdbcTemplate — V8 repo has no
+        // findByStudentForUpdate).
         Map<String, Object> participant = lockParticipant(sessionId, profile.getId());
         long participantSchoolId = (long) participant.get("school_id");
         String participantStatus = (String) participant.get("status");
@@ -183,7 +191,7 @@ public class AttemptService {
     }
 
     private StartAttemptResponse createNewAttempt(StudentProfile profile, ExamSession session,
-                                                   Instant now, StartAttemptRequest request) {
+            Instant now, StartAttemptRequest request) {
         // MAX+1 under participant lock.
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), profile.getId()).orElse(0) + 1;
         if (nextNumber > session.getMaxAttempts()) {
@@ -218,7 +226,8 @@ public class AttemptService {
             for (QuestionRow q : qRows) {
                 List<OptionRow> opts = optionsByQuestion.getOrDefault(q.examQuestionId, List.of());
                 // Validate question-type ↔ source-option cardinality BEFORE snapshotting so an
-                // invalid source snapshot aborts the whole transaction (0 attempt/questions/answers).
+                // invalid source snapshot aborts the whole transaction (0
+                // attempt/questions/answers).
                 validateSourceCardinality(q.questionType, opts.size());
                 JsonNode optionOrder = opts.isEmpty() ? null : buildOptionOrderJson(opts);
                 AttemptQuestion aq = new AttemptQuestion(attempt.getId(), q.examQuestionId, q.questionType,
@@ -232,11 +241,14 @@ public class AttemptService {
             throw classifyAndTranslate(e);
         }
 
-        // Build response (reuse query rows for question content; no answerKey/isCorrect).
+        // Build response (reuse query rows for question content; no
+        // answerKey/isCorrect).
         List<AttemptQuestion> persisted = aqRepo.findByAttemptIdOrderByDisplayOrderAsc(attempt.getId());
         List<QuestionView> qv = buildQuestionViews(persisted);
-        // Publish ATTEMPT_STARTED within the tx — the broadcaster only delivers it AFTER_COMMIT.
-        // Resume / failed starts never reach this point, so no duplicate/rollback event.
+        // Publish ATTEMPT_STARTED within the tx — the broadcaster only delivers it
+        // AFTER_COMMIT.
+        // Resume / failed starts never reach this point, so no duplicate/rollback
+        // event.
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_STARTED, session.getId(), attempt.getId(), profile.getId(), now));
         return new StartAttemptResponse(attempt.getId(), session.getId(), nextNumber,
@@ -270,7 +282,10 @@ public class AttemptService {
         return results.get(0);
     }
 
-    /** Queries ordered exam_questions (section.position, question.position) for a version. */
+    /**
+     * Queries ordered exam_questions (section.position, question.position) for a
+     * version.
+     */
     private List<QuestionRow> queryOrderedQuestions(Long examVersionId) {
         return jdbc.query(
                 "SELECT eq.id, eq.question_type, eq.content, eq.default_points "
@@ -311,7 +326,11 @@ public class AttemptService {
         return arr;
     }
 
-    /** Builds QuestionView list from persisted AttemptQuestion entities + their exam snapshot data. */
+    /**
+     * Builds QuestionView list from persisted AttemptQuestion entities + their exam
+     * snapshot data.
+     */
+    @SuppressWarnings("null")
     private List<QuestionView> buildQuestionViews(List<AttemptQuestion> questions) {
         if (questions.isEmpty()) {
             return List.of();
@@ -340,10 +359,14 @@ public class AttemptService {
         List<QuestionView> result = new ArrayList<>();
         for (AttemptQuestion aq : questions) {
             String content = contentById.get(aq.getExamQuestionId());
-            // Build option views from the PERSISTED option_order JSON — NEVER from source position.
-            // The persisted snapshot is the single source of truth; a post-start mutation of
-            // exam_question_options.position cannot reorder a live attempt. The snapshot is fully
-            // validated (no silent skips): option-based questions require a valid persisted order;
+            // Build option views from the PERSISTED option_order JSON — NEVER from source
+            // position.
+            // The persisted snapshot is the single source of truth; a post-start mutation
+            // of
+            // exam_question_options.position cannot reorder a live attempt. The snapshot is
+            // fully
+            // validated (no silent skips): option-based questions require a valid persisted
+            // order;
             // no-option questions (NUMERIC_FILL) must have a null persisted order.
             Map<String, OptionRow> contentByKey = optContentByQuestion.getOrDefault(
                     aq.getExamQuestionId(), Map.of());
@@ -356,14 +379,17 @@ public class AttemptService {
     }
 
     /**
-     * Question-type ↔ source-option cardinality invariant. Used at BOTH new-start (against the
-     * source {@code exam_question.question_type}) and resume (against the denormalized
-     * {@code attempt_question.question_type} + the current immutable source options). Any mismatch
+     * Question-type ↔ source-option cardinality invariant. Used at BOTH new-start
+     * (against the
+     * source {@code exam_question.question_type}) and resume (against the
+     * denormalized
+     * {@code attempt_question.question_type} + the current immutable source
+     * options). Any mismatch
      * throws {@code ATTEMPT_VALIDATION_ERROR}:
      * <ul>
-     *   <li>NUMERIC_FILL → exactly 0 source options.</li>
-     *   <li>SINGLE_CHOICE / MULTIPLE_CHOICE → 4–6 source options.</li>
-     *   <li>TRUE_FALSE_MATRIX → exactly 4 source statements (keys A–D).</li>
+     * <li>NUMERIC_FILL → exactly 0 source options.</li>
+     * <li>SINGLE_CHOICE / MULTIPLE_CHOICE → 4–6 source options.</li>
+     * <li>TRUE_FALSE_MATRIX → exactly 4 source statements (keys A–D).</li>
      * </ul>
      */
     private static void validateSourceCardinality(String questionType, int sourceOptionCount) {
@@ -382,7 +408,8 @@ public class AttemptService {
                 return;
             case "TRUE_FALSE_MATRIX":
                 if (sourceOptionCount != 4) {
-                    log.warn("TRUE_FALSE_MATRIX question must have exactly 4 source statements but has {}", sourceOptionCount);
+                    log.warn("TRUE_FALSE_MATRIX question must have exactly 4 source statements but has {}",
+                            sourceOptionCount);
                     throw new AttemptException(AttemptErrorCode.ATTEMPT_VALIDATION_ERROR);
                 }
                 return;
@@ -393,14 +420,18 @@ public class AttemptService {
     }
 
     /**
-     * Validates the persisted option_order snapshot against the denormalized question type and the
-     * current immutable source options, then builds the ordered option views (source position kept —
-     * the START response renders source positions). Delegates the shared validation to
+     * Validates the persisted option_order snapshot against the denormalized
+     * question type and the
+     * current immutable source options, then builds the ordered option views
+     * (source position kept —
+     * the START response renders source positions). Delegates the shared validation
+     * to
      * {@link #validatedOrderedOptionKeys}.
      */
     private List<OptionView> buildValidatedOptionViews(AttemptQuestion aq, JsonNode persistedOrder,
-                                                       Map<String, OptionRow> contentByKey, int sourceOptionCount) {
-        List<String> keys = validatedOrderedOptionKeys(aq.getQuestionType(), aq.getId(), persistedOrder, contentByKey.keySet());
+            Map<String, OptionRow> contentByKey, int sourceOptionCount) {
+        List<String> keys = validatedOrderedOptionKeys(aq.getQuestionType(), aq.getId(), persistedOrder,
+                contentByKey.keySet());
         List<OptionView> optionViews = new ArrayList<>(keys.size());
         for (String key : keys) {
             OptionRow opt = contentByKey.get(key);
@@ -410,19 +441,27 @@ public class AttemptService {
     }
 
     /**
-     * Validates the persisted {@code option_order} snapshot and returns the option keys in persisted
-     * (render) order. Shared by start ({@link #buildValidatedOptionViews}) and the detail endpoint
-     * ({@code AttemptQueryService}), so the approved A3.2-1 validation (type-driven cardinality +
-     * persisted-order structural checks) is applied identically on every read. Package-private so the
+     * Validates the persisted {@code option_order} snapshot and returns the option
+     * keys in persisted
+     * (render) order. Shared by start ({@link #buildValidatedOptionViews}) and the
+     * detail endpoint
+     * ({@code AttemptQueryService}), so the approved A3.2-1 validation (type-driven
+     * cardinality +
+     * persisted-order structural checks) is applied identically on every read.
+     * Package-private so the
      * detail query service can reuse it without duplicating the rules.
      *
-     * <p>Rules: NUMERIC_FILL → 0 source options + null persisted order; SINGLE_CHOICE/MULTIPLE_CHOICE
-     * → 4–6 source options + required non-empty array of distinct string keys, all present in source,
-     * count match; TRUE_FALSE_MATRIX → exactly 4 source statements, keys ⊆ A–D, count 4. Any
+     * <p>
+     * Rules: NUMERIC_FILL → 0 source options + null persisted order;
+     * SINGLE_CHOICE/MULTIPLE_CHOICE
+     * → 4–6 source options + required non-empty array of distinct string keys, all
+     * present in source,
+     * count match; TRUE_FALSE_MATRIX → exactly 4 source statements, keys ⊆ A–D,
+     * count 4. Any
      * violation → {@code ATTEMPT_VALIDATION_ERROR} (400).
      */
     static List<String> validatedOrderedOptionKeys(String questionType, long aqId, JsonNode persistedOrder,
-                                                   java.util.Set<String> sourceKeys) {
+            java.util.Set<String> sourceKeys) {
         int sourceOptionCount = sourceKeys.size();
         validateSourceCardinality(questionType, sourceOptionCount);
 
@@ -446,7 +485,8 @@ public class AttemptService {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_VALIDATION_ERROR);
         }
         java.util.Set<String> tfAllowed = "TRUE_FALSE_MATRIX".equals(questionType)
-                ? java.util.Set.of("A", "B", "C", "D") : null;
+                ? java.util.Set.of("A", "B", "C", "D")
+                : null;
         List<String> orderedKeys = new ArrayList<>(persistedOrder.size());
         java.util.Set<String> seenKeys = new java.util.HashSet<>();
         for (JsonNode keyNode : persistedOrder) {
@@ -500,9 +540,13 @@ public class AttemptService {
      * and PersistenceException catch blocks. Maps known constraints to public
      * error codes; rethrows unknown constraints to avoid hiding bugs.
      *
-     * <p>For an unknown constraint (or none extractable), the ORIGINAL exception is rethrown so
-     * the real failure surfaces — it is never masked as {@code ATTEMPT_VALIDATION_ERROR}. The
-     * constraint name, SQL, and class name are logged server-side only and never reach the
+     * <p>
+     * For an unknown constraint (or none extractable), the ORIGINAL exception is
+     * rethrown so
+     * the real failure surfaces — it is never masked as
+     * {@code ATTEMPT_VALIDATION_ERROR}. The
+     * constraint name, SQL, and class name are logged server-side only and never
+     * reach the
      * client (GlobalExceptionHandler returns a generic INTERNAL_ERROR body).
      */
     private static RuntimeException classifyAndTranslate(Throwable e) {
@@ -518,19 +562,26 @@ public class AttemptService {
         if (e instanceof RuntimeException re) {
             return re;
         }
-        // Wrapped without a message so no constraint name / SQL / class name leaks if this
-        // wrapper ever surfaces (it should not — the original is a RuntimeException in practice).
+        // Wrapped without a message so no constraint name / SQL / class name leaks if
+        // this
+        // wrapper ever surfaces (it should not — the original is a RuntimeException in
+        // practice).
         return new RuntimeException(e);
     }
 
     /**
-     * Walks the entire cause chain and extracts the violated constraint name, supporting both:
+     * Walks the entire cause chain and extracts the violated constraint name,
+     * supporting both:
      * <ul>
-     *   <li>{@code org.hibernate.exception.ConstraintViolationException} — {@code getConstraintName()}</li>
-     *   <li>{@code org.postgresql.util.PSQLException} — {@code getServerErrorMessage().getConstraint()},
-     *       invoked reflectively because the JDBC driver is runtime-scoped (unavailable at compile time)</li>
+     * <li>{@code org.hibernate.exception.ConstraintViolationException} —
+     * {@code getConstraintName()}</li>
+     * <li>{@code org.postgresql.util.PSQLException} —
+     * {@code getServerErrorMessage().getConstraint()},
+     * invoked reflectively because the JDBC driver is runtime-scoped (unavailable
+     * at compile time)</li>
      * </ul>
-     * Returns the first non-blank name found at any level, or {@code null}. Package-private so the
+     * Returns the first non-blank name found at any level, or {@code null}.
+     * Package-private so the
      * PSQL fallback path can be exercised directly by tests.
      */
     static String extractConstraintName(Throwable e) {
@@ -545,7 +596,10 @@ public class AttemptService {
         return null;
     }
 
-    /** Extracts the constraint name from a single throwable (Hibernate wrapper or raw PSQLException). */
+    /**
+     * Extracts the constraint name from a single throwable (Hibernate wrapper or
+     * raw PSQLException).
+     */
     private static String constraintNameAt(Throwable t) {
         if (t instanceof org.hibernate.exception.ConstraintViolationException hce) {
             String name = hce.getConstraintName();
@@ -557,9 +611,12 @@ public class AttemptService {
     }
 
     /**
-     * Reflectively reads {@code PSQLException#getServerErrorMessage().getConstraint()}. The PostgreSQL
-     * JDBC driver is declared {@code runtime} in pom.xml, so its types cannot be referenced at compile
-     * time; matching by class name keeps this independent of the driver being on the compile classpath.
+     * Reflectively reads
+     * {@code PSQLException#getServerErrorMessage().getConstraint()}. The PostgreSQL
+     * JDBC driver is declared {@code runtime} in pom.xml, so its types cannot be
+     * referenced at compile
+     * time; matching by class name keeps this independent of the driver being on
+     * the compile classpath.
      */
     private static String psqlConstraintName(Throwable t) {
         if (t == null || !"org.postgresql.util.PSQLException".equals(t.getClass().getName())) {
@@ -582,7 +639,9 @@ public class AttemptService {
         return null;
     }
 
-    private record QuestionRow(Long examQuestionId, String questionType, String content, BigDecimal defaultPoints) {}
+    private record QuestionRow(Long examQuestionId, String questionType, String content, BigDecimal defaultPoints) {
+    }
 
-    private record OptionRow(Long examQuestionId, String optionKey, String content, int position) {}
+    private record OptionRow(Long examQuestionId, String optionKey, String content, int position) {
+    }
 }

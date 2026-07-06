@@ -99,7 +99,7 @@ class ExamCompositionServiceIntegrationTests {
         assertThat(qs.get(1).defaultPoints()).isEqualByComparingTo("2.50"); // teacher override
         assertThat(qs.get(2).options()).hasSize(4); // TF exactly 4
         assertThat(qs.get(3).options()).isEmpty(); // NUMERIC has 0 options
-        assertThat(qs.get(3).answerKey().path("expectedAnswer").asText()).isEqualTo("2.50");
+        assertThat(qs.get(3).answerKey().path("expectedAnswer").asString()).isEqualTo("2.50");
     }
 
     // -- Test group: defaultPoints override + fallback --
@@ -391,10 +391,10 @@ class ExamCompositionServiceIntegrationTests {
                 new UpdateDraftCompositionRequest(1, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
         var ak = r.currentDraftVersion().sections().get(0).questions().get(0).answerKey();
-        assertThat(ak.path("expectedAnswer").asText()).isEqualTo("02.5"); // unchanged representation
+        assertThat(ak.path("expectedAnswer").asString()).isEqualTo("02.5"); // unchanged representation
         assertThat(ak.path("requiredInputLength").isNumber()).isTrue();
         assertThat(ak.path("requiredInputLength").asInt()).isEqualTo(4);
-        assertThat(ak.path("roundingInstruction").asText()).isEqualTo("2dp");
+        assertThat(ak.path("roundingInstruction").asString()).isEqualTo("2dp");
     }
 
     // -- Test group: query count (no per-source SELECT growth) --

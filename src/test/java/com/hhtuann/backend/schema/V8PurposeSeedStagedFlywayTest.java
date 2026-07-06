@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Running the staged scenario on a fully isolated container here avoids that hazard and
  * keeps the Spring-managed container clean. No application context is started.
  */
+@SuppressWarnings({"resource"})
 class V8PurposeSeedStagedFlywayTest {
 
     @Test

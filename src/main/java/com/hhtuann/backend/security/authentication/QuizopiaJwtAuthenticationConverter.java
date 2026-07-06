@@ -26,20 +26,23 @@ import java.util.Objects;
  * Converts a validated {@link Jwt} into an authenticated token carrying the
  * principal's authorities.
  *
- * <p>For every authenticated request it:
+ * <p>
+ * For every authenticated request it:
  * <ol>
- *   <li>loads the {@link User} by the {@code sub} claim,</li>
- *   <li>rejects when the user is missing, not {@link UserStatus#ACTIVE}, or the
- *       {@code token_version} claim differs from {@code users.token_version}, and</li>
- *   <li>loads the currently effective role and permission codes (expired
- *       assignments are excluded) and maps them to authorities.</li>
+ * <li>loads the {@link User} by the {@code sub} claim,</li>
+ * <li>rejects when the user is missing, not {@link UserStatus#ACTIVE}, or the
+ * {@code token_version} claim differs from {@code users.token_version},
+ * and</li>
+ * <li>loads the currently effective role and permission codes (expired
+ * assignments are excluded) and maps them to authorities.</li>
  * </ol>
  * Authorities use one stable convention: roles become {@code ROLE_<CODE>}
  * (e.g. {@code ROLE_STUDENT}); permissions become their raw code (e.g.
  * {@code EXAM_READ}). SYSTEM_ADMIN is never implicitly granted academic
  * permissions.
  *
- * <p>All controlled failures throw {@link OAuth2AuthenticationException} so the
+ * <p>
+ * All controlled failures throw {@link OAuth2AuthenticationException} so the
  * resource-server filter routes them to the authentication entry point as a 401
  * ({@code AUTH_ACCESS_TOKEN_INVALID}), never a 500.
  */
@@ -56,9 +59,9 @@ public class QuizopiaJwtAuthenticationConverter implements Converter<Jwt, Abstra
     private final Clock clock;
 
     public QuizopiaJwtAuthenticationConverter(UserRepository userRepository,
-                                               UserRoleRepository userRoleRepository,
-                                               RolePermissionRepository rolePermissionRepository,
-                                               Clock clock) {
+            UserRoleRepository userRoleRepository,
+            RolePermissionRepository rolePermissionRepository,
+            Clock clock) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;

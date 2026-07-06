@@ -424,7 +424,7 @@ class AvailableAndStartAttemptIntegrationTests {
         java.util.UUID original = java.util.UUID.randomUUID();
         StartAttemptResponse first = attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(original));
         // Resume with a different UUID — original must be preserved.
-        StartAttemptResponse resume = attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(java.util.UUID.randomUUID()));
+        attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(java.util.UUID.randomUUID()));
         java.util.UUID stored = jdbc.queryForObject("SELECT client_instance_id FROM attempts WHERE id=" + first.attemptId(), java.util.UUID.class);
         assertThat(stored).isEqualTo(original);
     }
@@ -478,7 +478,7 @@ class AvailableAndStartAttemptIntegrationTests {
     void availableNoParticipantHidden() {
         // Different student profile — no participant for current student.
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
-        long sp2 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + schoolId + ",'NP')");
+        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + schoolId + ",'NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u2 + "," + roleId + ")");
         // This student has no participant.

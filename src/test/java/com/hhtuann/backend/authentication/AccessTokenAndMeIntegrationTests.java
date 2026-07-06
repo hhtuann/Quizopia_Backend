@@ -68,11 +68,11 @@ class AccessTokenAndMeIntegrationTests extends AbstractAuthenticationIntegration
                 .andReturn();
 
         JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
-        assertThat(body.get("username").asText()).isEqualTo(username);
-        assertThat(body.get("phone").asText()).isEqualTo("+84991234567");
-        assertThat(body.get("nationalId").asText()).isEqualTo("001234567890");
-        assertThat(body.get("status").asText()).isEqualTo("ACTIVE");
-        assertThat(body.get("roles").get(0).asText()).isEqualTo("STUDENT");
+        assertThat(body.get("username").asString()).isEqualTo(username);
+        assertThat(body.get("phone").asString()).isEqualTo("+84991234567");
+        assertThat(body.get("nationalId").asString()).isEqualTo("001234567890");
+        assertThat(body.get("status").asString()).isEqualTo("ACTIVE");
+        assertThat(body.get("roles").get(0).asString()).isEqualTo("STUDENT");
         assertThat(body.get("permissions").toString()).contains("ATTEMPT_START", "EXAM_READ");
         assertThat(body.has("passwordHash")).isFalse();
         assertThat(body.has("phoneEncrypted")).isFalse();

@@ -24,21 +24,26 @@ import java.util.stream.Collectors;
 /**
  * Application service for the Exam Session API — 4 endpoints (A3.2-3A):
  * <ul>
- *   <li>POST /api/exam-sessions — create session from a PUBLISHED version</li>
- *   <li>GET /api/exam-sessions/my — paginated owner-scoped list</li>
- *   <li>GET /api/exam-sessions/{sessionId} — detail (with lazy-close)</li>
- *   <li>PUT /api/exam-sessions/{sessionId} — update config (DRAFT/SCHEDULED only)</li>
+ * <li>POST /api/exam-sessions — create session from a PUBLISHED version</li>
+ * <li>GET /api/exam-sessions/my — paginated owner-scoped list</li>
+ * <li>GET /api/exam-sessions/{sessionId} — detail (with lazy-close)</li>
+ * <li>PUT /api/exam-sessions/{sessionId} — update config (DRAFT/SCHEDULED
+ * only)</li>
  * </ul>
  *
- * <p>Authorization (deny by default): active TEACHER role (DB) + effective permission (DB)
- * + TeacherProfile. No JWT-claim authority, no role hierarchy. Lazy-close (OPEN + now >
+ * <p>
+ * Authorization (deny by default): active TEACHER role (DB) + effective
+ * permission (DB)
+ * + TeacherProfile. No JWT-claim authority, no role hierarchy. Lazy-close (OPEN
+ * + now >
  * endsAt → CLOSED) runs on read paths (list + detail).
  */
 @Service
 public class ExamSessionService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status", "startsAt", "endsAt");
+    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status", "startsAt",
+            "endsAt");
     private static final String SESSION_CODE_CONFLICT = "uk_exam_sessions_owner_code_ci";
 
     private final ExamAuthorizationService auth;
@@ -49,11 +54,11 @@ public class ExamSessionService {
     private final ApplicationEventPublisher eventPublisher;
 
     public ExamSessionService(ExamAuthorizationService auth,
-                              ExamRepository examRepository,
-                              ExamVersionRepository versionRepository,
-                              ExamSessionRepository sessionRepository,
-                              ExamSessionParticipantRepository participantRepository,
-                              ApplicationEventPublisher eventPublisher) {
+            ExamRepository examRepository,
+            ExamVersionRepository versionRepository,
+            ExamSessionRepository sessionRepository,
+            ExamSessionParticipantRepository participantRepository,
+            ApplicationEventPublisher eventPublisher) {
         this.auth = auth;
         this.examRepository = examRepository;
         this.versionRepository = versionRepository;
@@ -77,7 +82,8 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }
 
-        ExamVersion version = versionRepository.findByExamIdAndVersionNumber(request.examId(), request.examVersionNumber())
+        ExamVersion version = versionRepository
+                .findByExamIdAndVersionNumber(request.examId(), request.examVersionNumber())
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_VERSION_NOT_FOUND));
         if (version.getStatus() != ExamVersionStatus.PUBLISHED) {
             throw new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT);
@@ -107,6 +113,7 @@ public class ExamSessionService {
     // GET /api/exam-sessions/my
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional // not readOnly — lazy-close writes
     public PageResponse<ExamSessionListItem> listMySessions(
             Long userId, String search, String statusStr, Long examId,
@@ -118,9 +125,12 @@ public class ExamSessionService {
         PageRequest pageable = safeSessionPageable(page, size, sort);
         String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
 
-        // Bulk lazy-close: expired OPEN → CLOSED BEFORE the filter query, so the status filter
-        // and pagination see the effective status. Bulk UPDATE bypasses @Version (no race; no
-        // managed entities). @Modifying(clearAutomatically=true) clears the PC for fresh reads.
+        // Bulk lazy-close: expired OPEN → CLOSED BEFORE the filter query, so the status
+        // filter
+        // and pagination see the effective status. Bulk UPDATE bypasses @Version (no
+        // race; no
+        // managed entities). @Modifying(clearAutomatically=true) clears the PC for
+        // fresh reads.
         Instant now = Instant.now();
         sessionRepository.bulkLazyCloseExpiredOpenSessions(
                 profile.getId(), ExamSessionStatus.OPEN, ExamSessionStatus.CLOSED, now);
@@ -131,10 +141,11 @@ public class ExamSessionService {
         // Batch participantCount + pinned version resolution (no N+1).
         List<Long> sessionIds = sessions.getContent().stream().map(ExamSession::getId).toList();
         Map<Long, Long> participantCounts = batchParticipantCounts(sessionIds);
-        Set<Long> versionIds = sessions.getContent().stream().map(ExamSession::getExamVersionId).collect(Collectors.toSet());
+        Set<Long> versionIds = sessions.getContent().stream().map(ExamSession::getExamVersionId)
+                .collect(Collectors.toSet());
         Map<Long, ExamVersion> versions = versionIds.isEmpty() ? Map.of()
                 : versionRepository.findAllById(versionIds).stream()
-                .collect(Collectors.toMap(ExamVersion::getId, v -> v));
+                        .collect(Collectors.toMap(ExamVersion::getId, v -> v));
 
         List<ExamSessionListItem> items = sessions.getContent().stream()
                 .map(s -> {
@@ -175,9 +186,11 @@ public class ExamSessionService {
         if (session.getStatus() == ExamSessionStatus.OPEN && now.isAfter(session.getEndsAt())) {
             session.close(now);
             sessionRepository.saveAndFlush(session);
-            // SESSION_CLOSED only on a real OPEN→CLOSED transition (AFTER_COMMIT). Bulk list lazy-close
+            // SESSION_CLOSED only on a real OPEN→CLOSED transition (AFTER_COMMIT). Bulk
+            // list lazy-close
             // does NOT publish (documented MVP exception — no session IDs).
-            eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
+            eventPublisher
+                    .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
         }
 
         long participantCount = participantRepository.countByExamSessionId(sessionId);
@@ -214,7 +227,8 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
 
-        // Update config (title/startsAt/endsAt/maxAttempts only — NOT code/examVersion/owner/school).
+        // Update config (title/startsAt/endsAt/maxAttempts only — NOT
+        // code/examVersion/owner/school).
         session.updateConfig(request.title(), request.startsAt(), request.endsAt(), request.maxAttempts());
         session = sessionRepository.saveAndFlush(session);
 
@@ -238,7 +252,8 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
         Instant now = Instant.now();
-        // Validate window: endsAt > startsAt (always true via invariants, defensive) AND now < endsAt.
+        // Validate window: endsAt > startsAt (always true via invariants, defensive)
+        // AND now < endsAt.
         if (!session.getEndsAt().isAfter(session.getStartsAt()) || !now.isBefore(session.getEndsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
@@ -255,8 +270,10 @@ public class ExamSessionService {
     public ExamSessionDetailResponse openSession(Long userId, Long sessionId) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_OPEN");
         ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
-        // Idempotent: already OPEN → 200. Deliberately NO lazy-close here (lifecycle endpoints
-        // short-circuit on state); an OPEN session past endsAt stays OPEN until explicit /close.
+        // Idempotent: already OPEN → 200. Deliberately NO lazy-close here (lifecycle
+        // endpoints
+        // short-circuit on state); an OPEN session past endsAt stays OPEN until
+        // explicit /close.
         if (session.getStatus() == ExamSessionStatus.OPEN) {
             return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
         }
@@ -311,8 +328,10 @@ public class ExamSessionService {
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
-        // CANCELLED invariant (V8): openedAt IS NULL AND closedAt IS NULL. DRAFT/SCHEDULED have both
-        // NULL, so cancel() (status-only) satisfies the CHECK. (V8 has no cancelled_at column.)
+        // CANCELLED invariant (V8): openedAt IS NULL AND closedAt IS NULL.
+        // DRAFT/SCHEDULED have both
+        // NULL, so cancel() (status-only) satisfies the CHECK. (V8 has no cancelled_at
+        // column.)
         session.cancel();
         sessionRepository.saveAndFlush(session);
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
@@ -322,8 +341,11 @@ public class ExamSessionService {
     // Helpers
     // ============================================================
 
-    /** Lock the session row (pessimistic write) then verify owner + school. Lock order: session
-     *  first; lifecycle ops never lock participants (they don't mutate them). */
+    /**
+     * Lock the session row (pessimistic write) then verify owner + school. Lock
+     * order: session
+     * first; lifecycle ops never lock participants (they don't mutate them).
+     */
     private ExamSession resolveOwnedSessionForUpdate(TeacherProfile profile, Long sessionId) {
         ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
@@ -347,7 +369,8 @@ public class ExamSessionService {
     }
 
     private Map<Long, Long> batchParticipantCounts(List<Long> sessionIds) {
-        if (sessionIds.isEmpty()) return Map.of();
+        if (sessionIds.isEmpty())
+            return Map.of();
         Map<Long, Long> counts = new HashMap<>();
         for (Object[] row : participantRepository.countByExamSessionIds(sessionIds)) {
             counts.put((Long) row[0], (Long) row[1]);
@@ -356,7 +379,8 @@ public class ExamSessionService {
     }
 
     private ExamSessionStatus parseSessionStatusFilter(String statusStr) {
-        if (statusStr == null || statusStr.isBlank()) return null;
+        if (statusStr == null || statusStr.isBlank())
+            return null;
         try {
             return ExamSessionStatus.valueOf(statusStr.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
@@ -372,7 +396,8 @@ public class ExamSessionService {
             String[] parts = sort.split(",");
             String prop = parts[0].trim();
             Sort.Direction dir = (parts.length > 1 && parts[1].trim().equalsIgnoreCase("asc"))
-                    ? Sort.Direction.ASC : Sort.Direction.DESC;
+                    ? Sort.Direction.ASC
+                    : Sort.Direction.DESC;
             if (SORT_ALLOWLIST.contains(prop)) {
                 safeSort = Sort.by(dir, prop).and(Sort.by(Sort.Direction.DESC, "id"));
             } else {
@@ -389,7 +414,8 @@ public class ExamSessionService {
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
                 String name = cve.getConstraintName();
-                if (name != null && name.contains(SESSION_CODE_CONFLICT)) return true;
+                if (name != null && name.contains(SESSION_CODE_CONFLICT))
+                    return true;
             }
             cause = cause.getCause();
         }

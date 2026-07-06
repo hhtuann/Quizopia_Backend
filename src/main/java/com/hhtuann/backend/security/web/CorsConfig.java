@@ -13,10 +13,13 @@ import java.util.List;
 /**
  * CORS configuration source and servlet-filter registration housekeeping.
  *
- * <p>Credentials are enabled (the refresh cookie must be sent cross-origin from
+ * <p>
+ * Credentials are enabled (the refresh cookie must be sent cross-origin from
  * the web app), so a wildcard origin is rejected outright: {@code *} combined
- * with {@code allowCredentials=true} is invalid and a security misconfiguration.
- * The {@link OriginCheckFilter} registration is disabled at the servlet level so
+ * with {@code allowCredentials=true} is invalid and a security
+ * misconfiguration.
+ * The {@link OriginCheckFilter} registration is disabled at the servlet level
+ * so
  * the filter runs only within the Spring Security chain (added via
  * {@code addFilterBefore} in the security configuration), avoiding a double
  * invocation.
@@ -24,10 +27,8 @@ import java.util.List;
 @Configuration
 public class CorsConfig {
 
-    private static final List<String> ALLOWED_HEADERS =
-            List.of("Authorization", "Content-Type", "Accept", "Origin");
-    private static final List<String> ALLOWED_METHODS =
-            List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
+    private static final List<String> ALLOWED_HEADERS = List.of("Authorization", "Content-Type", "Accept", "Origin");
+    private static final List<String> ALLOWED_METHODS = List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     private static final long MAX_AGE_SECONDS = 3600L;
 
     @Bean
@@ -62,6 +63,7 @@ public class CorsConfig {
      * when the list is empty. Exposed as package-private static so the
      * validation can be unit-tested without the Spring context.
      */
+    @SuppressWarnings("null")
     static List<String> normalizedOrigins(SecurityProperties properties) {
         List<String> origins = properties.getCors().getAllowedOrigins().stream()
                 .filter(o -> o != null)

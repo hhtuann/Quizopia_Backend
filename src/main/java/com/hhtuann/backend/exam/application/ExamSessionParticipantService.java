@@ -22,32 +22,44 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Application service for the Exam Session Participant API — 4 endpoints (A3.2-3B):
+ * Application service for the Exam Session Participant API — 4 endpoints
+ * (A3.2-3B):
  * <ul>
- *   <li>POST /api/exam-sessions/{sessionId}/participants — bulk add (partial classification)</li>
- *   <li>GET /api/exam-sessions/{sessionId}/participants — paginated list</li>
- *   <li>POST .../participants/{participantId}/block — block participant</li>
- *   <li>POST .../participants/{participantId}/unblock — unblock participant</li>
+ * <li>POST /api/exam-sessions/{sessionId}/participants — bulk add (partial
+ * classification)</li>
+ * <li>GET /api/exam-sessions/{sessionId}/participants — paginated list</li>
+ * <li>POST .../participants/{participantId}/block — block participant</li>
+ * <li>POST .../participants/{participantId}/unblock — unblock participant</li>
  * </ul>
  *
- * <p>Query &amp; concurrency safety (A3.2-3B remediation):
+ * <p>
+ * Query &amp; concurrency safety (A3.2-3B remediation):
  * <ul>
- *   <li>F1 — display names fetched in a single Hibernate-tracked JPQL batch
- *       ({@code SELECT u.id, u.displayName FROM User u WHERE u.id IN :ids}); no per-user loop.</li>
- *   <li>F2 — {@code studentCode} is NOT a property of the participant entity, so it is removed
- *       from the sort allowlist; a {@code studentCode} sort request throws EXAM_VALIDATION_ERROR (400).</li>
- *   <li>F4/F5 — every mutating operation resolves the session with {@code findByIdForUpdate}
- *       and block/unblock additionally lock the participant row, so concurrent toggles serialize
- *       and re-read the latest committed state (no {@code @Version} OptimisticLockException).</li>
+ * <li>F1 — display names fetched in a single Hibernate-tracked JPQL batch
+ * ({@code SELECT u.id, u.displayName FROM User u WHERE u.id IN :ids}); no
+ * per-user loop.</li>
+ * <li>F2 — {@code studentCode} is NOT a property of the participant entity, so
+ * it is removed
+ * from the sort allowlist; a {@code studentCode} sort request throws
+ * EXAM_VALIDATION_ERROR (400).</li>
+ * <li>F4/F5 — every mutating operation resolves the session with
+ * {@code findByIdForUpdate}
+ * and block/unblock additionally lock the participant row, so concurrent
+ * toggles serialize
+ * and re-read the latest committed state (no {@code @Version}
+ * OptimisticLockException).</li>
  * </ul>
  */
 @Service
 public class ExamSessionParticipantService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    // studentCode is a StudentProfile field, not a participant-entity field; sorting by it
-    // can't be resolved by the ExamSessionParticipant JPQL and would raise a 500. Allowlist only
-    // entity properties, so an unsupported sort returns EXAM_VALIDATION_ERROR (400) instead.
+    // studentCode is a StudentProfile field, not a participant-entity field;
+    // sorting by it
+    // can't be resolved by the ExamSessionParticipant JPQL and would raise a 500.
+    // Allowlist only
+    // entity properties, so an unsupported sort returns EXAM_VALIDATION_ERROR (400)
+    // instead.
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt", "status");
     private static final String DUPLICATE_CONSTRAINT = "uk_exam_session_participants_session_student";
 
@@ -58,10 +70,10 @@ public class ExamSessionParticipantService {
     private final EntityManager entityManager;
 
     public ExamSessionParticipantService(ExamAuthorizationService auth,
-                                          ExamSessionRepository sessionRepository,
-                                          ExamSessionParticipantRepository participantRepository,
-                                          StudentProfileRepository studentProfileRepository,
-                                          EntityManager entityManager) {
+            ExamSessionRepository sessionRepository,
+            ExamSessionParticipantRepository participantRepository,
+            StudentProfileRepository studentProfileRepository,
+            EntityManager entityManager) {
         this.auth = auth;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
@@ -73,6 +85,7 @@ public class ExamSessionParticipantService {
     // POST /api/exam-sessions/{sessionId}/participants — bulk add
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional
     public AddParticipantsResponse addParticipants(Long userId, Long sessionId, AddParticipantsRequest request) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_PARTICIPANT_ADD");
@@ -82,7 +95,8 @@ public class ExamSessionParticipantService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
 
-        // Deduplicate the request list (preserve first occurrence as the "valid" candidate).
+        // Deduplicate the request list (preserve first occurrence as the "valid"
+        // candidate).
         List<Long> rawIds = request.studentProfileIds();
         Set<Long> seen = new LinkedHashSet<>();
         List<Long> duplicatedInRequest = new ArrayList<>();
@@ -120,7 +134,8 @@ public class ExamSessionParticipantService {
             }
         }
 
-        // Insert valid participants (in same tx; concurrent race → EXAM_PARTICIPANT_DUPLICATE).
+        // Insert valid participants (in same tx; concurrent race →
+        // EXAM_PARTICIPANT_DUPLICATE).
         if (!toInsert.isEmpty()) {
             try {
                 for (Long spId : toInsert) {
@@ -144,6 +159,7 @@ public class ExamSessionParticipantService {
     // GET /api/exam-sessions/{sessionId}/participants — paginated list
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional
     public PageResponse<ExamSessionParticipantResponse> listParticipants(
             Long userId, Long sessionId, String statusStr, int page, int size, String sort) {
@@ -153,16 +169,18 @@ public class ExamSessionParticipantService {
         ExamSessionParticipantStatus statusFilter = parseStatusFilter(statusStr);
         PageRequest pageable = safePageable(page, size, sort);
 
-        Page<ExamSessionParticipant> participants = participantRepository.findParticipants(sessionId, statusFilter, pageable);
+        Page<ExamSessionParticipant> participants = participantRepository.findParticipants(sessionId, statusFilter,
+                pageable);
 
         // Batch-load StudentProfiles (no N+1).
         List<Long> studentProfileIds = participants.getContent().stream()
                 .map(ExamSessionParticipant::getStudentProfileId).toList();
         Map<Long, StudentProfile> profiles = studentProfileIds.isEmpty() ? Map.of()
                 : studentProfileRepository.findAllById(studentProfileIds).stream()
-                .collect(Collectors.toMap(StudentProfile::getId, p -> p));
+                        .collect(Collectors.toMap(StudentProfile::getId, p -> p));
 
-        // F1: batch-load display names in a SINGLE Hibernate-tracked query (no per-user loop).
+        // F1: batch-load display names in a SINGLE Hibernate-tracked query (no per-user
+        // loop).
         Set<Long> userIds = profiles.values().stream().map(StudentProfile::getUserId).collect(Collectors.toSet());
         Map<Long, String> displayNames = batchDisplayNames(userIds);
 
@@ -210,7 +228,8 @@ public class ExamSessionParticipantService {
     private ExamSessionParticipantResponse toggleBlock(Long userId, Long sessionId, Long participantId, boolean block) {
         TeacherProfile profile = auth.requireTeacherWithPermission(userId,
                 block ? "EXAM_SESSION_PARTICIPANT_BLOCK" : "EXAM_SESSION_PARTICIPANT_UNBLOCK");
-        // Lock order: session FIRST, then participant. Concurrent toggles serialize here and
+        // Lock order: session FIRST, then participant. Concurrent toggles serialize
+        // here and
         // re-read the latest committed state, so @Version never conflicts on flush.
         ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
         // Block/unblock allowed in DRAFT, SCHEDULED, OPEN.
@@ -247,7 +266,9 @@ public class ExamSessionParticipantService {
                 p.getStatus().name(), p.getAddedAt(), p.getBlockedAt());
     }
 
-    /** Read-only resolution (list): no pessimistic lock, any session state accepted. */
+    /**
+     * Read-only resolution (list): no pessimistic lock, any session state accepted.
+     */
     private ExamSession resolveOwnedSession(TeacherProfile profile, Long sessionId) {
         ExamSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
@@ -259,9 +280,12 @@ public class ExamSessionParticipantService {
     }
 
     /**
-     * Mutating resolution (add/block/unblock): pessimistic-write lock the session row so the
-     * state check is stable for the whole operation — a concurrent lifecycle transition that
-     * changes the state is observed after this tx acquires the lock (re-read), not a stale read.
+     * Mutating resolution (add/block/unblock): pessimistic-write lock the session
+     * row so the
+     * state check is stable for the whole operation — a concurrent lifecycle
+     * transition that
+     * changes the state is observed after this tx acquires the lock (re-read), not
+     * a stale read.
      */
     private ExamSession resolveOwnedSessionForUpdate(TeacherProfile profile, Long sessionId) {
         ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
@@ -274,15 +298,17 @@ public class ExamSessionParticipantService {
     }
 
     /**
-     * F1: fetch display names for a set of users in a SINGLE Hibernate-tracked JPQL projection
-     * (no per-user loop, no N+1). Tracked so query statistics can prove it runs once per request.
+     * F1: fetch display names for a set of users in a SINGLE Hibernate-tracked JPQL
+     * projection
+     * (no per-user loop, no N+1). Tracked so query statistics can prove it runs
+     * once per request.
      */
     private Map<Long, String> batchDisplayNames(Collection<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
             return Map.of();
         }
         List<Object[]> rows = entityManager.createQuery(
-                        "SELECT u.id, u.displayName FROM User u WHERE u.id IN :ids", Object[].class)
+                "SELECT u.id, u.displayName FROM User u WHERE u.id IN :ids", Object[].class)
                 .setParameter("ids", userIds)
                 .getResultList();
         Map<Long, String> names = new HashMap<>();
@@ -293,7 +319,8 @@ public class ExamSessionParticipantService {
     }
 
     private ExamSessionParticipantStatus parseStatusFilter(String statusStr) {
-        if (statusStr == null || statusStr.isBlank()) return null;
+        if (statusStr == null || statusStr.isBlank())
+            return null;
         try {
             return ExamSessionParticipantStatus.valueOf(statusStr.trim().toUpperCase());
         } catch (IllegalArgumentException e) {
@@ -309,7 +336,8 @@ public class ExamSessionParticipantService {
             String[] parts = sort.split(",");
             String prop = parts[0].trim();
             Sort.Direction dir = (parts.length > 1 && parts[1].trim().equalsIgnoreCase("asc"))
-                    ? Sort.Direction.ASC : Sort.Direction.DESC;
+                    ? Sort.Direction.ASC
+                    : Sort.Direction.DESC;
             if (SORT_ALLOWLIST.contains(prop)) {
                 safeSort = Sort.by(dir, prop);
             } else {
@@ -324,7 +352,8 @@ public class ExamSessionParticipantService {
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
                 String name = cve.getConstraintName();
-                if (name != null && name.contains(DUPLICATE_CONSTRAINT)) return true;
+                if (name != null && name.contains(DUPLICATE_CONSTRAINT))
+                    return true;
             }
             cause = cause.getCause();
         }

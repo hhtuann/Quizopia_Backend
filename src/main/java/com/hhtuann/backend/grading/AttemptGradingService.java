@@ -31,15 +31,23 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Day 8 grading orchestration: batch-loads an attempt's snapshot + answer keys + submitted answers, calls the
- * pure {@link Grader} per question, aggregates, and persists exactly one {@link Grade} + one {@link GradeItem}
- * per attempt question. MUST run inside the submit transaction (after the attempt transitions to SUBMITTED);
- * declared {@link Propagation#REQUIRED} so it joins the caller's tx and any {@link GradingException} rolls the
+ * Day 8 grading orchestration: batch-loads an attempt's snapshot + answer keys
+ * + submitted answers, calls the
+ * pure {@link Grader} per question, aggregates, and persists exactly one
+ * {@link Grade} + one {@link GradeItem}
+ * per attempt question. MUST run inside the submit transaction (after the
+ * attempt transitions to SUBMITTED);
+ * declared {@link Propagation#REQUIRED} so it joins the caller's tx and any
+ * {@link GradingException} rolls the
  * whole submit (status + grade + items) back atomically.
  *
- * <p><b>No N+1:</b> four batch loads only — attempt questions (ordered), answers (by attempt), exam questions
- * (by the attempt's pinned {@code exam_version_id}), options (by the attempt's exam-question ids). No answer key
- * is logged or placed in {@code gradingDetails}; {@code gradingDetails} is an empty object (safe metadata only).
+ * <p>
+ * <b>No N+1:</b> four batch loads only — attempt questions (ordered), answers
+ * (by attempt), exam questions
+ * (by the attempt's pinned {@code exam_version_id}), options (by the attempt's
+ * exam-question ids). No answer key
+ * is logged or placed in {@code gradingDetails}; {@code gradingDetails} is an
+ * empty object (safe metadata only).
  */
 @Service
 public class AttemptGradingService {
@@ -54,11 +62,11 @@ public class AttemptGradingService {
     private final Clock clock;
 
     public AttemptGradingService(AttemptQuestionRepository attemptQuestionRepo,
-                                 AttemptAnswerRepository attemptAnswerRepo,
-                                 ExamQuestionRepository examQuestionRepo,
-                                 ExamQuestionOptionRepository examQuestionOptionRepo,
-                                 GradeRepository gradeRepo, GradeItemRepository gradeItemRepo,
-                                 ObjectMapper objectMapper, Clock clock) {
+            AttemptAnswerRepository attemptAnswerRepo,
+            ExamQuestionRepository examQuestionRepo,
+            ExamQuestionOptionRepository examQuestionOptionRepo,
+            GradeRepository gradeRepo, GradeItemRepository gradeItemRepo,
+            ObjectMapper objectMapper, Clock clock) {
         this.attemptQuestionRepo = attemptQuestionRepo;
         this.attemptAnswerRepo = attemptAnswerRepo;
         this.examQuestionRepo = examQuestionRepo;
@@ -70,10 +78,14 @@ public class AttemptGradingService {
     }
 
     /**
-     * Grades the attempt and persists the immutable {@link Grade} + {@link GradeItem}s. Returns the persisted
-     * Grade (its id is set after flush). Throws {@link GradingException} on any configuration/data inconsistency
-     * → the caller's transaction rolls back (no partial grade/items, no SUBMITTED transition survives).
+     * Grades the attempt and persists the immutable {@link Grade} +
+     * {@link GradeItem}s. Returns the persisted
+     * Grade (its id is set after flush). Throws {@link GradingException} on any
+     * configuration/data inconsistency
+     * → the caller's transaction rolls back (no partial grade/items, no SUBMITTED
+     * transition survives).
      */
+    @SuppressWarnings("null")
     public Grade gradeAndPersist(Attempt attempt) {
         Long attemptId = attempt.getId();
         List<AttemptQuestion> questions = attemptQuestionRepo.findByAttemptIdOrderByDisplayOrderAsc(attemptId);
@@ -83,8 +95,10 @@ public class AttemptGradingService {
         // Batch 1: answers keyed by attempt_question_id.
         Map<Long, AttemptAnswer> answerByQuestion = attemptAnswerRepo.findByAttemptId(attemptId).stream()
                 .collect(Collectors.toMap(AttemptAnswer::getAttemptQuestionId, a -> a, (a, b) -> b));
-        // Batch 2: exam questions for the attempt's pinned version (cross-version-safe snapshot source).
-        Map<Long, ExamQuestion> examQuestionById = examQuestionRepo.findAllByExamVersionId(attempt.getExamVersionId()).stream()
+        // Batch 2: exam questions for the attempt's pinned version (cross-version-safe
+        // snapshot source).
+        Map<Long, ExamQuestion> examQuestionById = examQuestionRepo.findAllByExamVersionId(attempt.getExamVersionId())
+                .stream()
                 .collect(Collectors.toMap(ExamQuestion::getId, e -> e));
         // Batch 3: options for the attempt's exam-question ids.
         List<Long> examQuestionIds = questions.stream().map(AttemptQuestion::getExamQuestionId).toList();
@@ -96,7 +110,8 @@ public class AttemptGradingService {
         for (AttemptQuestion q : questions) {
             ExamQuestion eq = examQuestionById.get(q.getExamQuestionId());
             if (eq == null) {
-                throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "attempt question references unknown exam question");
+                throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT,
+                        "attempt question references unknown exam question");
             }
             List<ExamQuestionOption> opts = optionsByExamQuestion.getOrDefault(q.getExamQuestionId(), List.of());
             AttemptAnswer answer = answerByQuestion.get(q.getId());
@@ -109,10 +124,14 @@ public class AttemptGradingService {
         Grade grade = new Grade(attemptId, aggregate.score(), aggregate.score(), aggregate.maxScore(), gradedAt, null);
         grade.setPercentage(aggregate.percentage());
         grade = gradeRepo.save(grade);
-        // No explicit flush here: with IDENTITY generation, save() triggers the INSERT immediately
-        // (grade.getId() is populated). The single flush in AttemptSubmitService's cache-insert path
-        // enforces ALL constraints (uk_grades_attempt, uk_idempotency_*, etc.) in one pass — avoiding
-        // a corrupted Hibernate session from a failed flush after prior successful flushes.
+        // No explicit flush here: with IDENTITY generation, save() triggers the INSERT
+        // immediately
+        // (grade.getId() is populated). The single flush in AttemptSubmitService's
+        // cache-insert path
+        // enforces ALL constraints (uk_grades_attempt, uk_idempotency_*, etc.) in one
+        // pass — avoiding
+        // a corrupted Hibernate session from a failed flush after prior successful
+        // flushes.
 
         JsonNode emptyDetails = objectMapper.createObjectNode();
         for (int i = 0; i < questions.size(); i++) {
@@ -125,9 +144,10 @@ public class AttemptGradingService {
     }
 
     private QuestionGrade gradeQuestion(String type, BigDecimal maxScore, ExamQuestion eq,
-                                        List<ExamQuestionOption> opts, JsonNode payload) {
+            List<ExamQuestionOption> opts, JsonNode payload) {
         return switch (type) {
-            case "SINGLE_CHOICE" -> Grader.gradeSingle(maxScore, singleCorrectKey(opts), textField(payload, "selectedOptionKey"));
+            case "SINGLE_CHOICE" ->
+                Grader.gradeSingle(maxScore, singleCorrectKey(opts), textField(payload, "selectedOptionKey"));
             case "MULTIPLE_CHOICE" -> Grader.gradeMultiple(maxScore, multipleCorrectKeys(opts), selectedKeys(payload));
             case "TRUE_FALSE_MATRIX" -> Grader.gradeMatrix(maxScore, matrixKey(opts), matrixStudent(payload));
             case "NUMERIC_FILL" -> Grader.gradeNumeric(maxScore, expectedNumeric(eq), numericValue(payload));
@@ -135,18 +155,24 @@ public class AttemptGradingService {
         };
     }
 
+    @SuppressWarnings("null")
     private String singleCorrectKey(List<ExamQuestionOption> opts) {
-        List<String> correct = opts.stream().filter(o -> Boolean.TRUE.equals(o.getIsCorrect())).map(ExamQuestionOption::getOptionKey).toList();
+        List<String> correct = opts.stream().filter(o -> Boolean.TRUE.equals(o.getIsCorrect()))
+                .map(ExamQuestionOption::getOptionKey).toList();
         if (correct.size() != 1) {
-            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "single-choice must have exactly one correct option");
+            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT,
+                    "single-choice must have exactly one correct option");
         }
         return correct.get(0);
     }
 
+    @SuppressWarnings("null")
     private Set<String> multipleCorrectKeys(List<ExamQuestionOption> opts) {
-        Set<String> correct = opts.stream().filter(o -> Boolean.TRUE.equals(o.getIsCorrect())).map(ExamQuestionOption::getOptionKey).collect(Collectors.toSet());
+        Set<String> correct = opts.stream().filter(o -> Boolean.TRUE.equals(o.getIsCorrect()))
+                .map(ExamQuestionOption::getOptionKey).collect(Collectors.toSet());
         if (correct.isEmpty()) {
-            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "multiple-choice must have at least one correct option");
+            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT,
+                    "multiple-choice must have at least one correct option");
         }
         return correct;
     }
@@ -215,7 +241,8 @@ public class AttemptGradingService {
         }
         JsonNode node = key.get("expectedAnswer");
         if (node == null || !node.isString()) {
-            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "numeric-fill missing expectedAnswer");
+            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT,
+                    "numeric-fill missing expectedAnswer");
         }
         return parseNumeric(node.asString());
     }
@@ -228,7 +255,10 @@ public class AttemptGradingService {
         return (node == null || node.isNull() || !node.isString()) ? null : parseNumeric(node.asString());
     }
 
-    /** Parses a stored numeric string to BigDecimal (comma → dot per Day 7 grading rule; never double). */
+    /**
+     * Parses a stored numeric string to BigDecimal (comma → dot per Day 7 grading
+     * rule; never double).
+     */
     private static BigDecimal parseNumeric(String raw) {
         try {
             return new BigDecimal(raw.replace(',', '.'));

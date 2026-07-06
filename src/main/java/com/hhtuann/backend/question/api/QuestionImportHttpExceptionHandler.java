@@ -23,8 +23,10 @@ import java.time.Instant;
  * plus the Spring multipart framework errors) to the unified {@link ApiError}
  * body with the {@link QuestionErrorCode#QUESTION_IMPORT_FILE_INVALID} code.
  *
- * <p>Scoped (not global) so it never interferes with other controllers. It runs
- * at {@link Ordered#HIGHEST_PRECEDENCE} so the import's tailored statuses (400 /
+ * <p>
+ * Scoped (not global) so it never interferes with other controllers. It runs
+ * at {@link Ordered#HIGHEST_PRECEDENCE} so the import's tailored statuses (400
+ * /
  * 413 / 415) win over the generic global handlers in
  * {@link com.hhtuann.backend.security.web.GlobalExceptionHandler}.
  */
@@ -38,6 +40,7 @@ public class QuestionImportHttpExceptionHandler {
     }
 
     /** 413 — request body exceeded the configured multipart max size. */
+    @SuppressWarnings("deprecation")
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiError> handleMaxUploadSize(MaxUploadSizeExceededException ex, HttpServletRequest request) {
         return build(HttpStatus.PAYLOAD_TOO_LARGE, QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID,
@@ -46,20 +49,22 @@ public class QuestionImportHttpExceptionHandler {
 
     /** 400 — required {@code file} part is absent from the multipart request. */
     @ExceptionHandler(MissingServletRequestPartException.class)
-    public ResponseEntity<ApiError> handleMissingPart(MissingServletRequestPartException ex, HttpServletRequest request) {
+    public ResponseEntity<ApiError> handleMissingPart(MissingServletRequestPartException ex,
+            HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST, QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID,
                 "Required file part is missing", request);
     }
 
     /** 415 — the request Content-Type is not multipart/form-data. */
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
-    public ResponseEntity<ApiError> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex, HttpServletRequest request) {
+    public ResponseEntity<ApiError> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex,
+            HttpServletRequest request) {
         return build(HttpStatus.UNSUPPORTED_MEDIA_TYPE, QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID,
                 "Unsupported media type", request);
     }
 
     private ResponseEntity<ApiError> build(HttpStatus status, QuestionErrorCode code, String message,
-                                           HttpServletRequest request) {
+            HttpServletRequest request) {
         String path = request != null ? request.getRequestURI() : null;
         ApiError body = new ApiError(
                 Instant.now(), status.value(), code.code(), message, path, MDC.get("traceId"));

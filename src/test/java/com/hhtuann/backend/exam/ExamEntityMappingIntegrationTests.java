@@ -14,7 +14,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -181,7 +180,7 @@ class ExamEntityMappingIntegrationTests {
         questionRepo.saveAndFlush(q);
         entityManager.clear();
         ExamQuestion reloaded = questionRepo.findById(q.getId()).orElseThrow();
-        assertThat(reloaded.getMetadata().path("tag").asText()).isEqualTo("x");
+        assertThat(reloaded.getMetadata().path("tag").asString()).isEqualTo("x");
     }
 
     @Test
@@ -204,10 +203,10 @@ class ExamEntityMappingIntegrationTests {
         questionRepo.saveAndFlush(q);
         entityManager.clear();
         ExamQuestion reloaded = questionRepo.findById(q.getId()).orElseThrow();
-        assertThat(reloaded.getAnswerKey().path("expectedAnswer").asText()).isEqualTo("2.50");
+        assertThat(reloaded.getAnswerKey().path("expectedAnswer").asString()).isEqualTo("2.50");
         assertThat(reloaded.getAnswerKey().path("requiredInputLength").isNumber()).isTrue();
         assertThat(reloaded.getAnswerKey().path("requiredInputLength").asInt()).isEqualTo(4);
-        assertThat(reloaded.getAnswerKey().path("roundingInstruction").asText()).isEqualTo("r2");
+        assertThat(reloaded.getAnswerKey().path("roundingInstruction").asString()).isEqualTo("r2");
     }
 
     @Test

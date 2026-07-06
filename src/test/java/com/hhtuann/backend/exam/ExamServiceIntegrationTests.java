@@ -16,12 +16,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
@@ -39,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
+@SuppressWarnings({"null"})
 class ExamServiceIntegrationTests {
 
     @Autowired private JdbcTemplate jdbc;
@@ -194,7 +192,7 @@ class ExamServiceIntegrationTests {
     void createExamTwoOwnersSameSchoolSameCodeAccepted() {
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2','u2@t','h','U2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
+        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
         examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "SHARED", "T", null));
         // Same code, different owner — should succeed (owner-scoped unique)
         ExamListItem result = examService.createExam(u2, new CreateExamRequest(subjectId, null, "SHARED", "T2", null));
@@ -319,7 +317,7 @@ class ExamServiceIntegrationTests {
         ExamVersion draft = versionRepo.findFirstByExamIdAndStatus(created.id(), ExamVersionStatus.DRAFT).orElseThrow();
 
         // Add sections
-        ExamSection sec0 = sectionRepo.saveAndFlush(new ExamSection(draft.getId(), "Section B", 1));
+        sectionRepo.saveAndFlush(new ExamSection(draft.getId(), "Section B", 1));
         ExamSection sec1 = sectionRepo.saveAndFlush(new ExamSection(draft.getId(), "Section A", 0));
 
         // Add questions (need a source question)
@@ -330,7 +328,7 @@ class ExamServiceIntegrationTests {
         long qId2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q2'," + teacherUserId + ")");
         long qvId2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qId2 + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
-        ExamQuestion q1 = questionRepo.saveAndFlush(new ExamQuestion(draft.getId(), sec1.getId(), qId, qvId,
+        questionRepo.saveAndFlush(new ExamQuestion(draft.getId(), sec1.getId(), qId, qvId,
                 "QC1", com.hhtuann.backend.question.domain.model.QuestionType.SINGLE_CHOICE, "c1", BigDecimal.ONE, 1));
         ExamQuestion q2 = questionRepo.saveAndFlush(new ExamQuestion(draft.getId(), sec1.getId(), qId2, qvId2,
                 "QC2", com.hhtuann.backend.question.domain.model.QuestionType.SINGLE_CHOICE, "c2", BigDecimal.ONE, 0));

@@ -79,7 +79,7 @@ class OriginCorsIntegrationTests extends AbstractAuthenticationIntegrationTests 
     }
 
     private String errorCode(MvcResult result) throws Exception {
-        return objectMapper.readTree(result.getResponse().getContentAsString()).get("code").asText();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("code").asString();
     }
 
     private void registerStudent(String username) throws Exception {

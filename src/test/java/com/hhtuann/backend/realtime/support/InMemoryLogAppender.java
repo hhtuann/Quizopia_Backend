@@ -13,6 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * the captured (formatted) messages omit a sensitive marker. AutoCloseable detaches on close so it
  * never leaks across tests. Deterministic — no reliance on console capture.
  */
+@SuppressWarnings({"null"})
 public class InMemoryLogAppender extends AppenderBase<ILoggingEvent> implements AutoCloseable {
 
     private final List<ILoggingEvent> events = new CopyOnWriteArrayList<>();

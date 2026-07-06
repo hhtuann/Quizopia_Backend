@@ -7,7 +7,6 @@ import com.hhtuann.backend.exam.domain.model.ExamSection;
 import com.hhtuann.backend.exam.domain.model.ExamVersionStatus;
 import com.hhtuann.backend.exam.dto.CreateExamVersionRequest;
 import com.hhtuann.backend.exam.dto.CreateExamVersionResponse;
-import com.hhtuann.backend.exam.dto.TeacherExamEditorResponse;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQuestionRequest;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionSectionRequest;
@@ -30,7 +29,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
@@ -53,6 +51,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
+@SuppressWarnings({"null"})
 class ExamVersionServiceIntegrationTests {
 
     @Autowired private JdbcTemplate jdbc;

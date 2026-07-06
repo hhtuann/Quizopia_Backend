@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
+@SuppressWarnings({"null"})
 class ExamRepositoryIntegrationTests {
 
     @Autowired private JdbcTemplate jdbc;
@@ -123,7 +124,7 @@ class ExamRepositoryIntegrationTests {
     @Test
     void versionFindByExamAndNumber() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "V1", "T"));
-        ExamVersion v1 = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
+        versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
         assertThat(versionRepo.findByExamIdAndVersionNumber(e.getId(), 1)).isPresent();
         assertThat(versionRepo.findByExamIdAndVersionNumber(e.getId(), 2)).isEmpty();
     }

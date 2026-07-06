@@ -49,10 +49,10 @@ class LoginIntegrationTests extends AbstractAuthenticationIntegrationTests {
 
         assertThat(result.getResponse().getStatus()).isEqualTo(200);
         JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
-        assertThat(body.get("accessToken").asText()).isNotBlank();
-        assertThat(body.get("tokenType").asText()).isEqualTo("Bearer");
+        assertThat(body.get("accessToken").asString()).isNotBlank();
+        assertThat(body.get("tokenType").asString()).isEqualTo("Bearer");
         assertThat(body.get("expiresInSeconds").asLong()).isEqualTo(900);
-        assertThat(body.get("roles").get(0).asText()).isEqualTo("STUDENT");
+        assertThat(body.get("roles").get(0).asString()).isEqualTo("STUDENT");
 
         String setCookie = result.getResponse().getHeader("Set-Cookie");
         assertThat(setCookie).contains("quizopia_refresh=");
@@ -168,7 +168,7 @@ class LoginIntegrationTests extends AbstractAuthenticationIntegrationTests {
     // ---------- helpers ----------
 
     private String errorCode(org.springframework.test.web.servlet.MvcResult result) throws Exception {
-        return objectMapper.readTree(result.getResponse().getContentAsString()).get("code").asText();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("code").asString();
     }
 
     private void setStatus(String username, String status) {

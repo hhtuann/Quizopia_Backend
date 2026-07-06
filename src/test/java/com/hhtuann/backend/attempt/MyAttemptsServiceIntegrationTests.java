@@ -30,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
 @Transactional
+@SuppressWarnings({"null"})
 class MyAttemptsServiceIntegrationTests {
 
     @Autowired private AttemptQueryService queryService;
@@ -267,7 +268,7 @@ class MyAttemptsServiceIntegrationTests {
         long sp2 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + s2 + ",'XS')");
         long bank2 = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + s2 + "," + subj2 + "," + tp2 + ",'B2','B2')");
         long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank2 + ",'Q2'," + u2 + ")");
-        long qv2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + u2 + ")");
+        insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + u2 + ")");
         long exam2 = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + s2 + "," + subj2 + "," + tp2 + ",'E2','E2')");
         long ver2 = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + s2 + "," + exam2 + ",1,'PUBLISHED',1,now()," + u2 + ")");
         long sess2 = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, created_by, opened_at) VALUES (" + s2 + "," + ver2 + "," + tp2 + ",'S2','S2','OPEN',now(),now()+interval '1 hour'," + u2 + ",now())");

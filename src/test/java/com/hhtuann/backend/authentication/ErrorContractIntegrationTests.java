@@ -68,9 +68,9 @@ class ErrorContractIntegrationTests extends AbstractAuthenticationIntegrationTes
     private static void assertSchema(JsonNode body, int status, String code, String path) {
         assertThat(body.has("timestamp")).isTrue();
         assertThat(body.get("status").asInt()).isEqualTo(status);
-        assertThat(body.get("code").asText()).isEqualTo(code);
-        assertThat(body.get("message").asText()).isNotBlank();
-        assertThat(body.get("path").asText()).isEqualTo(path);
+        assertThat(body.get("code").asString()).isEqualTo(code);
+        assertThat(body.get("message").asString()).isNotBlank();
+        assertThat(body.get("path").asString()).isEqualTo(path);
         assertThat(body.has("traceId")).isTrue();
         // No stack trace leaked.
         assertThat(body.has("stackTrace")).isFalse();

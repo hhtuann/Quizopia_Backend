@@ -31,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
+@SuppressWarnings({"null"})
 class JwtAuthoritiesIntegrationTests {
 
     @Autowired

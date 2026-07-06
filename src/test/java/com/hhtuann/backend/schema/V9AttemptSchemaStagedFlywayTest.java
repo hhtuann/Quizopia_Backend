@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * tables exist. Finally re-run migration and validate checksums to prove the migration does
  * not silently mutate the schema on a second pass.
  */
+@SuppressWarnings({"resource"})
 class V9AttemptSchemaStagedFlywayTest {
 
     private static final List<String> V9_TABLES = List.of(

@@ -6,8 +6,6 @@ import com.hhtuann.backend.attempt.application.SessionResultService;
 import com.hhtuann.backend.attempt.application.SessionStatisticsService;
 import com.hhtuann.backend.attempt.dto.AttemptResultResponse;
 import com.hhtuann.backend.attempt.dto.SessionStatisticsResponse;
-import com.hhtuann.backend.attempt.exception.AttemptErrorCode;
-import com.hhtuann.backend.attempt.exception.AttemptException;
 import com.hhtuann.backend.security.authentication.EffectiveRoleResolver;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -22,9 +20,12 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 
 /**
- * Day 8 result endpoints. Role is derived from effective Authentication authorities (loaded by
- * {@link com.hhtuann.backend.security.authentication.QuizopiaJwtAuthenticationConverter} from the DB),
- * NOT from the JWT {@code roles} claim. Unsupported roles are denied (fail-closed) at the service layer.
+ * Day 8 result endpoints. Role is derived from effective Authentication
+ * authorities (loaded by
+ * {@link com.hhtuann.backend.security.authentication.QuizopiaJwtAuthenticationConverter}
+ * from the DB),
+ * NOT from the JWT {@code roles} claim. Unsupported roles are denied
+ * (fail-closed) at the service layer.
  */
 @RestController
 public class ResultController {
@@ -35,7 +36,7 @@ public class ResultController {
     private final ExcelExportService exportService;
 
     public ResultController(AttemptResultService resultService, SessionResultService sessionResultService,
-                           SessionStatisticsService statisticsService, ExcelExportService exportService) {
+            SessionStatisticsService statisticsService, ExcelExportService exportService) {
         this.resultService = resultService;
         this.sessionResultService = sessionResultService;
         this.statisticsService = statisticsService;
@@ -45,8 +46,8 @@ public class ResultController {
     /** Role-aware attempt result detail (service enforces ownership per role). */
     @GetMapping("/api/attempts/{attemptId}/result")
     public AttemptResultResponse getAttemptResult(@AuthenticationPrincipal Jwt jwt,
-                                                  Authentication authentication,
-                                                  @PathVariable Long attemptId) {
+            Authentication authentication,
+            @PathVariable Long attemptId) {
         return resultService.getAttemptResult(Long.valueOf(jwt.getSubject()),
                 EffectiveRoleResolver.resolve(authentication.getAuthorities()), attemptId);
     }
@@ -54,11 +55,14 @@ public class ResultController {
     /** Student own BEST result for a session. */
     @GetMapping("/api/exam-sessions/{sessionId}/results/me/best")
     public AttemptResultResponse getMyBestResult(@AuthenticationPrincipal Jwt jwt,
-                                                 @PathVariable Long sessionId) {
+            @PathVariable Long sessionId) {
         return resultService.getMyBestResult(Long.valueOf(jwt.getSubject()), sessionId);
     }
 
-    /** Teacher/admin paginated session results — one BEST row per student (CTE, database pagination). */
+    /**
+     * Teacher/admin paginated session results — one BEST row per student (CTE,
+     * database pagination).
+     */
     @GetMapping("/api/exam-sessions/{sessionId}/results")
     public SessionResultService.SessionResultsPage getSessionResults(
             @AuthenticationPrincipal Jwt jwt,
@@ -80,17 +84,19 @@ public class ResultController {
     /** Teacher/admin session statistics (BEST-based). */
     @GetMapping("/api/exam-sessions/{sessionId}/statistics")
     public SessionStatisticsResponse getStatistics(@AuthenticationPrincipal Jwt jwt,
-                                                    Authentication authentication,
-                                                    @PathVariable Long sessionId) {
+            Authentication authentication,
+            @PathVariable Long sessionId) {
         return statisticsService.getStatistics(Long.valueOf(jwt.getSubject()),
                 EffectiveRoleResolver.resolve(authentication.getAuthorities()), sessionId);
     }
 
-    /** Teacher/admin XLSX export (authorization enforced before workbook creation). */
+    /**
+     * Teacher/admin XLSX export (authorization enforced before workbook creation).
+     */
     @GetMapping("/api/exam-sessions/{sessionId}/results/export")
     public ResponseEntity<byte[]> exportResults(@AuthenticationPrincipal Jwt jwt,
-                                                 Authentication authentication,
-                                                 @PathVariable Long sessionId) {
+            Authentication authentication,
+            @PathVariable Long sessionId) {
         Long userId = Long.valueOf(jwt.getSubject());
         String role = EffectiveRoleResolver.resolve(authentication.getAuthorities());
         byte[] bytes = exportService.export(userId, role, sessionId);

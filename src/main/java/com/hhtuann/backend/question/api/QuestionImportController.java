@@ -26,10 +26,12 @@ import java.util.Locale;
 /**
  * REST endpoints for question import.
  *
- * <p>Batch B2.1: {@code GET /api/questions/import-template} downloads the
+ * <p>
+ * Batch B2.1: {@code GET /api/questions/import-template} downloads the
  * in-memory generated xlsx template (requires {@code QUESTION_CREATE}).
  *
- * <p>Batch B2.2: {@code POST /api/question-banks/{bankId}/questions/import}
+ * <p>
+ * Batch B2.2: {@code POST /api/question-banks/{bankId}/questions/import}
  * uploads a filled-in workbook, parses it <em>outside</em> any persistence
  * transaction, then persists the valid rows in a single all-or-nothing
  * transaction (re-authorizing inside). Partial success returns HTTP 200 with
@@ -45,8 +47,7 @@ public class QuestionImportController {
 
     private static final MediaType XLSX_MEDIA_TYPE = MediaType.parseMediaType(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    private static final String CONTENT_DISPOSITION =
-            "attachment; filename=\"quizopia-question-import-template.xlsx\"";
+    private static final String CONTENT_DISPOSITION = "attachment; filename=\"quizopia-question-import-template.xlsx\"";
 
     /** Hard cap on a single uploaded workbook (5 MiB). */
     public static final long MAX_FILE_SIZE = 5L * 1024 * 1024;
@@ -57,8 +58,8 @@ public class QuestionImportController {
     private final ExcelQuestionParser parser;
 
     public QuestionImportController(QuestionTemplateService templateService,
-                                    QuestionImportService importService,
-                                    ExcelQuestionParser parser) {
+            QuestionImportService importService,
+            ExcelQuestionParser parser) {
         this.templateService = templateService;
         this.importService = importService;
         this.parser = parser;
@@ -81,25 +82,25 @@ public class QuestionImportController {
     /**
      * Imports questions from an uploaded xlsx workbook into a question bank.
      *
-     * <p>Phases:
+     * <p>
+     * Phases:
      * <ol>
-     *   <li><b>Preflight auth</b> — runs the deny-by-default authorization
-     *       before any byte of the workbook is parsed. This guarantees an
-     *       unauthorized caller (no role / permission / ownership / school
-     *       scope, or non-ACTIVE bank) receives 403/404 regardless of the
-     *       uploaded file's content (it is never read).</li>
-     *   <li><b>File metadata validation</b> — empty / too large / wrong
-     *       extension / wrong content-type.</li>
-     *   <li><b>Parse</b> — the workbook is read and validated structurally
-     *       (outside the persistence transaction). The caller-owned
-     *       InputStream is closed via try-with-resources; the parser does not
-     *       close it.</li>
-     *   <li><b>Persist</b> — the transactional service re-authorizes and
-     *       persists the valid rows in a single all-or-nothing transaction.</li>
+     * <li><b>Preflight auth</b> — runs the deny-by-default authorization
+     * before any byte of the workbook is parsed. This guarantees an
+     * unauthorized caller (no role / permission / ownership / school
+     * scope, or non-ACTIVE bank) receives 403/404 regardless of the
+     * uploaded file's content (it is never read).</li>
+     * <li><b>File metadata validation</b> — empty / too large / wrong
+     * extension / wrong content-type.</li>
+     * <li><b>Parse</b> — the workbook is read and validated structurally
+     * (outside the persistence transaction). The caller-owned
+     * InputStream is closed via try-with-resources; the parser does not
+     * close it.</li>
+     * <li><b>Persist</b> — the transactional service re-authorizes and
+     * persists the valid rows in a single all-or-nothing transaction.</li>
      * </ol>
      */
-    @PostMapping(value = "/api/question-banks/{bankId}/questions/import",
-            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(value = "/api/question-banks/{bankId}/questions/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ImportResponse> importQuestions(
             @PathVariable Long bankId,
             @RequestPart("file") MultipartFile file,
@@ -142,6 +143,7 @@ public class QuestionImportController {
      * appropriate HTTP status, or {@link QuestionException} for the empty-file
      * case (default 400).
      */
+    @SuppressWarnings("deprecation")
     private void validateFileMetadata(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new QuestionException(QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID, "File is empty");

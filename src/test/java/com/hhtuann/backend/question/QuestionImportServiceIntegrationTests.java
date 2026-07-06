@@ -14,7 +14,6 @@ import com.hhtuann.backend.question.application.QuestionImportService;
 import com.hhtuann.backend.question.domain.model.Question;
 import com.hhtuann.backend.question.domain.model.QuestionBank;
 import com.hhtuann.backend.question.domain.model.QuestionBankStatus;
-import com.hhtuann.backend.question.domain.model.QuestionOption;
 import com.hhtuann.backend.question.domain.model.QuestionStatus;
 import com.hhtuann.backend.question.domain.model.QuestionType;
 import com.hhtuann.backend.question.domain.model.QuestionVersion;
@@ -909,7 +908,7 @@ class QuestionImportServiceIntegrationTests {
         Long schoolBId = schoolB.getId();
         GradeLevel glB = glRepo.saveAndFlush(
                 new GradeLevel(schoolBId, "GL-B", "Grade B"));
-        Subject subjectB = subjectRepo.saveAndFlush(
+        subjectRepo.saveAndFlush(
                 new Subject(schoolBId, glB.getId(), "SUB-B", "Subject B"));
 
         User teacherB = userRepo.saveAndFlush(

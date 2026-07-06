@@ -2,8 +2,6 @@ package com.hhtuann.backend.exam;
 
 import com.hhtuann.backend.exam.application.ExamService;
 import com.hhtuann.backend.exam.application.ExamSessionService;
-import com.hhtuann.backend.exam.domain.model.ExamSessionStatus;
-import com.hhtuann.backend.exam.domain.model.ExamVersionStatus;
 import com.hhtuann.backend.exam.dto.*;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQuestionRequest;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionSectionRequest;
@@ -24,9 +22,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;

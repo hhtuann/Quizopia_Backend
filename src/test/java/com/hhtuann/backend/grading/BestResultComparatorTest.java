@@ -13,6 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Day 8 §4.1 — BEST-result comparator unit tests. Proves the deterministic 4-level ordering:
  * percentage DESC → score DESC → submittedAt ASC → attemptId ASC. Pure (no Spring); uses compareTo.
  */
+@SuppressWarnings({"null"})
 class BestResultComparatorTest {
 
     private static final Instant T1 = Instant.parse("2026-07-01T10:00:00Z");

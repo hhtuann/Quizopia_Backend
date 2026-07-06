@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
 @Transactional
+@SuppressWarnings({"null"})
 class Day8R4EvidenceTests {
 
     @Autowired private AttemptService attemptService;

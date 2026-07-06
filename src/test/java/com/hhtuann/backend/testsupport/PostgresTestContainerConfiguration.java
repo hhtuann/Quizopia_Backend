@@ -16,6 +16,7 @@ import org.testcontainers.utility.DockerImageName;
  * for a static datasource URL or {@code @DynamicPropertySource}.
  */
 @TestConfiguration(proxyBeanMethods = false)
+@SuppressWarnings({"resource"})
 public class PostgresTestContainerConfiguration {
 
     /**

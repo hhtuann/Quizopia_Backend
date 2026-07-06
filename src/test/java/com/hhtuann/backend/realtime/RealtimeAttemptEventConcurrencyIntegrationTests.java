@@ -7,7 +7,6 @@ import com.hhtuann.backend.attempt.dto.SaveAnswerRequest;
 import com.hhtuann.backend.attempt.dto.StartAttemptRequest;
 import com.hhtuann.backend.attempt.dto.SubmitRequest;
 import com.hhtuann.backend.realtime.event.RealtimeEventEnvelope;
-import com.hhtuann.backend.realtime.event.RealtimeEventType;
 import com.hhtuann.backend.realtime.support.RepositoryLockEntryProbe.LockPoint;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,6 +52,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Assertions are by exact count + type + payload + distinct eventIds, NOT by list index.
  */
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
+@SuppressWarnings({"null"})
 class RealtimeAttemptEventConcurrencyIntegrationTests extends RealtimeStompTestBase {
 
     @Autowired private AttemptService attemptService;

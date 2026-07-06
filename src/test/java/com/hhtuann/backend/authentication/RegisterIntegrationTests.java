@@ -34,11 +34,11 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         MvcResultHolder result = registerStudent(username, "Passw0rd!");
 
         assertThat(result.status()).isEqualTo(201);
-        assertThat(result.body().get("status").asText()).isEqualTo("ACTIVE");
-        assertThat(result.body().get("roles").get(0).asText()).isEqualTo("STUDENT");
-        assertThat(result.body().get("username").asText()).isEqualTo(username);
-        assertThat(result.body().get("phone").asText()).isEqualTo("+84991234567");
-        assertThat(result.body().get("nationalId").asText()).isEqualTo("001234567890");
+        assertThat(result.body().get("status").asString()).isEqualTo("ACTIVE");
+        assertThat(result.body().get("roles").get(0).asString()).isEqualTo("STUDENT");
+        assertThat(result.body().get("username").asString()).isEqualTo(username);
+        assertThat(result.body().get("phone").asString()).isEqualTo("+84991234567");
+        assertThat(result.body().get("nationalId").asString()).isEqualTo("001234567890");
         // No secrets or internals in the response.
         assertNoSensitiveFields(result.body());
     }
@@ -62,7 +62,7 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         MvcResultHolder result = registerTeacher(unique("teacher"), TEACHER_INVITE);
 
         assertThat(result.status()).isEqualTo(201);
-        assertThat(result.body().get("roles").get(0).asText()).isEqualTo("TEACHER");
+        assertThat(result.body().get("roles").get(0).asString()).isEqualTo("TEACHER");
     }
 
     @Test
@@ -71,7 +71,7 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         MvcResultHolder result = registerTeacherRaw(unique("teacher-bad"), "wrong-invite");
 
         assertThat(result.status()).isEqualTo(403);
-        assertThat(result.body().get("code").asText()).isEqualTo("AUTH_TEACHER_INVITE_INVALID");
+        assertThat(result.body().get("code").asString()).isEqualTo("AUTH_TEACHER_INVITE_INVALID");
     }
 
     @Test
@@ -81,7 +81,7 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         MvcResultHolder result = registerStudentRaw(username, emailFor(unique("dup-other")));
 
         assertThat(result.status()).isEqualTo(409);
-        assertThat(result.body().get("code").asText()).isEqualTo("AUTH_USERNAME_ALREADY_EXISTS");
+        assertThat(result.body().get("code").asString()).isEqualTo("AUTH_USERNAME_ALREADY_EXISTS");
     }
 
     @Test
@@ -91,7 +91,7 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         MvcResultHolder result = registerStudentRaw(unique("dupemail-b"), email);
 
         assertThat(result.status()).isEqualTo(409);
-        assertThat(result.body().get("code").asText()).isEqualTo("AUTH_EMAIL_ALREADY_EXISTS");
+        assertThat(result.body().get("code").asString()).isEqualTo("AUTH_EMAIL_ALREADY_EXISTS");
     }
 
     @Test

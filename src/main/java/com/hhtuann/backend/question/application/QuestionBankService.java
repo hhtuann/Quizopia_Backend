@@ -1,7 +1,6 @@
 package com.hhtuann.backend.question.application;
 
 import com.hhtuann.backend.academic.domain.model.AcademicStatus;
-import com.hhtuann.backend.academic.domain.model.School;
 import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.SubjectRepository;
@@ -27,10 +26,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,12 +55,12 @@ public class QuestionBankService {
     private final Clock clock;
 
     public QuestionBankService(TeacherProfileRepository teacherProfileRepository,
-                               SubjectRepository subjectRepository,
-                               QuestionBankRepository questionBankRepository,
-                               UserRoleRepository userRoleRepository,
-                               RolePermissionRepository rolePermissionRepository,
-                               NamedParameterJdbcTemplate jdbc,
-                               Clock clock) {
+            SubjectRepository subjectRepository,
+            QuestionBankRepository questionBankRepository,
+            UserRoleRepository userRoleRepository,
+            RolePermissionRepository rolePermissionRepository,
+            NamedParameterJdbcTemplate jdbc,
+            Clock clock) {
         this.teacherProfileRepository = teacherProfileRepository;
         this.subjectRepository = subjectRepository;
         this.questionBankRepository = questionBankRepository;
@@ -213,7 +210,8 @@ public class QuestionBankService {
                         + "AND qv.version_number = q.current_version_number "
                         + where,
                 params, Long.class);
-        if (total == null) total = 0L;
+        if (total == null)
+            total = 0L;
 
         // Data (join current version — no N+1)
         MapSqlParameterSource dataParams = params.addValue("limit", safeSize).addValue("offset", offset);
@@ -267,7 +265,8 @@ public class QuestionBankService {
             String prop = parts[0].trim();
             Sort.Direction dir = (parts.length > 1
                     && parts[1].trim().equalsIgnoreCase("asc"))
-                    ? Sort.Direction.ASC : Sort.Direction.DESC;
+                            ? Sort.Direction.ASC
+                            : Sort.Direction.DESC;
             if (SORT_ALLOWLIST.contains(prop)) {
                 safeSort = Sort.by(dir, prop).and(Sort.by(Sort.Direction.DESC, "id"));
             }
@@ -277,8 +276,10 @@ public class QuestionBankService {
         return PageRequest.of(safePage, safeSize, safeSort);
     }
 
+    @SuppressWarnings("null")
     private Map<Long, Long> countQuestionsForBanks(List<QuestionBank> banks) {
-        if (banks.isEmpty()) return Map.of();
+        if (banks.isEmpty())
+            return Map.of();
         List<Long> bankIds = banks.stream().map(QuestionBank::getId).toList();
         List<Object[]> rows = questionBankRepository.countQuestionsByBankIds(bankIds);
         Map<Long, Long> counts = new HashMap<>();
@@ -288,10 +289,12 @@ public class QuestionBankService {
         return counts;
     }
 
+    @SuppressWarnings("null")
     private Map<Long, SubjectSummary> batchSubjectSummaries(List<QuestionBank> banks) {
         Set<Long> subjectIds = banks.stream().map(QuestionBank::getSubjectId)
                 .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
-        if (subjectIds.isEmpty()) return Map.of();
+        if (subjectIds.isEmpty())
+            return Map.of();
         return subjectRepository.findAllById(subjectIds).stream()
                 .collect(Collectors.toMap(Subject::getId,
                         s -> new SubjectSummary(s.getId(), s.getCode(), s.getName())));

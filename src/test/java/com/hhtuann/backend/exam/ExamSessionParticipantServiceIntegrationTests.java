@@ -3,7 +3,6 @@ package com.hhtuann.backend.exam;
 import com.hhtuann.backend.exam.application.ExamService;
 import com.hhtuann.backend.exam.application.ExamSessionParticipantService;
 import com.hhtuann.backend.exam.application.ExamSessionService;
-import com.hhtuann.backend.exam.domain.model.ExamSessionStatus;
 import com.hhtuann.backend.exam.dto.*;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQuestionRequest;
 import com.hhtuann.backend.exam.dto.UpdateDraftCompositionRequest.CompositionSectionRequest;
@@ -35,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
+@SuppressWarnings({"null"})
 class ExamSessionParticipantServiceIntegrationTests {
 
     @Autowired private JdbcTemplate jdbc;
@@ -83,7 +83,7 @@ class ExamSessionParticipantServiceIntegrationTests {
         student3 = createStudent("HS003", "Carol");
         // Cross-school student
         long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('XS','Cross')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + otherSchool + ",'GL','G')");
+        insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + otherSchool + ",'GL','G')");
         long xUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('xu','xu@t','h','XU')");
         crossSchoolStudent = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + xUser + "," + otherSchool + ",'XS001')");
     }

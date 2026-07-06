@@ -3,7 +3,6 @@ package com.hhtuann.backend.realtime;
 import com.hhtuann.backend.attempt.application.AttemptService;
 import com.hhtuann.backend.attempt.application.AttemptSubmitService;
 import com.hhtuann.backend.attempt.dto.StartAttemptRequest;
-import com.hhtuann.backend.attempt.dto.SubmitRequest;
 import com.hhtuann.backend.exam.application.ExamSessionService;
 import com.hhtuann.backend.realtime.event.RealtimeEventEnvelope;
 import com.hhtuann.backend.realtime.event.RealtimeEventType;
