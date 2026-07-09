@@ -72,10 +72,12 @@ public class SecurityFilterChainConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/questions/import-template").authenticated()
-                        // School-scoped subject list (teacher question-bank / exam creation). SUBJECT_READ
-                        // is enforced in AcademicService (deny-by-default); this rule only lets an
+                        // Academic API (subjects CRUD + grade-levels). Permissions (SUBJECT_READ /
+                        // SUBJECT_CREATE / SUBJECT_UPDATE / SUBJECT_STATUS_UPDATE / GRADE_LEVEL_READ)
+                        // are enforced in AcademicService (deny-by-default); these rules only let an
                         // authenticated JWT reach the controller (default is denyAll).
-                        .requestMatchers(HttpMethod.GET, "/api/subjects").authenticated()
+                        .requestMatchers("/api/subjects/**").authenticated()
+                        .requestMatchers("/api/grade-levels/**").authenticated()
                         .requestMatchers("/api/exam-purposes/**").authenticated()
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()

@@ -21,4 +21,11 @@ public interface SubjectRepository extends JpaRepository<Subject, Long> {
      * rendering (grade level, then name). Used by the school-scoped subject list.
      */
     List<Subject> findBySchoolIdAndStatusOrderByGradeLevelIdAscNameAsc(Long schoolId, AcademicStatus status);
+
+    /**
+     * All subjects with a given status across ALL schools (admin cross-school
+     * oversight), ordered by school then grade level then name. Used when an
+     * ACADEMIC_ADMIN lists subjects without narrowing to a single school.
+     */
+    List<Subject> findByStatusOrderBySchoolIdAscGradeLevelIdAscNameAsc(AcademicStatus status);
 }
