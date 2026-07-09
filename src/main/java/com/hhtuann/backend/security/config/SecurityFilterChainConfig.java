@@ -87,6 +87,11 @@ public class SecurityFilterChainConfig {
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()
                         .requestMatchers("/api/attempts/**").authenticated()
+                        // Classroom API (class management + members). Permissions (CLASSROOM_CREATE /
+                        // CLASSROOM_READ / CLASSROOM_UPDATE / CLASSROOM_MEMBER_*) are enforced in
+                        // ClassroomService (deny-by-default); this rule only lets an authenticated JWT
+                        // reach the controller (default is denyAll).
+                        .requestMatchers("/api/classrooms/**").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

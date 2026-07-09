@@ -129,14 +129,6 @@ class AvailableAndStartAttemptIntegrationTests {
     }
 
     @Test
-    void availableHidesBlockedParticipant() {
-        jdbc.update("UPDATE exam_session_participants SET status='BLOCKED', blocked_at=now() WHERE exam_session_id="
-                + sessionId);
-        AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-        assertThat(resp.items()).isEmpty();
-    }
-
-    @Test
     void availableHidesClosedSession() {
         jdbc.update("UPDATE exam_sessions SET status='CLOSED', closed_at=now() WHERE id=" + sessionId);
         assertThat(attemptService.getAvailableSessions(studentUserId).items()).isEmpty();
@@ -191,14 +183,6 @@ class AvailableAndStartAttemptIntegrationTests {
     }
 
     @Test
-    void startRejectsBlockedParticipant() {
-        jdbc.update("UPDATE exam_session_participants SET status='BLOCKED', blocked_at=now() WHERE exam_session_id="
-                + sessionId);
-        assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null)))
-                .isInstanceOf(AttemptException.class);
-    }
-
-    @Test
     void startRejectsMaxAttemptsReached() {
         // maxAttempts=2. Start + submit attempt 1, start attempt 2 + submit. Attempt 3 → rejected.
         StartAttemptResponse a1 = attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null));
@@ -250,17 +234,6 @@ class AvailableAndStartAttemptIntegrationTests {
     @Test
     void startRejectsSessionNotFound() {
         assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, 999999L, new StartAttemptRequest(null)))
-                .isInstanceOf(AttemptException.class);
-    }
-
-    @Test
-    void startRejectsParticipantNotFound() {
-        // Student not a participant of a different session.
-        long otherSession = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                + "status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES (" + schoolId + ","
-                + examVersionId + "," + teacherId + ",'S2','S2','OPEN','" + clock.instant().minusSeconds(3600) + "','"
-                + clock.instant().plusSeconds(7200) + "',1," + studentUserId + ",'" + clock.instant().minusSeconds(3600) + "')");
-        assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, otherSession, new StartAttemptRequest(null)))
                 .isInstanceOf(AttemptException.class);
     }
 
@@ -475,17 +448,6 @@ class AvailableAndStartAttemptIntegrationTests {
     }
 
     @Test
-    void availableNoParticipantHidden() {
-        // Different student profile — no participant for current student.
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + schoolId + ",'NP')");
-        long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u2 + "," + roleId + ")");
-        // This student has no participant.
-        assertThat(attemptService.getAvailableSessions(u2).items()).isEmpty();
-    }
-
-    @Test
     void availableQuotaZeroRemaining() {
         // maxAttempts=1, use one attempt → remaining=0, canStartNow=false.
         jdbc.update("UPDATE exam_sessions SET max_attempts=1 WHERE id=" + sessionId);
@@ -651,25 +613,16 @@ class AvailableAndStartAttemptIntegrationTests {
 
     @Test
     void startRejectsCrossSchoolProfileMismatch() {
-        // The composite same-school FKs make a cross-school participant unreachable through normal
-        // inserts, so the participant FK trigger is briefly disabled to seed a mismatched participant
-        // (session in schoolId, student profile in another school). The service's explicit triple
-        // school check must still deny with ATTEMPT_ACCESS_DENIED.
+        // A student from a DIFFERENT school must be denied — visibility check requires
+        // student.schoolId == session.schoolId, even when the session is PUBLIC.
         long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS','Other School')");
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('os','os@t.com','h','OS')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u2 + "," + roleId + ")");
-        long sp2 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + otherSchool + ",'OS')");
-        jdbc.execute("ALTER TABLE exam_session_participants DISABLE TRIGGER ALL");
-        try {
-            jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
-                    + "VALUES (" + schoolId + "," + sessionId + "," + sp2 + "," + studentUserId + ")");
-        } finally {
-            jdbc.execute("ALTER TABLE exam_session_participants ENABLE TRIGGER ALL");
-        }
+        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + otherSchool + ",'OS')");
         assertThatThrownBy(() -> attemptService.startAttempt(u2, sessionId, new StartAttemptRequest(null)))
                 .isInstanceOf(AttemptException.class)
-                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code()).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code()).isEqualTo("ATTEMPT_NOT_ELIGIBLE"));
     }
 
     @Test

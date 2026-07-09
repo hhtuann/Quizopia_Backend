@@ -72,7 +72,7 @@ class RegistrationDemoModeIntegrationTests {
     @Test
     void studentRegistrationWithDemoFlag_createsStudentProfile() {
         RegisterResponse resp = registrationService.register(request(
-                "demo-student-1", "ds1@test.com", AccountType.STUDENT));
+                "reg-demo-student-1", "rds1@test.com", AccountType.STUDENT));
         assertThat(studentProfileRepository.existsByUserId(resp.id())).isTrue();
     }
 

@@ -202,19 +202,6 @@ class AttemptHttpIntegrationTests {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("EXAM_SESSION_NOT_FOUND"));
     }
-
-    @Test
-    void startReturns409Blocked() throws Exception {
-        jdbc.update("UPDATE exam_session_participants SET status='BLOCKED', blocked_at=now() WHERE exam_session_id=" + sessionId);
-        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(
-                org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt()
-                        .jwt(j -> j.subject(jwt())))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("ATTEMPT_PARTICIPANT_BLOCKED"));
-    }
-
     @Test
     void startReturns409NotOpen() throws Exception {
         jdbc.update("UPDATE exam_sessions SET status='CLOSED', closed_at=now() WHERE id=" + sessionId);
@@ -375,26 +362,6 @@ class AttemptHttpIntegrationTests {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
     }
-
-    @Test
-    void startReturns404MissingParticipant() throws Exception {
-        // Create a different session (same version) without a participant for this student.
-        long otherSession = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + "(SELECT school_id FROM exam_sessions WHERE id=" + sessionId + "),"
-                + "(SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId + "),"
-                + "(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + ")"
-                + ",'NP','NoPart','OPEN','" + baseTime.minusSeconds(3600) + "','" + baseTime.plusSeconds(7200)
-                + "',1," + studentUserId + ",'" + baseTime.minusSeconds(3600) + "')");
-        mockMvc.perform(post("/api/exam-sessions/" + otherSession + "/attempts").with(
-                org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt()
-                        .jwt(j -> j.subject(jwt())))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{}"))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("ATTEMPT_PARTICIPANT_NOT_FOUND"));
-    }
-
     @Test
     void errorResponsesDoNotLeakInternalInfo() throws Exception {
         jdbc.update("UPDATE exam_sessions SET status='CLOSED', closed_at=now() WHERE id=" + sessionId);
@@ -471,24 +438,6 @@ class AttemptHttpIntegrationTests {
         mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
                 .andExpect(jsonPath("$.items").isEmpty());
     }
-
-    @Test
-    void availableExcludesSessionWithoutParticipant() throws Exception {
-        // A second OPEN session (same version/school) with NO participant row for this student.
-        long s2 = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + "(SELECT school_id FROM exam_sessions WHERE id=" + sessionId + "),"
-                + "(SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId + "),"
-                + "(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + ")"
-                + ",'NP2','NoPart2','OPEN','" + baseTime.minusSeconds(3600) + "','" + baseTime.plusSeconds(7200)
-                + "',1," + studentUserId + ",'" + baseTime.minusSeconds(3600) + "')");
-        mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", org.hamcrest.Matchers.hasSize(1)))
-                .andExpect(jsonPath("$.items[0].sessionId").value(sessionId))
-                .andExpect(jsonPath("$.items[?(@.sessionId==" + s2 + ")]").doesNotExist());
-    }
-
     @Test
     void startReturns404MissingStudentProfile() throws Exception {
         long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sp2','sp2@t.com','h','SP2')");

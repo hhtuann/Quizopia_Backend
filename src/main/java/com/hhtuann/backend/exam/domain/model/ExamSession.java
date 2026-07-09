@@ -43,6 +43,10 @@ public class ExamSession {
     @Column(name = "status", nullable = false, length = 30)
     private ExamSessionStatus status = ExamSessionStatus.DRAFT;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "visibility", nullable = false, length = 20)
+    private SessionVisibility visibility = SessionVisibility.CLASS_RESTRICTED;
+
     @Column(name = "starts_at", nullable = false)
     private Instant startsAt;
 
@@ -119,6 +123,14 @@ public class ExamSession {
 
     public ExamSessionStatus getStatus() {
         return status;
+    }
+
+    public SessionVisibility getVisibility() {
+        return visibility;
+    }
+
+    public void setVisibility(SessionVisibility visibility) {
+        this.visibility = Objects.requireNonNull(visibility, "visibility must not be null");
     }
 
     public Instant getStartsAt() {

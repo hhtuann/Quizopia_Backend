@@ -80,11 +80,11 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; the latest version advanced to 9 once V9 (Day 7 A2) was added.
+        // V1–V8 are all applied; the latest version is 10 (V9 Day 7 + V10 Classes Phase 1).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("9");
+        assertThat(current).isEqualTo("10");
     }
 
     @Test
@@ -95,9 +95,9 @@ class V8ExamSchemaIntegrationTests {
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
         }
-        // No out-of-scope exam tables. NOTE: `attempts` is now a V9 (Day 7) table, so it is
-        // no longer forbidden here — its presence is asserted in V9AttemptSchemaIntegrationTests.
-        for (String forbidden : new String[]{"classrooms", "proctor_assignments",
+        // No out-of-scope exam tables. NOTE: `attempts` is V9 (Day 7); `classrooms`/`classroom_members`/
+        // `exam_session_classes` are V10 (Classes Phase 1) — none are forbidden here.
+        for (String forbidden : new String[]{"proctor_assignments",
                 "session_announcements", "audit_log", "outbox_events", "notifications", "import_jobs"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + forbidden + "'", Integer.class))

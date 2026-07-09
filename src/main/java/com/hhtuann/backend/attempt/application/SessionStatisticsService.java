@@ -4,9 +4,6 @@ import com.hhtuann.backend.attempt.dto.QuestionStatisticsItem;
 import com.hhtuann.backend.attempt.dto.ScoreDistributionBucket;
 import com.hhtuann.backend.attempt.dto.SessionResultItem;
 import com.hhtuann.backend.attempt.dto.SessionStatisticsResponse;
-import com.hhtuann.backend.attempt.exception.AttemptErrorCode;
-import com.hhtuann.backend.attempt.exception.AttemptException;
-import com.hhtuann.backend.grading.ExcelCellSanitizer;
 import com.hhtuann.backend.grading.GradingErrorCode;
 import com.hhtuann.backend.grading.GradingException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -22,7 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Day 8 session statistics — computes from BEST results only (reuses SessionResultService's CTE + window
+ * Day 8 session statistics — computes from BEST results only (reuses
+ * SessionResultService's CTE + window
  * query). BigDecimal-only arithmetic; no re-grade; no answer-key access.
  */
 @Service
@@ -37,15 +35,23 @@ public class SessionStatisticsService {
         this.jdbc = jdbc;
     }
 
+    @SuppressWarnings("null")
     public SessionStatisticsResponse getStatistics(Long userId, String primaryRole, Long sessionId) {
         sessionResultService.authorizeSessionAccess(userId, primaryRole, sessionId);
         List<SessionResultItem> best = sessionResultService.queryBestResults(sessionId);
 
         // Counts
-        int started = countDistinct("SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ?", sessionId);
-        int submitted = countDistinct("SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')", sessionId);
-        int totalAttempt = countDistinct("SELECT count(*) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')", sessionId);
-        int eligible = countDistinct("SELECT count(*) FROM exam_session_participants WHERE exam_session_id = ? AND status = 'ELIGIBLE'", sessionId);
+        int started = countDistinct("SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ?",
+                sessionId);
+        int submitted = countDistinct(
+                "SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')",
+                sessionId);
+        int totalAttempt = countDistinct(
+                "SELECT count(*) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')",
+                sessionId);
+        int eligible = countDistinct(
+                "SELECT count(*) FROM exam_session_participants WHERE exam_session_id = ? AND status = 'ELIGIBLE'",
+                sessionId);
         int gradedStudentCount = best.size();
         int bestResultCount = best.size();
 
@@ -91,16 +97,20 @@ public class SessionStatisticsService {
     }
 
     private static BigDecimal average(List<BigDecimal> values) {
-        if (values.isEmpty()) return null;
+        if (values.isEmpty())
+            return null;
         BigDecimal sum = BigDecimal.ZERO;
-        for (BigDecimal v : values) sum = sum.add(v);
+        for (BigDecimal v : values)
+            sum = sum.add(v);
         return sum.divide(BigDecimal.valueOf(values.size()), 2, RoundingMode.HALF_UP);
     }
 
     private static BigDecimal median(List<BigDecimal> sorted) {
         int n = sorted.size();
-        if (n == 0) return null;
-        if (n % 2 == 1) return sorted.get(n / 2).setScale(2, RoundingMode.HALF_UP);
+        if (n == 0)
+            return null;
+        if (n % 2 == 1)
+            return sorted.get(n / 2).setScale(2, RoundingMode.HALF_UP);
         return sorted.get(n / 2 - 1).add(sorted.get(n / 2))
                 .divide(BigDecimal.valueOf(2), 2, RoundingMode.HALF_UP);
     }
@@ -121,17 +131,22 @@ public class SessionStatisticsService {
     private static int bucketIndex(BigDecimal percentage) {
         for (int i = 0; i < 9; i++) {
             if (percentage.compareTo(BigDecimal.valueOf(i * 10)) >= 0
-                    && percentage.compareTo(BigDecimal.valueOf((i + 1) * 10)) < 0) return i;
+                    && percentage.compareTo(BigDecimal.valueOf((i + 1) * 10)) < 0)
+                return i;
         }
         if (percentage.compareTo(new BigDecimal("90")) >= 0
-                && percentage.compareTo(new BigDecimal("100")) <= 0) return 9;
+                && percentage.compareTo(new BigDecimal("100")) <= 0)
+            return 9;
         throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "percentage out of range");
     }
 
+    @SuppressWarnings("null")
     private List<QuestionStatisticsItem> computePerQuestion(List<SessionResultItem> best, Long sessionId) {
-        if (best.isEmpty()) return List.of();
+        if (best.isEmpty())
+            return List.of();
         List<Long> bestAttemptIds = best.stream().map(SessionResultItem::bestAttemptId).toList();
-        // Batch query GradeItems + AttemptQuestions + AttemptAnswers for all BEST attempts
+        // Batch query GradeItems + AttemptQuestions + AttemptAnswers for all BEST
+        // attempts
         // Group by exam_question_id, aggregate.
         var placeholders = bestAttemptIds.stream().map(x -> "?").reduce((a, b) -> a + "," + b).orElse("");
         String sql = """
@@ -143,8 +158,9 @@ public class SessionStatisticsService {
                 LEFT JOIN attempt_answers aa ON aa.attempt_question_id = gi.attempt_question_id AND aa.attempt_id = gi.attempt_id
                 WHERE gi.attempt_id IN (%s)
                 ORDER BY aq.exam_question_id
-                """.formatted(placeholders);
-        var rows = jdbc.query(sql, (rs, n) -> new Object[]{
+                """
+                .formatted(placeholders);
+        var rows = jdbc.query(sql, (rs, n) -> new Object[] {
                 rs.getLong("exam_question_id"),
                 rs.getString("question_type"),
                 rs.getBigDecimal("default_points"),
@@ -169,7 +185,8 @@ public class SessionStatisticsService {
                 boolean cor = (boolean) r[4];
                 if (ans) {
                     answered++;
-                    if (cor) correct++;
+                    if (cor)
+                        correct++;
                 }
                 awardedSum = awardedSum.add((BigDecimal) r[3]);
             }
@@ -177,7 +194,8 @@ public class SessionStatisticsService {
             int unanswered = bestCount - answered;
             BigDecimal maxScore = qRows.isEmpty() ? BigDecimal.ONE : (BigDecimal) qRows.get(0)[2];
             BigDecimal correctRate = answered > 0
-                    ? BigDecimal.valueOf(correct).multiply(BigDecimal.valueOf(100)).divide(BigDecimal.valueOf(answered), 2, RoundingMode.HALF_UP)
+                    ? BigDecimal.valueOf(correct).multiply(BigDecimal.valueOf(100)).divide(BigDecimal.valueOf(answered),
+                            2, RoundingMode.HALF_UP)
                     : null;
             BigDecimal avgAwarded = bestCount > 0
                     ? awardedSum.divide(BigDecimal.valueOf(bestCount), 2, RoundingMode.HALF_UP)

@@ -23,7 +23,7 @@ public interface QuestionBankRepository extends JpaRepository<QuestionBank, Long
      * by case-insensitive search (code or name) and subject.
      */
     @Query("SELECT qb FROM QuestionBank qb WHERE qb.ownerTeacherId = :ownerId "
-            + "AND (:search IS NULL "
+            + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(qb.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(qb.name) LIKE LOWER(CONCAT('%', :search, '%'))) "
             + "AND (:subjectId IS NULL OR qb.subjectId = :subjectId)")

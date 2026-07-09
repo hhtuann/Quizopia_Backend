@@ -1,9 +1,11 @@
 package com.hhtuann.backend.exam.api;
 
 import com.hhtuann.backend.exam.application.ExamSessionService;
+import com.hhtuann.backend.exam.dto.AssignSessionClassesRequest;
 import com.hhtuann.backend.exam.dto.ExamSessionDetailResponse;
 import com.hhtuann.backend.exam.dto.ExamSessionListItem;
 import com.hhtuann.backend.exam.dto.CreateExamSessionRequest;
+import com.hhtuann.backend.exam.dto.SessionClassesResponse;
 import com.hhtuann.backend.exam.dto.UpdateExamSessionRequest;
 import com.hhtuann.backend.question.dto.PageResponse;
 import jakarta.validation.Valid;
@@ -91,5 +93,22 @@ public class ExamSessionController {
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
         return sessionService.cancelSession(userId, sessionId);
+    }
+
+    @PutMapping("/{sessionId}/classes")
+    public SessionClassesResponse assignClasses(
+            @PathVariable Long sessionId,
+            @RequestBody AssignSessionClassesRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return sessionService.assignClasses(userId, sessionId, request.classroomIds());
+    }
+
+    @GetMapping("/{sessionId}/classes")
+    public SessionClassesResponse listClasses(
+            @PathVariable Long sessionId,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return sessionService.listClasses(userId, sessionId);
     }
 }

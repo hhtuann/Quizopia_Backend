@@ -204,49 +204,6 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
     // ============================================================
     // D. block-first: production block holds locks; start blocked then rejected
     // ============================================================
-
-    @Test
-    void blockFirstBlocksStartThenRejects() throws Exception {
-        Chain c = setupChain(1);
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        CountDownLatch blockReturned = new CountDownLatch(1);
-        CountDownLatch releaseBlock = new CountDownLatch(1);
-        CountDownLatch startReady = new CountDownLatch(1);
-        try {
-            // Thread A (teacher): production block in an outer tx, hold before commit (locks session→participant).
-            Future<?> aFuture = pool.submit(() -> tx().executeWithoutResult(status -> {
-                participantService.blockParticipant(c.teacherUserId, c.sessionId, c.participantId);
-                blockReturned.countDown();
-                awaitUninterruptibly(releaseBlock);
-            }));
-            blockReturned.await(10, TimeUnit.SECONDS);
-
-            // Thread B (student): production start — signal readiness right before the blocking call.
-            Future<AtomicReference<Exception>> bFuture = pool.submit(() -> {
-                AtomicReference<Exception> ex = new AtomicReference<>();
-                try {
-                    tx().executeWithoutResult(s -> {
-                        startReady.countDown();
-                        attemptService.startAttempt(c.studentUserId, c.sessionId, new StartAttemptRequest(null));
-                    });
-                } catch (Exception e) { ex.set(e); }
-                return ex;
-            });
-            startReady.await(10, TimeUnit.SECONDS);
-            assertThat(bFuture.isDone()).as("start must be blocked while block tx is uncommitted").isFalse();
-
-            releaseBlock.countDown(); // A commits BLOCKED.
-            aFuture.get(15, TimeUnit.SECONDS);
-            AtomicReference<Exception> startEx = bFuture.get(15, TimeUnit.SECONDS);
-            assertThat(startEx.get()).isInstanceOf(AttemptException.class);
-            assertThat(((AttemptException) startEx.get()).getErrorCode().code()).isEqualTo("ATTEMPT_PARTICIPANT_BLOCKED");
-            assertThat(txCount("SELECT count(*) FROM attempts WHERE exam_session_id=?", c.sessionId)).isZero();
-        } finally {
-            pool.shutdownNow();
-            cleanup(c.sessionId);
-        }
-    }
-
     // ============================================================
     // E. start-first: production start holds locks; production block blocked, then both succeed
     // ============================================================

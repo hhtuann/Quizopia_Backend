@@ -7,6 +7,8 @@ import com.hhtuann.backend.question.exception.QuestionErrorCode;
 import com.hhtuann.backend.question.exception.QuestionException;
 import com.hhtuann.backend.exam.exception.ExamErrorCode;
 import com.hhtuann.backend.exam.exception.ExamException;
+import com.hhtuann.backend.classroom.exception.ClassroomErrorCode;
+import com.hhtuann.backend.classroom.exception.ClassroomException;
 import com.hhtuann.backend.academic.exception.AcademicErrorCode;
 import com.hhtuann.backend.academic.exception.AcademicException;
 import com.hhtuann.backend.user.exception.UserErrorCode;
@@ -62,6 +64,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ExamException.class)
     public ResponseEntity<ApiError> handleExamException(ExamException ex, HttpServletRequest request) {
         ExamErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
+    @ExceptionHandler(ClassroomException.class)
+    public ResponseEntity<ApiError> handleClassroomException(ClassroomException ex, HttpServletRequest request) {
+        ClassroomErrorCode code = ex.getErrorCode();
         String path = request != null ? request.getRequestURI() : null;
         ApiError body = new ApiError(
                 Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));

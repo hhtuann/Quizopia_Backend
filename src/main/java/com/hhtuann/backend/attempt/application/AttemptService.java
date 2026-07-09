@@ -45,7 +45,9 @@ import java.util.Optional;
  * start/resume.
  *
  * <p>
- * <b>Lock order</b> (start): session → participant → attempt. Matches Day 6.
+ * <b>Lock order</b> (start): session → attempt. Classes replace participants
+ * (V10) — visibility/class-membership is the eligibility gate, so there is no
+ * participant row lock.
  * <p>
  * <b>No answer leak:</b> the available and start responses never expose
  * answerKey,
@@ -95,18 +97,24 @@ public class AttemptService {
     }
 
     private List<AvailableSessionItem> queryAvailable(Long schoolId, Long studentId, Instant now) {
-        String sql = "SELECT s.id, s.code, s.title, s.status, s.starts_at, s.ends_at, s.max_attempts, "
+        // Class-based visibility (replaces the legacy exam_session_participants JOIN):
+        // a session is visible if PUBLIC (same school) OR the student is a member of at
+        // least one classroom assigned to the session via exam_session_classes.
+        String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
                 + "ev.duration_minutes, "
                 + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.student_profile_id = ?) AS used, "
                 + "act.id AS active_id, act.deadline_at AS active_deadline "
                 + "FROM exam_sessions s "
-                + "JOIN exam_session_participants p ON p.exam_session_id = s.id AND p.student_profile_id = ? "
                 + "JOIN exam_versions ev ON ev.id = s.exam_version_id "
                 + "JOIN exams e ON e.id = ev.exam_id "
                 + "JOIN subjects subj ON subj.id = e.subject_id "
                 + "LEFT JOIN attempts act ON act.exam_session_id = s.id AND act.student_profile_id = ? AND act.status = 'IN_PROGRESS' "
-                + "WHERE p.status = 'ELIGIBLE' AND s.school_id = ? AND s.status IN ('SCHEDULED','OPEN') "
+                + "WHERE s.school_id = ? AND s.status IN ('SCHEDULED','OPEN') "
+                + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
+                + "  SELECT 1 FROM exam_session_classes esc "
+                + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
+                + "  WHERE esc.exam_session_id = s.id AND cm.student_profile_id = ?)) "
                 + "ORDER BY s.starts_at ASC, s.id ASC";
         return jdbc.query(sql, (rs, n) -> {
             int maxAttempts = rs.getInt("max_attempts");
@@ -126,8 +134,9 @@ public class AttemptService {
                     rs.getLong("id"), rs.getString("code"), rs.getString("title"), status,
                     new ExamInfo(rs.getLong("exam_id"), rs.getString("exam_title"), rs.getString("subject_name")),
                     startsAt, endsAt, rs.getInt("duration_minutes"), maxAttempts,
-                    used, remaining, activeId, activeDeadline, canStartNow, canResume);
-        }, studentId, studentId, studentId, schoolId);
+                    used, remaining, activeId, activeDeadline, canStartNow, canResume,
+                    rs.getString("visibility"));
+        }, studentId, studentId, schoolId, studentId);
     }
 
     // ============================================================
@@ -139,43 +148,57 @@ public class AttemptService {
         StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_START");
         Instant now = Instant.now(clock);
 
-        // 1. Lock session.
+        // 1. Lock session (pessimistic write). Lock order is now session → attempt
+        // (the legacy participant row lock is gone — class membership is the gatekeeper).
         ExamSession session = sessionRepo.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.EXAM_SESSION_NOT_FOUND));
 
-        // 2. Lock participant (FOR UPDATE via JdbcTemplate — V8 repo has no
-        // findByStudentForUpdate).
-        Map<String, Object> participant = lockParticipant(sessionId, profile.getId());
-        long participantSchoolId = (long) participant.get("school_id");
-        String participantStatus = (String) participant.get("status");
-
-        // 3. Check school match (explicit triple check — not just DB FK).
-        if (!java.util.Objects.equals(participantSchoolId, session.getSchoolId())
-                || !java.util.Objects.equals(profile.getSchoolId(), session.getSchoolId())) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
+        // 2. Visibility-based eligibility (replaces the legacy participant ELIGIBLE check):
+        // PUBLIC → same school; CLASS_RESTRICTED → member of an assigned class.
+        if (!isEligible(profile, session)) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_ELIGIBLE);
         }
-        // 4. Check ELIGIBLE.
-        if (!"ELIGIBLE".equals(participantStatus)) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_PARTICIPANT_BLOCKED);
-        }
-        // 5. Check session OPEN.
+        // 3. Check session OPEN.
         if (session.getStatus() != ExamSessionStatus.OPEN) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_SESSION_NOT_OPEN);
         }
-        // 6. Check time window [startsAt, endsAt].
+        // 4. Check time window [startsAt, endsAt].
         if (now.isBefore(session.getStartsAt()) || now.isAfter(session.getEndsAt())) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_OUTSIDE_WINDOW);
         }
 
-        // 7. Find active attempt under participant lock.
+        // 5. Find active attempt under session lock.
         Optional<Attempt> active = attemptRepo.findByExamSessionIdAndStudentProfileIdAndStatus(
                 sessionId, profile.getId(), AttemptStatus.IN_PROGRESS);
         if (active.isPresent()) {
             return resumeOrRejectExpired(active.get(), now, session);
         }
 
-        // 8. Create new attempt.
+        // 6. Create new attempt.
         return createNewAttempt(profile, session, now, request);
+    }
+
+    /**
+     * Class-based eligibility gate (replaces the participant ELIGIBLE check).
+     * <ul>
+     *   <li>PUBLIC: any student in the SAME school.</li>
+     *   <li>CLASS_RESTRICTED: student is a member of at least one classroom
+     *       assigned to the session via {@code exam_session_classes}.</li>
+     * </ul>
+     */
+    private boolean isEligible(StudentProfile profile, ExamSession session) {
+        if (!java.util.Objects.equals(profile.getSchoolId(), session.getSchoolId())) {
+            return false;
+        }
+        if (session.getVisibility() == com.hhtuann.backend.exam.domain.model.SessionVisibility.PUBLIC) {
+            return true;
+        }
+        Integer cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exam_session_classes esc "
+                        + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
+                        + "WHERE esc.exam_session_id = ? AND cm.student_profile_id = ?",
+                Integer.class, session.getId(), profile.getId());
+        return cnt != null && cnt > 0;
     }
 
     private StartAttemptResponse resumeOrRejectExpired(Attempt active, Instant now, ExamSession session) {
@@ -192,7 +215,7 @@ public class AttemptService {
 
     private StartAttemptResponse createNewAttempt(StudentProfile profile, ExamSession session,
             Instant now, StartAttemptRequest request) {
-        // MAX+1 under participant lock.
+        // MAX+1 under session lock.
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), profile.getId()).orElse(0) + 1;
         if (nextNumber > session.getMaxAttempts()) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_MAX_REACHED);
@@ -259,17 +282,6 @@ public class AttemptService {
     // ============================================================
     // Helpers
     // ============================================================
-
-    private Map<String, Object> lockParticipant(Long sessionId, Long studentProfileId) {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT id, school_id, status FROM exam_session_participants "
-                        + "WHERE exam_session_id = ? AND student_profile_id = ? FOR UPDATE",
-                sessionId, studentProfileId);
-        if (rows.isEmpty()) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_PARTICIPANT_NOT_FOUND);
-        }
-        return rows.get(0);
-    }
 
     private int fetchDurationMinutes(Long examVersionId) {
         List<Integer> results = jdbc.queryForList(

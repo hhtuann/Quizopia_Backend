@@ -1,6 +1,8 @@
 package com.hhtuann.backend.exam.application;
 
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
+import com.hhtuann.backend.classroom.domain.model.Classroom;
+import com.hhtuann.backend.classroom.repository.ClassroomRepository;
 import com.hhtuann.backend.exam.domain.model.*;
 import com.hhtuann.backend.exam.dto.*;
 import com.hhtuann.backend.exam.exception.ExamErrorCode;
@@ -14,6 +16,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +55,8 @@ public class ExamSessionService {
     private final ExamVersionRepository versionRepository;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
+    private final ClassroomRepository classroomRepository;
+    private final NamedParameterJdbcTemplate jdbc;
     private final ApplicationEventPublisher eventPublisher;
 
     public ExamSessionService(ExamAuthorizationService auth,
@@ -58,12 +64,16 @@ public class ExamSessionService {
             ExamVersionRepository versionRepository,
             ExamSessionRepository sessionRepository,
             ExamSessionParticipantRepository participantRepository,
+            ClassroomRepository classroomRepository,
+            NamedParameterJdbcTemplate jdbc,
             ApplicationEventPublisher eventPublisher) {
         this.auth = auth;
         this.examRepository = examRepository;
         this.versionRepository = versionRepository;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
+        this.classroomRepository = classroomRepository;
+        this.jdbc = jdbc;
         this.eventPublisher = eventPublisher;
     }
 
@@ -96,6 +106,11 @@ public class ExamSessionService {
         ExamSession session = new ExamSession(schoolId, version.getId(), profile.getId(),
                 request.code(), request.title(), request.startsAt(), request.endsAt(),
                 request.maxAttempts(), userId);
+        // Visibility: CLASS_RESTRICTED is the safe default (teacher must explicitly choose PUBLIC).
+        SessionVisibility visibility = request.visibility() != null
+                ? request.visibility()
+                : SessionVisibility.CLASS_RESTRICTED;
+        session.setVisibility(visibility);
 
         try {
             session = sessionRepository.saveAndFlush(session);
@@ -104,6 +119,13 @@ public class ExamSessionService {
                 throw new ExamException(ExamErrorCode.EXAM_CODE_CONFLICT);
             }
             throw ex;
+        }
+
+        // Assign classes (only meaningful for CLASS_RESTRICTED; ignored when PUBLIC).
+        if (visibility == SessionVisibility.CLASS_RESTRICTED
+                && request.classroomIds() != null && !request.classroomIds().isEmpty()) {
+            List<Classroom> classrooms = validateClassroomsForOwner(profile, request.classroomIds());
+            replaceSessionClasses(schoolId, session.getId(), classrooms);
         }
 
         return buildDetailResponse(session, 0L);
@@ -365,7 +387,96 @@ public class ExamSessionService {
                 session.getCode(), session.getTitle(), session.getStatus().name(),
                 session.getStartsAt(), session.getEndsAt(), session.getMaxAttempts(),
                 session.getOpenedAt(), session.getClosedAt(),
-                participantCount, session.getVersion(), session.getCreatedAt());
+                participantCount, session.getVersion(), session.getCreatedAt(),
+                session.getVisibility().name());
+    }
+
+    // ============================================================
+    // PUT /api/exam-sessions/{sessionId}/classes — assign (replace) classes
+    // ============================================================
+
+    @Transactional
+    public SessionClassesResponse assignClasses(Long userId, Long sessionId, List<Long> classroomIds) {
+        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_UPDATE");
+        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
+        if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
+        List<Classroom> classrooms = (classroomIds == null || classroomIds.isEmpty())
+                ? List.of()
+                : validateClassroomsForOwner(profile, classroomIds);
+        replaceSessionClasses(session.getSchoolId(), sessionId, classrooms);
+        return listClasses(userId, sessionId);
+    }
+
+    // ============================================================
+    // GET /api/exam-sessions/{sessionId}/classes — list assigned classes
+    // ============================================================
+
+    @Transactional(readOnly = true)
+    public SessionClassesResponse listClasses(Long userId, Long sessionId) {
+        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
+        // Read-only owner check (any state OK).
+        ExamSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
+        if (!session.getOwnerTeacherId().equals(profile.getId())
+                || !session.getSchoolId().equals(profile.getSchoolId())) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
+        List<SessionClassesResponse.ClassSummary> items = jdbc.query(
+                "SELECT c.id, c.code, c.name FROM classrooms c "
+                        + "JOIN exam_session_classes esc ON esc.classroom_id = c.id "
+                        + "WHERE esc.exam_session_id = :sid ORDER BY c.id",
+                new MapSqlParameterSource("sid", sessionId),
+                (rs, n) -> new SessionClassesResponse.ClassSummary(
+                        rs.getLong("id"), rs.getString("code"), rs.getString("name")));
+        return new SessionClassesResponse(items);
+    }
+
+    // ============================================================
+    // Class-assignment helpers
+    // ============================================================
+
+    /**
+     * Validate that every classroomId resolves to an ACTIVE classroom owned by the
+     * caller in the same school. Returns the resolved classrooms (insert order).
+     */
+    @SuppressWarnings("null")
+    private List<Classroom> validateClassroomsForOwner(TeacherProfile profile, List<Long> classroomIds) {
+        // De-dup, preserve order.
+        List<Long> distinct = new ArrayList<>(new LinkedHashSet<>(classroomIds));
+        Map<Long, Classroom> byId = classroomRepository.findAllById(distinct).stream()
+                .collect(Collectors.toMap(Classroom::getId, c -> c));
+        List<Classroom> resolved = new ArrayList<>();
+        for (Long id : distinct) {
+            Classroom c = byId.get(id);
+            if (c == null
+                    || !c.getOwnerTeacherId().equals(profile.getId())
+                    || !c.getSchoolId().equals(profile.getSchoolId())
+                    || c.getStatus() != com.hhtuann.backend.classroom.domain.model.ClassroomStatus.ACTIVE) {
+                throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+            }
+            resolved.add(c);
+        }
+        return resolved;
+    }
+
+    /** Replace the session's assigned classes (delete old + insert new) in one tx. */
+    private void replaceSessionClasses(Long schoolId, Long sessionId, List<Classroom> classrooms) {
+        jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid",
+                new MapSqlParameterSource("sid", sessionId));
+        if (classrooms.isEmpty()) {
+            return;
+        }
+        for (Classroom c : classrooms) {
+            jdbc.update(
+                    "INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
+                            + "VALUES (:sid, :cid, :school)",
+                    new MapSqlParameterSource()
+                            .addValue("sid", sessionId)
+                            .addValue("cid", c.getId())
+                            .addValue("school", schoolId));
+        }
     }
 
     private Map<Long, Long> batchParticipantCounts(List<Long> sessionIds) {

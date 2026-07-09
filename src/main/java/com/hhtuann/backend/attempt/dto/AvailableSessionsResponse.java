@@ -12,7 +12,8 @@ public record AvailableSessionsResponse(List<AvailableSessionItem> items, Instan
             Integer durationMinutes, Integer maxAttempts,
             int attemptsUsed, int remainingAttempts,
             Long activeAttemptId, Instant activeAttemptDeadlineAt,
-            boolean canStartNow, boolean canResume) {
+            boolean canStartNow, boolean canResume,
+            String visibility) {
 
         public record ExamInfo(Long examId, String title, String subjectName) {}
     }

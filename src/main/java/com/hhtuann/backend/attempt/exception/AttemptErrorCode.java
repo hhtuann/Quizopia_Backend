@@ -12,6 +12,7 @@ public enum AttemptErrorCode {
     ATTEMPT_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "ATTEMPT_VALIDATION_ERROR", "Attempt request validation failed"),
     ATTEMPT_INVALID_ANSWER_PAYLOAD(HttpStatus.BAD_REQUEST, "ATTEMPT_INVALID_ANSWER_PAYLOAD", "Answer payload does not match the question type"),
     ATTEMPT_ACCESS_DENIED(HttpStatus.FORBIDDEN, "ATTEMPT_ACCESS_DENIED", "Access denied to this attempt resource"),
+    ATTEMPT_NOT_ELIGIBLE(HttpStatus.FORBIDDEN, "ATTEMPT_NOT_ELIGIBLE", "Student is not eligible for this exam session (visibility / class membership)"),
     ATTEMPT_STUDENT_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "ATTEMPT_STUDENT_PROFILE_NOT_FOUND", "Student profile not found"),
     EXAM_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "EXAM_SESSION_NOT_FOUND", "Exam session not found"),
     ATTEMPT_NOT_FOUND(HttpStatus.NOT_FOUND, "ATTEMPT_NOT_FOUND", "Attempt not found"),

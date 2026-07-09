@@ -16,6 +16,7 @@ public record ExamSessionDetailResponse(
         Instant closedAt,
         long participantCount,
         Integer version,
-        Instant createdAt
+        Instant createdAt,
+        String visibility
 ) {
 }
