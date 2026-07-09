@@ -92,6 +92,10 @@ public class SecurityFilterChainConfig {
                         // ClassroomService (deny-by-default); this rule only lets an authenticated JWT
                         // reach the controller (default is denyAll).
                         .requestMatchers("/api/classrooms/**").authenticated()
+                        // Student onboarding (pending-students, assign-school, student search).
+                        // Permissions enforced in StudentOnboardingService (deny-by-default).
+                        .requestMatchers("/api/admin/**").authenticated()
+                        .requestMatchers("/api/students/**").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

@@ -80,11 +80,11 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; the latest version is 10 (V9 Day 7 + V10 Classes Phase 1).
+        // V1–V8 are all applied; the latest version is 11 (V9 Day 7 + V10 Classes + V11 Onboarding).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("10");
+        assertThat(current).isEqualTo("11");
     }
 
     @Test

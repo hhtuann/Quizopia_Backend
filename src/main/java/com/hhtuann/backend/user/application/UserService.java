@@ -162,9 +162,8 @@ public class UserService {
                         "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
         userRoleRepository.saveAndFlush(new UserRole(user, role, null, null));
 
-        if (demoEnabled) {
-            assignDemoProfile(user, request.accountType());
-        }
+        // NOTE: No auto-profile creation (V11 Student Onboarding). Admin-created users
+        // are assigned to a school via the StudentOnboardingService endpoints.
         return toResponse(user);
     }
 

@@ -36,6 +36,12 @@ public class School {
     @Column(name = "status", nullable = false, length = 30)
     private AcademicStatus status = AcademicStatus.ACTIVE;
 
+    @Column(name = "student_counter", nullable = false)
+    private long studentCounter = 0;
+
+    @Column(name = "teacher_counter", nullable = false)
+    private long teacherCounter = 0;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -100,6 +106,22 @@ public class School {
 
     public void setStatus(AcademicStatus status) {
         this.status = status;
+    }
+
+    public long getStudentCounter() {
+        return studentCounter;
+    }
+
+    public void setStudentCounter(long studentCounter) {
+        this.studentCounter = studentCounter;
+    }
+
+    public long getTeacherCounter() {
+        return teacherCounter;
+    }
+
+    public void setTeacherCounter(long teacherCounter) {
+        this.teacherCounter = teacherCounter;
     }
 
     public Instant getCreatedAt() {

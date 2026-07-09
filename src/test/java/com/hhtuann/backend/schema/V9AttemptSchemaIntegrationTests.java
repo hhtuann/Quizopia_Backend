@@ -88,7 +88,7 @@ class V9AttemptSchemaIntegrationTests {
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("10");
+        assertThat(current).isEqualTo("11");
     }
 
     @Test

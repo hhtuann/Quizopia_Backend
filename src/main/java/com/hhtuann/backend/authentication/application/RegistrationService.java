@@ -121,9 +121,11 @@ public class RegistrationService {
 
         userRoleRepository.save(new UserRole(user, role, null, null));
 
-        if (demoEnabled) {
-            assignDemoProfile(user, accountType);
-        }
+        // NOTE: Registration no longer auto-creates academic profiles (V11 Student Onboarding).
+        // Students self-register → PENDING (user + STUDENT role, no profile).
+        // ACADEMIC_ADMIN assigns them to a school via POST /api/admin/students/{userId}/assign-school
+        // which creates the student_profiles row with an auto-generated student_code.
+        // DemoDataSeeder writes profiles directly (bypasses registration).
 
         return new RegisterResponse(
                 user.getId(),
