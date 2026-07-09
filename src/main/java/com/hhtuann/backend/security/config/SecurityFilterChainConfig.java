@@ -78,6 +78,11 @@ public class SecurityFilterChainConfig {
                         // authenticated JWT reach the controller (default is denyAll).
                         .requestMatchers("/api/subjects/**").authenticated()
                         .requestMatchers("/api/grade-levels/**").authenticated()
+                        // User management (SYSTEM_ADMIN) + role catalog. Permissions are enforced in
+                        // UserService (active SYSTEM_ADMIN role, deny-by-default); these rules only let
+                        // an authenticated JWT reach the controller (default is denyAll).
+                        .requestMatchers("/api/users/**").authenticated()
+                        .requestMatchers("/api/roles").authenticated()
                         .requestMatchers("/api/exam-purposes/**").authenticated()
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()
