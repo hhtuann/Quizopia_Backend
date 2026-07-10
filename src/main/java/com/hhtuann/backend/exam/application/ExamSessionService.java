@@ -3,6 +3,7 @@ package com.hhtuann.backend.exam.application;
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.classroom.domain.model.Classroom;
 import com.hhtuann.backend.classroom.repository.ClassroomRepository;
+import com.hhtuann.backend.common.BusinessCodes;
 import com.hhtuann.backend.exam.domain.model.*;
 import com.hhtuann.backend.exam.dto.*;
 import com.hhtuann.backend.exam.exception.ExamErrorCode;
@@ -103,8 +104,11 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
 
+        String code = (request.code() == null || request.code().isBlank())
+                ? BusinessCodes.uniqueCode(20, c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                : request.code().trim();
         ExamSession session = new ExamSession(schoolId, version.getId(), profile.getId(),
-                request.code(), request.title(), request.startsAt(), request.endsAt(),
+                code, request.title(), request.startsAt(), request.endsAt(),
                 request.maxAttempts(), userId);
         // Visibility: CLASS_RESTRICTED is the safe default (teacher must explicitly choose PUBLIC).
         SessionVisibility visibility = request.visibility() != null

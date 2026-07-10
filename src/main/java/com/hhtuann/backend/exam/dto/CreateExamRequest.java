@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 public record CreateExamRequest(
         @NotNull @Positive Long subjectId,
         @Positive Long purposeId,
-        @NotBlank @Size(max = 80) String code,
+        @Size(max = 80) String code,
         @NotBlank @Size(max = 255) String title,
         @Size(max = 2000) String description
 ) {}

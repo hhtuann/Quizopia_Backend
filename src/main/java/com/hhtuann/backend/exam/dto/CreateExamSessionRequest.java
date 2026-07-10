@@ -12,7 +12,7 @@ import java.util.List;
 public record CreateExamSessionRequest(
         @NotNull @Positive Long examId,
         @NotNull @Positive Integer examVersionNumber,
-        @NotBlank @Size(max = 30) String code,
+        @Size(max = 30) String code,
         @NotBlank @Size(max = 255) String title,
         @NotNull Instant startsAt,
         @NotNull Instant endsAt,

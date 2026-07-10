@@ -5,6 +5,7 @@ import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.SubjectRepository;
 import com.hhtuann.backend.academic.repository.TeacherProfileRepository;
+import com.hhtuann.backend.common.BusinessCodes;
 import com.hhtuann.backend.identity.repository.RolePermissionRepository;
 import com.hhtuann.backend.identity.repository.UserRoleRepository;
 import com.hhtuann.backend.question.domain.model.QuestionBank;
@@ -90,11 +91,14 @@ public class QuestionBankService {
             throw new QuestionException(QuestionErrorCode.QUESTION_SUBJECT_NOT_FOUND);
         }
 
+        String code = (request.code() == null || request.code().isBlank())
+                ? BusinessCodes.uniqueCode(20, c -> questionBankRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                : request.code().trim();
         QuestionBank bank = new QuestionBank(
                 schoolId,
                 subject.getId(),
                 profile.getId(),
-                request.code(),
+                code,
                 request.name());
         bank.setDescription(request.description());
 

@@ -4,6 +4,7 @@ import com.hhtuann.backend.academic.domain.model.AcademicStatus;
 import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.SubjectRepository;
+import com.hhtuann.backend.common.BusinessCodes;
 import com.hhtuann.backend.exam.domain.model.*;
 import com.hhtuann.backend.exam.dto.*;
 import com.hhtuann.backend.exam.exception.ExamErrorCode;
@@ -143,7 +144,10 @@ public class ExamService {
             }
         }
 
-        Exam exam = new Exam(schoolId, subject.getId(), profile.getId(), request.code(), request.title());
+        String code = (request.code() == null || request.code().isBlank())
+                ? BusinessCodes.uniqueCode(20, c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                : request.code().trim();
+        Exam exam = new Exam(schoolId, subject.getId(), profile.getId(), code, request.title());
         exam.setDescription(request.description());
         if (purpose != null) {
             exam.setPurposeId(purpose.getId());
