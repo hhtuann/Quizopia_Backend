@@ -205,7 +205,7 @@ public class StudentOnboardingService {
     // Helpers
     // ============================================================
 
-    /** Atomic counter increment → student_code = prefix + zero-padded counter. */
+    /** Atomic counter increment → student_code = STU + zero-padded counter. */
     private String generateStudentCode(School school) {
         Long counter = jdbc.queryForObject(
                 "UPDATE schools SET student_counter = student_counter + 1 WHERE id = :id RETURNING student_counter",
@@ -213,10 +213,7 @@ public class StudentOnboardingService {
         if (counter == null) {
             throw new AcademicException(AcademicErrorCode.ACADEMIC_SCHOOL_COUNTER_FAILED);
         }
-        String prefix = school.getCode().replaceAll("[^A-Za-z]", "").toUpperCase();
-        if (prefix.length() > 3) prefix = prefix.substring(0, 3);
-        if (prefix.isEmpty()) prefix = "S";
-        return prefix + String.format("%04d", counter);
+        return "STU" + String.format("%04d", counter);
     }
 
     private void requireAcademicAdmin(Long userId) {
