@@ -159,6 +159,13 @@ public class AttemptService {
         if (!isEligible(profile, session)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_ELIGIBLE);
         }
+        // 2b. Lazy-open: SCHEDULED within the time window → OPEN (auto-open on
+        // student access — no manual teacher action needed).
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED
+                && !now.isBefore(session.getStartsAt()) && !now.isAfter(session.getEndsAt())) {
+            session.open(now);
+            sessionRepo.saveAndFlush(session);
+        }
         // 3. Check session OPEN.
         if (session.getStatus() != ExamSessionStatus.OPEN) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_SESSION_NOT_OPEN);

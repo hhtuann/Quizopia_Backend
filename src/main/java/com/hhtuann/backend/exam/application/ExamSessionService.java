@@ -210,16 +210,22 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }
 
-        // Lazy-close
+        // Lazy-close: OPEN past endsAt → CLOSED.
         Instant now = Instant.now();
         if (session.getStatus() == ExamSessionStatus.OPEN && now.isAfter(session.getEndsAt())) {
             session.close(now);
             sessionRepository.saveAndFlush(session);
-            // SESSION_CLOSED only on a real OPEN→CLOSED transition (AFTER_COMMIT). Bulk
-            // list lazy-close
-            // does NOT publish (documented MVP exception — no session IDs).
             eventPublisher
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
+        }
+
+        // Lazy-open: SCHEDULED within the time window → OPEN.
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED
+                && !now.isBefore(session.getStartsAt()) && !now.isAfter(session.getEndsAt())) {
+            session.open(now);
+            sessionRepository.saveAndFlush(session);
+            eventPublisher
+                    .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
         }
 
         long participantCount = participantRepository.countByExamSessionId(sessionId);
