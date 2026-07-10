@@ -126,8 +126,11 @@ public class AttemptQueryService {
 
         List<MyAttemptListItem> items = jdbc.query(
                 "SELECT a.id, a.exam_session_id, a.attempt_number, a.status, a.started_at, a.submitted_at, "
-                        + "a.deadline_at, a.created_at, s.code AS session_code, s.title AS session_title "
-                        + "FROM attempts a JOIN exam_sessions s ON s.id = a.exam_session_id "
+                        + "a.deadline_at, a.created_at, s.code AS session_code, s.title AS session_title, "
+                        + "g.final_score, g.max_score "
+                        + "FROM attempts a "
+                        + "JOIN exam_sessions s ON s.id = a.exam_session_id "
+                        + "LEFT JOIN grades g ON g.attempt_id = a.id "
                         + "WHERE a.student_profile_id = ? AND a.school_id = ? "
                         + "ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?",
                 (rs, n) -> new MyAttemptListItem(
@@ -136,7 +139,9 @@ public class AttemptQueryService {
                         rs.getTimestamp("started_at").toInstant(),
                         rs.getTimestamp("submitted_at") != null ? rs.getTimestamp("submitted_at").toInstant() : null,
                         rs.getTimestamp("deadline_at").toInstant(),
-                        rs.getTimestamp("created_at").toInstant()),
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getBigDecimal("final_score"),
+                        rs.getBigDecimal("max_score")),
                 profile.getId(), profile.getSchoolId(), safeSize, offset);
 
         Long total = jdbc.queryForObject(

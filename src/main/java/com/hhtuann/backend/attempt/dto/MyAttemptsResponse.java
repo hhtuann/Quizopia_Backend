@@ -20,5 +20,6 @@ public record MyAttemptsResponse(
     public record MyAttemptListItem(
             Long attemptId, Long sessionId, String sessionCode, String sessionTitle,
             Integer attemptNumber, String status, Instant startedAt, Instant submittedAt,
-            Instant deadlineAt, Instant createdAt) {}
+            Instant deadlineAt, Instant createdAt,
+            java.math.BigDecimal score, java.math.BigDecimal maxScore) {}
 }
