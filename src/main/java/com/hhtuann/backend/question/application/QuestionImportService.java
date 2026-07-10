@@ -2,6 +2,7 @@ package com.hhtuann.backend.question.application;
 
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.TeacherProfileRepository;
+import com.hhtuann.backend.common.BusinessCodes;
 import com.hhtuann.backend.identity.repository.RolePermissionRepository;
 import com.hhtuann.backend.identity.repository.UserRoleRepository;
 import com.hhtuann.backend.question.domain.model.*;
@@ -81,25 +82,9 @@ public class QuestionImportService {
                 .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
         requireOwnershipAndSchool(bank, profile);
 
-        // --- Phase 2: classify + persist ---
-        Set<String> existingCodes = new HashSet<>(
-                questionRepository.findLowerCodesByBankId(bankId));
-
+        // --- Phase 2: persist (question codes are auto-generated; no pre-flight dup check) ---
         List<RowError> allErrors = new ArrayList<>(parseResult.errors());
-        List<ValidQuestionRow> toPersist = new ArrayList<>();
-
-        for (ValidQuestionRow row : parseResult.validRows()) {
-            String lowerCode = row.questionCode().toLowerCase(Locale.ROOT);
-            if (existingCodes.contains(lowerCode)) {
-                allErrors.add(new RowError(row.rowNumber(), row.questionCode(),
-                        "question_code",
-                        QuestionErrorCode.QUESTION_IMPORT_DUPLICATE_CODE.name(),
-                        "Duplicate question code already exists in this bank"));
-            } else {
-                toPersist.add(row);
-                existingCodes.add(lowerCode); // prevent intra-file dup already caught by parser
-            }
-        }
+        List<ValidQuestionRow> toPersist = parseResult.validRows();
 
         int importedRows = 0;
         if (!toPersist.isEmpty()) {
@@ -202,8 +187,10 @@ public class QuestionImportService {
     // ============================================================
 
     private void persistRow(ValidQuestionRow row, Long bankId, Long userId) {
+        String code = BusinessCodes.uniqueCode(20,
+                c -> questionRepository.existsByQuestionBankIdAndCodeIgnoreCase(bankId, c));
         Question question = questionRepository.saveAndFlush(
-                new Question(bankId, row.questionCode(), userId));
+                new Question(bankId, code, userId));
 
         QuestionVersion version = buildVersion(question.getId(), row, userId);
         versionRepository.saveAndFlush(version);
@@ -222,7 +209,7 @@ public class QuestionImportService {
                 row.content(),
                 row.explanation(),
                 row.difficulty(),
-                row.defaultPoints(),
+                java.math.BigDecimal.ONE,
                 buildAnswerKey(row),
                 JsonNodeFactory.instance.objectNode(), // metadata = empty {}
                 userId);
@@ -255,7 +242,7 @@ public class QuestionImportService {
     private List<QuestionOption> buildChoiceOptions(ValidQuestionRow row, Long versionId) {
         List<QuestionOption> options = new ArrayList<>();
         int position = 0;
-        for (String key : new String[] { "A", "B", "C", "D", "E", "F" }) {
+        for (String key : new String[] { "A", "B", "C", "D" }) {
             String text = row.options().get(key);
             if (text == null || text.isBlank()) {
                 continue;

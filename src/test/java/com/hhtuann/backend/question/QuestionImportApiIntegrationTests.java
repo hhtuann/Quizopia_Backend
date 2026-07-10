@@ -83,18 +83,18 @@ class QuestionImportApiIntegrationTests {
     private Long bankId;
 
     // 0-based column indexes (must match the parser's header order).
-    private static final int C_CODE = 0;
-    private static final int C_TYPE = 1;
-    private static final int C_CONTENT = 2;
-    private static final int C_POINTS = 3;
-    private static final int C_DIFFICULTY = 4;
-    private static final int C_OPT_A = 5;
-    private static final int C_OPT_B = 6;
-    private static final int C_OPT_C = 7;
-    private static final int C_OPT_D = 8;
-    private static final int C_CORRECT = 11;
-    private static final int C_NUMERIC = 20;
-    private static final int C_ROUNDING = 21;
+    private static final int C_CODE = -1;
+    private static final int C_TYPE = 0;
+    private static final int C_CONTENT = 1;
+    private static final int C_POINTS = -1;
+    private static final int C_DIFFICULTY = 2;
+    private static final int C_OPT_A = 3;
+    private static final int C_OPT_B = 4;
+    private static final int C_OPT_C = 5;
+    private static final int C_OPT_D = 6;
+    private static final int C_CORRECT = 7;
+    private static final int C_NUMERIC = 16;
+    private static final int C_ROUNDING = -1;
 
     @BeforeEach
     void setUp() {
@@ -173,7 +173,7 @@ class QuestionImportApiIntegrationTests {
         assertThat(qCount).isEqualTo(1);
 
         Long questionId = jdbc.queryForObject(
-                "SELECT id FROM questions WHERE question_bank_id = ? AND LOWER(code) = 'q-api-1'",
+                "SELECT id FROM questions WHERE question_bank_id = ?",
                 Long.class, bankId);
 
         Integer vCount = jdbc.queryForObject(
@@ -279,6 +279,7 @@ class QuestionImportApiIntegrationTests {
         assertThat(qCount).isZero();
     }
 
+    @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
     @Test
     void importExistingDuplicate_returns200WithError() throws Exception {
         // Pre-insert a question with code "DUP-API-1".
@@ -649,8 +650,8 @@ class QuestionImportApiIntegrationTests {
     }
 
     private static void set(Row row, int col, String value) {
-        if (value == null) {
-            return;
+        if (value == null || col < 0) {
+            return; // col < 0 = removed column → no-op
         }
         row.createCell(col).setCellValue(value);
     }

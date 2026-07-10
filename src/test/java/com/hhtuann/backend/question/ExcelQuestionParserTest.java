@@ -20,7 +20,6 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,29 +34,31 @@ class ExcelQuestionParserTest {
 
     private final ExcelQuestionParser parser = new ExcelQuestionParser();
 
-    // 0-based column indexes (must match the parser's header order).
-    private static final int C_CODE = 0;
-    private static final int C_TYPE = 1;
-    private static final int C_CONTENT = 2;
-    private static final int C_POINTS = 3;
-    private static final int C_DIFFICULTY = 4;
-    private static final int C_OPT_A = 5;
-    private static final int C_OPT_B = 6;
-    private static final int C_OPT_C = 7;
-    private static final int C_OPT_D = 8;
-    private static final int C_OPT_E = 9;
-    private static final int C_OPT_F = 10;
-    private static final int C_CORRECT = 11;
-    private static final int C_ST_A = 12;
-    private static final int C_ST_A_ANS = 13;
-    private static final int C_ST_B = 14;
-    private static final int C_ST_B_ANS = 15;
-    private static final int C_ST_C = 16;
-    private static final int C_ST_C_ANS = 17;
-    private static final int C_ST_D = 18;
-    private static final int C_ST_D_ANS = 19;
-    private static final int C_NUMERIC = 20;
-    private static final int C_EXPL = 21;
+    // 0-based column indexes (must match the parser's 18-column header order).
+    // Removed columns (question_code, default_points, option_e/f) are kept as -1
+    // so legacy set(...) calls below become no-ops (see the set helper).
+    private static final int C_CODE = -1;
+    private static final int C_TYPE = 0;
+    private static final int C_CONTENT = 1;
+    private static final int C_POINTS = -1;
+    private static final int C_DIFFICULTY = 2;
+    private static final int C_OPT_A = 3;
+    private static final int C_OPT_B = 4;
+    private static final int C_OPT_C = 5;
+    private static final int C_OPT_D = 6;
+    private static final int C_OPT_E = -1;
+    private static final int C_OPT_F = -1;
+    private static final int C_CORRECT = 7;
+    private static final int C_ST_A = 8;
+    private static final int C_ST_A_ANS = 9;
+    private static final int C_ST_B = 10;
+    private static final int C_ST_B_ANS = 11;
+    private static final int C_ST_C = 12;
+    private static final int C_ST_C_ANS = 13;
+    private static final int C_ST_D = 14;
+    private static final int C_ST_D_ANS = 15;
+    private static final int C_NUMERIC = 16;
+    private static final int C_EXPL = 17;
 
     // ==================== Happy paths ====================
 
@@ -81,11 +82,9 @@ class ExcelQuestionParserTest {
         assertThat(r.validRows()).hasSize(1);
         ValidQuestionRow v = r.validRows().get(0);
         assertThat(v.rowNumber()).isEqualTo(2); // data starts at sheet row 1 → display 2
-        assertThat(v.questionCode()).isEqualTo("Q1");
         assertThat(v.questionType()).isEqualTo(QuestionType.SINGLE_CHOICE);
         assertThat(v.options()).containsEntry("A", "1").containsEntry("D", "4");
         assertThat(v.correctAnswers()).containsExactly("B");
-        assertThat(v.defaultPoints()).isEqualByComparingTo(new BigDecimal("1"));
         assertThat(v.difficulty()).isEqualTo(QuestionDifficulty.EASY);
     }
 
@@ -355,26 +354,6 @@ class ExcelQuestionParserTest {
     }
 
     @Test
-    void parse_choiceOptionGap_isRejected() throws Exception {
-        // E blank, F filled → gap
-        ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QG1");
-            set(row, C_TYPE, "SINGLE_CHOICE");
-            set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
-            set(row, C_DIFFICULTY, "EASY");
-            set(row, C_OPT_A, "a");
-            set(row, C_OPT_B, "b");
-            set(row, C_OPT_C, "c");
-            set(row, C_OPT_D, "d");
-            set(row, C_OPT_F, "f"); // E missing → gap
-            set(row, C_CORRECT, "A");
-        }));
-
-        assertSingleError(r, "option_f", QuestionErrorCode.QUESTION_IMPORT_INVALID_OPTIONS);
-    }
-
-    @Test
     void parse_singleChoiceExcessStatement_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
             set(row, C_CODE, "QE1");
@@ -458,10 +437,11 @@ class ExcelQuestionParserTest {
     }
 
     @Test
-    void parse_duplicateCodeDifferentCase_secondRejected() throws Exception {
+    void parse_twoRowsNoCodeColumn_bothValid() throws Exception {
+        // question_code is auto-generated (column removed); two otherwise-valid rows both parse.
         ImportResult r = parse(workbookWith(
                 row -> {
-                    set(row, C_CODE, "DUP-1");
+                    set(row, C_CODE, "DUP-1"); // ignored (no-op, C_CODE = -1)
                     set(row, C_TYPE, "SINGLE_CHOICE");
                     set(row, C_CONTENT, "x");
                     set(row, C_POINTS, "1");
@@ -473,10 +453,8 @@ class ExcelQuestionParserTest {
                     set(row, C_CORRECT, "A");
                 },
                 row -> {
-                    set(row, C_CODE, "dup-1"); // same code, different case
                     set(row, C_TYPE, "SINGLE_CHOICE");
                     set(row, C_CONTENT, "y");
-                    set(row, C_POINTS, "1");
                     set(row, C_DIFFICULTY, "EASY");
                     set(row, C_OPT_A, "a");
                     set(row, C_OPT_B, "b");
@@ -486,13 +464,8 @@ class ExcelQuestionParserTest {
                 }));
 
         assertThat(r.totalRows()).isEqualTo(2);
-        assertThat(r.validRows()).hasSize(1);
-        assertThat(r.validRows().get(0).questionCode()).isEqualTo("DUP-1");
-        assertThat(r.errors()).hasSize(1);
-        RowError err = r.errors().get(0);
-        assertThat(err.rowNumber()).isEqualTo(3); // second data row
-        assertThat(err.field()).isEqualTo("question_code");
-        assertThat(err.code()).isEqualTo(QuestionErrorCode.QUESTION_IMPORT_DUPLICATE_CODE.name());
+        assertThat(r.validRows()).hasSize(2);
+        assertThat(r.errors()).isEmpty();
     }
 
     @Test
@@ -511,9 +484,9 @@ class ExcelQuestionParserTest {
         try (Workbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Questions");
             Row header = sheet.createRow(0);
-            // Swap first two headers
-            header.createCell(0).setCellValue("question_type");
-            header.createCell(1).setCellValue("question_code");
+            // Swap first two headers (question_type <-> content)
+            header.createCell(0).setCellValue("content");
+            header.createCell(1).setCellValue("question_type");
             for (int i = 2; i < ExcelQuestionParser.EXPECTED_HEADERS.size(); i++) {
                 header.createCell(i).setCellValue(ExcelQuestionParser.EXPECTED_HEADERS.get(i));
             }
@@ -636,8 +609,8 @@ class ExcelQuestionParserTest {
     }
 
     private static void set(Row row, int col, String value) {
-        if (value == null) {
-            return;
+        if (value == null || col < 0) {
+            return; // col < 0 = removed column (question_code/default_points/option_e/f) → no-op
         }
         row.createCell(col).setCellValue(value);
     }

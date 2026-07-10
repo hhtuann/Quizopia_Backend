@@ -41,10 +41,10 @@ import java.util.List;
 @Component
 public class QuestionTemplateService {
 
-    /** The fixed 23-column header, in order. */
+    /** The fixed 18-column header, in order (matches ExcelQuestionParser.EXPECTED_HEADERS). */
     static final List<String> HEADERS = List.of(
-            "question_code", "question_type", "content", "default_points", "difficulty",
-            "option_a", "option_b", "option_c", "option_d", "option_e", "option_f",
+            "question_type", "content", "difficulty",
+            "option_a", "option_b", "option_c", "option_d",
             "correct_answers",
             "statement_a", "statement_a_answer",
             "statement_b", "statement_b_answer",
@@ -52,7 +52,7 @@ public class QuestionTemplateService {
             "statement_d", "statement_d_answer",
             "numeric_answer", "explanation");
 
-    private static final int COL_NUMERIC_ANSWER = 20;
+    private static final int COL_NUMERIC_ANSWER = 16;
     private static final String TEXT_FORMAT = "@";
 
     private final RolePermissionRepository rolePermissionRepository;
@@ -153,7 +153,7 @@ public class QuestionTemplateService {
         for (int i = 0; i < HEADERS.size(); i++) {
             sheet.setColumnWidth(i, 18 * 256);
         }
-        sheet.setColumnWidth(2, 30 * 256); // content
+        sheet.setColumnWidth(1, 30 * 256); // content
         sheet.setColumnWidth(COL_NUMERIC_ANSWER, 16 * 256);
 
         sheet.createFreezePane(0, 1);
@@ -161,60 +161,51 @@ public class QuestionTemplateService {
 
     private void writeSingleChoiceExample(Sheet sheet, int rowIdx) {
         Row r = getOrCreateRow(sheet, rowIdx);
-        set(r, 0, "EX-SINGLE");
-        set(r, 1, "SINGLE_CHOICE");
-        set(r, 2, "What is 2+2?");
+        set(r, 0, "SINGLE_CHOICE");
+        set(r, 1, "What is 2+2?");
+        set(r, 2, "EASY");
         set(r, 3, "1");
-        set(r, 4, "EASY");
-        set(r, 5, "1");
-        set(r, 6, "2");
-        set(r, 7, "3");
-        set(r, 8, "4");
-        set(r, 11, "B");
-        set(r, 21, "2 is the correct answer.");
+        set(r, 4, "2");
+        set(r, 5, "3");
+        set(r, 6, "4");
+        set(r, 7, "B");
+        set(r, 17, "2 is the correct answer.");
     }
 
     private void writeMultipleChoiceExample(Sheet sheet, int rowIdx) {
         Row r = getOrCreateRow(sheet, rowIdx);
-        set(r, 0, "EX-MULTI");
-        set(r, 1, "MULTIPLE_CHOICE");
-        set(r, 2, "Select even numbers");
+        set(r, 0, "MULTIPLE_CHOICE");
+        set(r, 1, "Select even numbers");
+        set(r, 2, "MEDIUM");
         set(r, 3, "2");
-        set(r, 4, "MEDIUM");
-        set(r, 5, "2");
-        set(r, 6, "3");
-        set(r, 7, "4");
-        set(r, 8, "5");
-        set(r, 11, "A,C");
+        set(r, 4, "3");
+        set(r, 5, "4");
+        set(r, 6, "5");
+        set(r, 7, "A,C");
     }
 
     private void writeTrueFalseExample(Sheet sheet, int rowIdx) {
         Row r = getOrCreateRow(sheet, rowIdx);
-        set(r, 0, "EX-TF");
-        set(r, 1, "TRUE_FALSE_MATRIX");
-        set(r, 2, "Evaluate statements");
-        set(r, 3, "3");
-        set(r, 4, "MEDIUM");
-        set(r, 12, "The sun is a star");
+        set(r, 0, "TRUE_FALSE_MATRIX");
+        set(r, 1, "Evaluate statements");
+        set(r, 2, "MEDIUM");
+        set(r, 8, "The sun is a star");
+        set(r, 9, "TRUE");
+        set(r, 10, "Water boils at 50°C");
+        set(r, 11, "FALSE");
+        set(r, 12, "Iron is heavier than cork");
         set(r, 13, "TRUE");
-        set(r, 14, "Water boils at 50°C");
+        set(r, 14, "Sound travels faster than light");
         set(r, 15, "FALSE");
-        set(r, 16, "Iron is heavier than cork");
-        set(r, 17, "TRUE");
-        set(r, 18, "Sound travels faster than light");
-        set(r, 19, "FALSE");
     }
 
     private void writeNumericExample(Sheet sheet, int rowIdx) {
         Row r = getOrCreateRow(sheet, rowIdx);
-        set(r, 0, "EX-NUM");
-        set(r, 1, "NUMERIC_FILL");
-        set(r, 2, "What is 5/2? (answer with 2 decimal places)");
-        set(r, 3, "1");
-        set(r, 4, "EASY");
+        set(r, 0, "NUMERIC_FILL");
+        set(r, 1, "What is 5/2? (answer with 2 decimal places)");
+        set(r, 2, "EASY");
         // numeric_answer MUST be a STRING cell. The Text style is applied to
         // this column after the examples are written (see buildQuestionsSheet).
-        // The rounding/format hint is part of the content (no separate column).
         r.createCell(COL_NUMERIC_ANSWER).setCellValue("2.50");
     }
 

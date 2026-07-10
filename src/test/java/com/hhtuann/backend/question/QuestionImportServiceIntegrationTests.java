@@ -95,30 +95,32 @@ class QuestionImportServiceIntegrationTests {
     private Long subjectId;
     private Long bankId;
 
-    // 0-based column indexes (must match the parser's header order).
-    private static final int C_CODE = 0;
-    private static final int C_TYPE = 1;
-    private static final int C_CONTENT = 2;
-    private static final int C_POINTS = 3;
-    private static final int C_DIFFICULTY = 4;
-    private static final int C_OPT_A = 5;
-    private static final int C_OPT_B = 6;
-    private static final int C_OPT_C = 7;
-    private static final int C_OPT_D = 8;
-    private static final int C_OPT_E = 9;
-    private static final int C_OPT_F = 10;
-    private static final int C_CORRECT = 11;
-    private static final int C_ST_A = 12;
-    private static final int C_ST_A_ANS = 13;
-    private static final int C_ST_B = 14;
-    private static final int C_ST_B_ANS = 15;
-    private static final int C_ST_C = 16;
-    private static final int C_ST_C_ANS = 17;
-    private static final int C_ST_D = 18;
-    private static final int C_ST_D_ANS = 19;
-    private static final int C_NUMERIC = 20;
-    private static final int C_ROUNDING = 21;
-    private static final int C_EXPL = 22;
+    // 0-based column indexes (must match the parser's 18-column header order).
+    // Removed columns (question_code, default_points, option_e/f, rounding_instruction)
+    // are -1 so legacy set(...) calls become no-ops (see the set helper).
+    private static final int C_CODE = -1;
+    private static final int C_TYPE = 0;
+    private static final int C_CONTENT = 1;
+    private static final int C_POINTS = -1;
+    private static final int C_DIFFICULTY = 2;
+    private static final int C_OPT_A = 3;
+    private static final int C_OPT_B = 4;
+    private static final int C_OPT_C = 5;
+    private static final int C_OPT_D = 6;
+    private static final int C_OPT_E = -1;
+    private static final int C_OPT_F = -1;
+    private static final int C_CORRECT = 7;
+    private static final int C_ST_A = 8;
+    private static final int C_ST_A_ANS = 9;
+    private static final int C_ST_B = 10;
+    private static final int C_ST_B_ANS = 11;
+    private static final int C_ST_C = 12;
+    private static final int C_ST_C_ANS = 13;
+    private static final int C_ST_D = 14;
+    private static final int C_ST_D_ANS = 15;
+    private static final int C_NUMERIC = 16;
+    private static final int C_ROUNDING = -1;
+    private static final int C_EXPL = 17;
 
     @BeforeEach
     void setUp() {
@@ -199,7 +201,8 @@ class QuestionImportServiceIntegrationTests {
 
         // Question exists, status DRAFT, current_version_number = 1.
         Long questionId = jdbc.queryForObject(
-                "SELECT id FROM questions WHERE question_bank_id = ? AND LOWER(code) = 'q-sc-1'",
+                "SELECT q.id FROM questions q JOIN question_versions qv ON qv.question_id = q.id "
+                        + "WHERE q.question_bank_id = ? AND qv.content = 'What is 2+2?'",
                 Long.class, bankId);
         assertThat(questionId).isNotNull();
 
@@ -467,6 +470,7 @@ class QuestionImportServiceIntegrationTests {
         assertThat(count).isEqualTo(2);
     }
 
+    @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
     @Test
     void importExistingDuplicate_caseInsensitive() throws Exception {
         // Pre-insert a question with code "Q-001" in the bank.
@@ -733,6 +737,7 @@ class QuestionImportServiceIntegrationTests {
      * {@code uk_questions_bank_code_ci}), and the whole transaction rolls back,
      * leaving zero questions/versions/options.
      */
+    @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
     @Test
     @org.springframework.transaction.annotation.Transactional(propagation = Propagation.NOT_SUPPORTED)
     void checkConstraintViolation_rollsBackEntireBatch() throws Exception {
@@ -815,6 +820,7 @@ class QuestionImportServiceIntegrationTests {
      * fires, the service maps it to QUESTION_IMPORT_DUPLICATE_CODE, and the
      * transaction rolls back (zero questions persisted).
      */
+    @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
     @Test
     @org.springframework.transaction.annotation.Transactional(propagation = Propagation.NOT_SUPPORTED)
     void lateUniqueConflictAtFlush_mapsToDuplicateAndRollsBack() throws Exception {
@@ -985,9 +991,11 @@ class QuestionImportServiceIntegrationTests {
     }
 
     private Long questionIdByCode(Long bankId, String code) {
+        // Question codes are now auto-generated; each happy-path test imports exactly one
+        // question into a fresh bank, so look it up by bank (code param is ignored).
         return jdbc.queryForObject(
-                "SELECT id FROM questions WHERE question_bank_id = ? AND LOWER(code) = LOWER(?)",
-                Long.class, bankId, code);
+                "SELECT id FROM questions WHERE question_bank_id = ?",
+                Long.class, bankId);
     }
 
     private void revokePermission(String permCode) {
@@ -1040,8 +1048,8 @@ class QuestionImportServiceIntegrationTests {
     }
 
     private static void set(Row row, int col, String value) {
-        if (value == null) {
-            return;
+        if (value == null || col < 0) {
+            return; // col < 0 = removed column → no-op
         }
         row.createCell(col).setCellValue(value);
     }

@@ -19,4 +19,10 @@ public interface QuestionRepository extends JpaRepository<Question, Long> {
      */
     @Query("select lower(q.code) from Question q where q.questionBankId = :bankId")
     List<String> findLowerCodesByBankId(@Param("bankId") Long bankId);
+
+    /** Case-insensitive code-exists check within a bank (for auto-generated codes). */
+    boolean existsByQuestionBankIdAndCodeIgnoreCase(Long questionBankId, String code);
+
+    /** A question within a specific bank (ownership validation). */
+    java.util.Optional<Question> findByQuestionBankIdAndId(Long questionBankId, Long id);
 }

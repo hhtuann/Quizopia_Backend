@@ -3,20 +3,18 @@ package com.hhtuann.backend.question.dto;
 import com.hhtuann.backend.question.domain.model.QuestionDifficulty;
 import com.hhtuann.backend.question.domain.model.QuestionType;
 
-import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Set;
 
 /**
  * A fully validated and normalized row from the Excel import, ready for
- * persistence in Batch B2.2. Type-irrelevant fields are {@code null}.
+ * persistence. Type-irrelevant fields are {@code null}. The question code is
+ * auto-generated at persist time and {@code default_points} is always 1.
  */
 public record ValidQuestionRow(
         int rowNumber,
-        String questionCode,
         QuestionType questionType,
         String content,
-        BigDecimal defaultPoints,
         QuestionDifficulty difficulty,
         String explanation,
         // SINGLE_CHOICE / MULTIPLE_CHOICE only

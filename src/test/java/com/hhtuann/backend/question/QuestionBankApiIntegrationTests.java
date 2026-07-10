@@ -427,21 +427,21 @@ class QuestionBankApiIntegrationTests {
             assertThat(wb.getSheetName(1)).isEqualTo("Instructions");
 
             org.apache.poi.ss.usermodel.Sheet q = wb.getSheetAt(0);
-            // 22 headers in order (rounding_instruction removed)
+            // 18 headers in order (question_code/default_points/option_e/f removed)
             org.apache.poi.ss.usermodel.Row header = q.getRow(0);
-            assertThat(header.getLastCellNum()).isEqualTo((short) 22);
-            assertThat(header.getCell(0).getStringCellValue()).isEqualTo("question_code");
-            assertThat(header.getCell(21).getStringCellValue()).isEqualTo("explanation");
+            assertThat(header.getLastCellNum()).isEqualTo((short) 18);
+            assertThat(header.getCell(0).getStringCellValue()).isEqualTo("question_type");
+            assertThat(header.getCell(17).getStringCellValue()).isEqualTo("explanation");
 
-            // 4 example rows, one per type (rows 1-4)
-            assertThat(q.getRow(1).getCell(1).getStringCellValue()).isEqualTo("SINGLE_CHOICE");
-            assertThat(q.getRow(2).getCell(1).getStringCellValue()).isEqualTo("MULTIPLE_CHOICE");
-            assertThat(q.getRow(3).getCell(1).getStringCellValue()).isEqualTo("TRUE_FALSE_MATRIX");
-            assertThat(q.getRow(4).getCell(1).getStringCellValue()).isEqualTo("NUMERIC_FILL");
+            // 4 example rows, one per type (rows 1-4); type is now at col 0.
+            assertThat(q.getRow(1).getCell(0).getStringCellValue()).isEqualTo("SINGLE_CHOICE");
+            assertThat(q.getRow(2).getCell(0).getStringCellValue()).isEqualTo("MULTIPLE_CHOICE");
+            assertThat(q.getRow(3).getCell(0).getStringCellValue()).isEqualTo("TRUE_FALSE_MATRIX");
+            assertThat(q.getRow(4).getCell(0).getStringCellValue()).isEqualTo("NUMERIC_FILL");
 
-            // numeric_answer (col 20) on the numeric example is a STRING cell,
+            // numeric_answer (col 16) on the numeric example is a STRING cell,
             // value "2.50" (4 chars).
-            org.apache.poi.ss.usermodel.Cell num = q.getRow(4).getCell(20);
+            org.apache.poi.ss.usermodel.Cell num = q.getRow(4).getCell(16);
             assertThat(num.getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
             assertThat(num.getStringCellValue()).isEqualTo("2.50");
             assertThat(num.getStringCellValue().length()).isEqualTo(4);
