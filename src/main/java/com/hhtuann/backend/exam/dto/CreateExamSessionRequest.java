@@ -16,7 +16,7 @@ public record CreateExamSessionRequest(
         @NotBlank @Size(max = 255) String title,
         @NotNull Instant startsAt,
         @NotNull Instant endsAt,
-        @NotNull @Positive Integer maxAttempts,
+        @NotNull @jakarta.validation.constraints.Min(0) Integer maxAttempts,
         /** PUBLIC = all same-school students; CLASS_RESTRICTED (default) = assigned classes only. */
         SessionVisibility visibility,
         /** Assigned classrooms (required-meaningful only when visibility = CLASS_RESTRICTED). Ignored when PUBLIC. */

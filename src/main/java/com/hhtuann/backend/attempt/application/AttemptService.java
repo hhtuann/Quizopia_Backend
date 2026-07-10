@@ -119,7 +119,8 @@ public class AttemptService {
         return jdbc.query(sql, (rs, n) -> {
             int maxAttempts = rs.getInt("max_attempts");
             int used = rs.getInt("used");
-            int remaining = Math.max(0, maxAttempts - used);
+            // 0 = unlimited: remaining is effectively infinite.
+            int remaining = maxAttempts == 0 ? Integer.MAX_VALUE : Math.max(0, maxAttempts - used);
             Long activeId = (Long) rs.getObject("active_id");
             Instant activeDeadline = rs.getTimestamp("active_deadline") != null
                     ? rs.getTimestamp("active_deadline").toInstant()
@@ -217,7 +218,8 @@ public class AttemptService {
             Instant now, StartAttemptRequest request) {
         // MAX+1 under session lock.
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), profile.getId()).orElse(0) + 1;
-        if (nextNumber > session.getMaxAttempts()) {
+        // 0 = unlimited: no max-attempts check.
+        if (session.getMaxAttempts() > 0 && nextNumber > session.getMaxAttempts()) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_MAX_REACHED);
         }
 

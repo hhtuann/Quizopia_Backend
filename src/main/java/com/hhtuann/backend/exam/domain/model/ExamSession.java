@@ -258,8 +258,8 @@ public class ExamSession {
 
     private static Integer requirePositive(Integer value, String fieldName) {
         Objects.requireNonNull(value, fieldName + " must not be null");
-        if (value <= 0) {
-            throw new IllegalArgumentException(fieldName + " must be > 0");
+        if (value < 0) {
+            throw new IllegalArgumentException(fieldName + " must be >= 0");
         }
         return value;
     }
