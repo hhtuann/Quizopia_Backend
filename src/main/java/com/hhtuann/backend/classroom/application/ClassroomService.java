@@ -267,9 +267,17 @@ public class ClassroomService {
     public void removeMember(Long userId, Long classroomId, Long studentProfileId) {
         requirePermission(userId, "CLASSROOM_MEMBER_REMOVE");
         TeacherProfile profile = resolveTeacherProfile(userId);
-        requireOwnedClassroom(profile, classroomId);
+        Classroom classroom = requireOwnedClassroom(profile, classroomId);
         // Idempotent: deleteBy returns rows affected; missing member → 200 (no-op).
         memberRepository.deleteByClassroomIdAndStudentProfileId(classroomId, studentProfileId);
+        // Notify the removed student.
+        studentProfileRepository.findById(studentProfileId).ifPresent(sp -> {
+            notificationService.create(sp.getUserId(),
+                    com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                    "Removed from class",
+                    "You were removed from " + classroom.getName(),
+                    "/sessions");
+        });
     }
 
     // ============================================================
