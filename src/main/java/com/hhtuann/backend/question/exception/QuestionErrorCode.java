@@ -15,6 +15,7 @@ public enum QuestionErrorCode {
     QUESTION_SUBJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "Subject not found"),
     QUESTION_TEACHER_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "Teacher profile not found for the current user"),
     QUESTION_BANK_NOT_FOUND(HttpStatus.NOT_FOUND, "Question bank not found"),
+    QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Question not found"),
     QUESTION_BANK_CODE_CONFLICT(HttpStatus.CONFLICT, "Question bank code already exists for this owner"),
 
     // Import errors

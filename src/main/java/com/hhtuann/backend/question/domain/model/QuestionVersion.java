@@ -171,6 +171,24 @@ public class QuestionVersion {
         return updatedAt;
     }
 
+    // --- Setters (for question editing; type + versionNumber are immutable) ---
+
+    public void setContent(String content) {
+        this.content = content;
+    }
+
+    public void setExplanation(String explanation) {
+        this.explanation = explanation;
+    }
+
+    public void setDifficulty(QuestionDifficulty difficulty) {
+        this.difficulty = difficulty;
+    }
+
+    public void setAnswerKey(JsonNode answerKey) {
+        this.answerKey = answerKey;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
