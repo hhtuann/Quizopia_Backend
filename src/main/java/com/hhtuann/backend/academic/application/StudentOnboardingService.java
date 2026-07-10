@@ -50,6 +50,7 @@ public class StudentOnboardingService {
     private final SchoolRepository schoolRepository;
     private final NamedParameterJdbcTemplate jdbc;
     private final Clock clock;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public StudentOnboardingService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -58,7 +59,8 @@ public class StudentOnboardingService {
             TeacherProfileRepository teacherProfileRepository,
             SchoolRepository schoolRepository,
             NamedParameterJdbcTemplate jdbc,
-            Clock clock) {
+            Clock clock,
+            com.hhtuann.backend.notification.application.NotificationService notificationService) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
@@ -67,6 +69,7 @@ public class StudentOnboardingService {
         this.schoolRepository = schoolRepository;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.notificationService = notificationService;
     }
 
     // ============================================================
@@ -143,6 +146,13 @@ public class StudentOnboardingService {
         String studentCode = generateStudentCode(school);
         StudentProfile profile = new StudentProfile(targetUserId, schoolId, studentCode);
         studentProfileRepository.saveAndFlush(profile);
+
+        // Notify the student they've been assigned to a school.
+        notificationService.create(targetUserId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                "School assignment approved",
+                "You have been assigned to " + school.getName() + ". Your student code is " + studentCode + ".",
+                "/sessions");
 
         return new StudentProfileResponse(
                 profile.getId(), profile.getStudentCode(), profile.getSchoolId(),
