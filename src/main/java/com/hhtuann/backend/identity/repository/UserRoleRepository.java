@@ -42,4 +42,17 @@ public interface UserRoleRepository extends JpaRepository<UserRole, UserRoleId> 
             @Param("userId") Long userId,
             @Param("now") Instant now
     );
+
+    /** Returns the user IDs that currently hold the given role code. */
+    @Query("""
+            select ur.user.id
+            from UserRole ur
+            join ur.role r
+            where r.code = :roleCode
+              and (ur.expiresAt is null or ur.expiresAt > :now)
+            """)
+    List<Long> findUserIdsByRoleCode(
+            @Param("roleCode") String roleCode,
+            @Param("now") Instant now
+    );
 }

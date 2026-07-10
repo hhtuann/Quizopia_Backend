@@ -72,6 +72,7 @@ public class UserService {
     private final StudentProfileRepository studentProfileRepository;
     private final Clock clock;
     private final boolean demoEnabled;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public UserService(UserRepository userRepository,
                        UserRoleRepository userRoleRepository,
@@ -82,6 +83,7 @@ public class UserService {
                        TeacherProfileRepository teacherProfileRepository,
                        StudentProfileRepository studentProfileRepository,
                        Clock clock,
+                       com.hhtuann.backend.notification.application.NotificationService notificationService,
                        @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
@@ -92,6 +94,7 @@ public class UserService {
         this.teacherProfileRepository = teacherProfileRepository;
         this.studentProfileRepository = studentProfileRepository;
         this.clock = clock;
+        this.notificationService = notificationService;
         this.demoEnabled = demoEnabled;
     }
 
@@ -201,6 +204,9 @@ public class UserService {
         User user = requireUser(targetId);
         user.setStatus(UserStatus.ACTIVE);
         userRepository.saveAndFlush(user);
+        notificationService.create(targetId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                "Account activated", "Your account has been activated.", null);
         return toResponse(user);
     }
 
@@ -210,6 +216,9 @@ public class UserService {
         User user = requireUser(targetId);
         user.setStatus(UserStatus.DISABLED);
         userRepository.saveAndFlush(user);
+        notificationService.create(targetId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                "Account disabled", "Your account has been disabled.", null);
         return toResponse(user);
     }
 
@@ -220,6 +229,9 @@ public class UserService {
         User user = requireUser(targetId);
         user.setLockedUntil(Instant.now(clock).plus(LOCK_MINUTES, ChronoUnit.MINUTES));
         userRepository.saveAndFlush(user);
+        notificationService.create(targetId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                "Account locked", "Your account has been locked for " + LOCK_MINUTES + " minutes.", null);
         return toResponse(user);
     }
 
@@ -231,6 +243,9 @@ public class UserService {
         user.setLockedUntil(null);
         user.setFailedLoginAttempts(0);
         userRepository.saveAndFlush(user);
+        notificationService.create(targetId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                "Account unlocked", "Your account has been unlocked.", null);
         return toResponse(user);
     }
 

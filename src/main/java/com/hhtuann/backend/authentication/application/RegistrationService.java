@@ -53,6 +53,7 @@ public class RegistrationService {
     private final TeacherProfileRepository teacherProfileRepository;
     private final StudentProfileRepository studentProfileRepository;
     private final boolean demoEnabled;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public RegistrationService(UserRepository userRepository,
                                 UserRoleRepository userRoleRepository,
@@ -63,6 +64,7 @@ public class RegistrationService {
                                 SchoolRepository schoolRepository,
                                 TeacherProfileRepository teacherProfileRepository,
                                 StudentProfileRepository studentProfileRepository,
+                                com.hhtuann.backend.notification.application.NotificationService notificationService,
                                 @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
@@ -73,6 +75,7 @@ public class RegistrationService {
         this.schoolRepository = schoolRepository;
         this.teacherProfileRepository = teacherProfileRepository;
         this.studentProfileRepository = studentProfileRepository;
+        this.notificationService = notificationService;
         this.demoEnabled = demoEnabled;
     }
 
@@ -120,6 +123,15 @@ public class RegistrationService {
                         "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
 
         userRoleRepository.save(new UserRole(user, role, null, null));
+
+        // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
+        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("ACADEMIC_ADMIN", java.time.Instant.now())) {
+            notificationService.create(adminId,
+                    com.hhtuann.backend.notification.domain.model.NotificationType.NEW_USER_REGISTERED,
+                    "New user registered",
+                    displayName + " (" + username + ") is awaiting school assignment.",
+                    "/admin/pending-students");
+        }
 
         // NOTE: Registration no longer auto-creates academic profiles (V11 Student Onboarding).
         // Students self-register → PENDING (user + STUDENT role, no profile).
