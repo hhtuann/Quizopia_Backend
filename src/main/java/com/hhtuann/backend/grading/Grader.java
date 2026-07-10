@@ -18,9 +18,11 @@ import java.util.Set;
  * <p><b>Invariants (frozen Day 8 grading rules):</b>
  * <ul>
  *   <li>BigDecimal only — no {@code double}/{@code float} anywhere.</li>
- *   <li>NUMERIC_FILL correctness uses {@link BigDecimal#compareTo} (so {@code 1}, {@code 1.0}, {@code 1.00}
- *       are equal); never {@link BigDecimal#equals}.</li>
- *   <li>Per-question {@code awardedScore} is full {@code maxScore} (correct) or 0 (otherwise) — no partial credit.</li>
+ *   <li>NUMERIC_FILL correctness is an <b>exact String equality</b> on the raw expected vs submitted
+ *       answer (so {@code "1.00"} != {@code "1"}).</li>
+ *   <li>SINGLE/MULTIPLE/NUMERIC are all-or-nothing; TRUE_FALSE_MATRIX awards <b>proportional credit</b>
+ *       (correct statements / total statements × maxScore), with {@code correct()==true} only when all
+ *       statements are right.</li>
  *   <li>{@code percentage = score × 100 / maxScore}, scale 2, {@code RoundingMode.HALF_UP}.</li>
  *   <li>Set/matrix comparison is order-independent.</li>
  *   <li>Missing server answer key / non-positive max score → {@link GradingException} (fail closed, no silent 0).</li>
@@ -66,7 +68,7 @@ public final class Grader {
         return new QuestionGrade(correct ? maxScore : ZERO, maxScore, correct, answered);
     }
 
-    // --- TRUE_FALSE_MATRIX: per-statement boolean map must equal the answer key (order-independent). ---
+    // --- TRUE_FALSE_MATRIX: proportional credit — awarded = (correct statements / total) × maxScore. ---
 
     public static QuestionGrade gradeMatrix(BigDecimal maxScore, Map<String, Boolean> correct, Map<String, Boolean> student) {
         requirePositiveMaxScore(maxScore);
@@ -75,21 +77,32 @@ public final class Grader {
         }
         Map<String, Boolean> answered = student == null ? Map.of() : student;
         boolean present = !answered.isEmpty();
-        boolean correctResult = answered.equals(correct); // Map.equals is order-independent; rejects missing/extra keys.
-        return new QuestionGrade(correctResult ? maxScore : ZERO, maxScore, correctResult, present);
+        int total = correct.size();
+        int right = 0;
+        for (Map.Entry<String, Boolean> entry : correct.entrySet()) {
+            Boolean submitted = answered.get(entry.getKey());
+            if (submitted != null && submitted.equals(entry.getValue())) {
+                right++;
+            }
+        }
+        boolean correctResult = (right == total);
+        BigDecimal awarded = correctResult
+                ? maxScore
+                : maxScore.multiply(BigDecimal.valueOf(right)).divide(BigDecimal.valueOf(total), 2, RoundingMode.HALF_UP);
+        return new QuestionGrade(awarded, maxScore, correctResult, present);
     }
 
-    // --- NUMERIC_FILL: compareTo == 0 (1 == 1.0 == 1.00). No tolerance. ---
+    // --- NUMERIC_FILL: exact String equality on the raw answer (1.00 != 1). ---
 
-    public static QuestionGrade gradeNumeric(BigDecimal maxScore, BigDecimal expected, BigDecimal studentValue) {
+    public static QuestionGrade gradeNumeric(BigDecimal maxScore, String expected, String studentValue) {
         requirePositiveMaxScore(maxScore);
-        if (expected == null) {
+        if (expected == null || expected.isBlank()) {
             throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "numeric-fill: missing expected answer");
         }
         if (studentValue == null) {
             return new QuestionGrade(ZERO, maxScore, false, false);
         }
-        boolean correct = studentValue.compareTo(expected) == 0; // compareTo: 1 == 1.0 == 1.00; never equals.
+        boolean correct = expected.equals(studentValue);
         return new QuestionGrade(correct ? maxScore : ZERO, maxScore, correct, true);
     }
 

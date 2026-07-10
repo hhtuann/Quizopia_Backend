@@ -59,7 +59,7 @@ public class ExcelQuestionParser {
             "statement_b", "statement_b_answer",
             "statement_c", "statement_c_answer",
             "statement_d", "statement_d_answer",
-            "numeric_answer", "rounding_instruction", "explanation");
+            "numeric_answer", "explanation");
 
     // Column indexes (0-based)
     private static final int COL_QUESTION_CODE = 0;
@@ -83,10 +83,9 @@ public class ExcelQuestionParser {
     private static final int COL_STATEMENT_D = 18;
     private static final int COL_STATEMENT_D_ANSWER = 19;
     private static final int COL_NUMERIC_ANSWER = 20;
-    private static final int COL_ROUNDING_INSTRUCTION = 21;
-    private static final int COL_EXPLANATION = 22;
+    private static final int COL_EXPLANATION = 21;
 
-    private static final int HEADER_COUNT = EXPECTED_HEADERS.size(); // 23
+    private static final int HEADER_COUNT = EXPECTED_HEADERS.size(); // 22
 
     private static final String KEY_PATTERN = "^[A-F]$";
     private static final String NUMERIC_PATTERN = "^-?[0-9]+([,.][0-9]+)?$";
@@ -353,14 +352,14 @@ public class ExcelQuestionParser {
         // No gaps: once an option is blank, later ones must be blank.
         validateNoOptionGaps(options, rowNumber, code, errors);
 
-        // Excess fields for this type: statements / numeric / rounding must be blank.
+        // Excess fields for this type: statements / numeric must be blank.
         rejectExcessFields(row, rowNumber, code, errors,
                 List.of(COL_STATEMENT_A, COL_STATEMENT_A_ANSWER,
                         COL_STATEMENT_B, COL_STATEMENT_B_ANSWER,
                         COL_STATEMENT_C, COL_STATEMENT_C_ANSWER,
                         COL_STATEMENT_D, COL_STATEMENT_D_ANSWER,
-                        COL_NUMERIC_ANSWER, COL_ROUNDING_INSTRUCTION),
-                "statement/numeric/rounding fields are not allowed for choice questions");
+                        COL_NUMERIC_ANSWER),
+                "statement/numeric fields are not allowed for choice questions");
 
         // Parse correct answers
         Set<String> correct = parseCorrectAnswers(
@@ -386,7 +385,7 @@ public class ExcelQuestionParser {
             }
         }
         return new ValidQuestionRow(rowNumber, code, type, content, points, difficulty,
-                explanation, cleanOptions, correct, null, null, null, 0, null);
+                explanation, cleanOptions, correct, null, null, null);
     }
 
     private void readOption(Row row, int col, String key, Map<String, String> options) {
@@ -500,8 +499,8 @@ public class ExcelQuestionParser {
         rejectExcessFields(row, rowNumber, code, errors,
                 List.of(COL_OPTION_A, COL_OPTION_B, COL_OPTION_C, COL_OPTION_D,
                         COL_OPTION_E, COL_OPTION_F, COL_CORRECT_ANSWERS,
-                        COL_NUMERIC_ANSWER, COL_ROUNDING_INSTRUCTION),
-                "option/correct_answers/numeric/rounding fields are not allowed for "
+                        COL_NUMERIC_ANSWER),
+                "option/correct_answers/numeric fields are not allowed for "
                         + "true-false matrix questions");
 
         if (!errors.isEmpty()) {
@@ -515,7 +514,7 @@ public class ExcelQuestionParser {
             cleanAnswers.put(k, answers.get(k));
         }
         return new ValidQuestionRow(rowNumber, code, type, content, points, difficulty,
-                explanation, null, null, cleanStatements, cleanAnswers, null, 0, null);
+                explanation, null, null, cleanStatements, cleanAnswers, null);
     }
 
     private Boolean parseBoolean(Cell cell) {
@@ -562,14 +561,6 @@ public class ExcelQuestionParser {
             }
         }
 
-        // rounding_instruction required, non-blank.
-        String rounding = readStringTrimmed(row.getCell(COL_ROUNDING_INSTRUCTION));
-        if (rounding.isBlank()) {
-            errors.add(new RowError(rowNumber, code, "rounding_instruction",
-                    QuestionErrorCode.QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED.name(),
-                    "rounding_instruction is required for numeric questions"));
-        }
-
         // Excess fields
         rejectExcessFields(row, rowNumber, code, errors,
                 List.of(COL_OPTION_A, COL_OPTION_B, COL_OPTION_C, COL_OPTION_D,
@@ -593,8 +584,7 @@ public class ExcelQuestionParser {
             // Should have been caught by validateNumericAnswer; defensive.
         }
         return new ValidQuestionRow(rowNumber, code, type, content, points, difficulty,
-                explanation, null, null, null, null, normalized, NUMERIC_RAW_LENGTH,
-                rounding.trim());
+                explanation, null, null, null, null, normalized);
     }
 
     private void validateNumericAnswer(String raw, int rowNumber, String code,

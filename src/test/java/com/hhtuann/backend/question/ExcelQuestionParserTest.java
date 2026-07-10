@@ -57,8 +57,7 @@ class ExcelQuestionParserTest {
     private static final int C_ST_D = 18;
     private static final int C_ST_D_ANS = 19;
     private static final int C_NUMERIC = 20;
-    private static final int C_ROUNDING = 21;
-    private static final int C_EXPL = 22;
+    private static final int C_EXPL = 21;
 
     // ==================== Happy paths ====================
 
@@ -145,14 +144,11 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.50");
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertThat(r.validRows()).hasSize(1);
         ValidQuestionRow v = r.validRows().get(0);
         assertThat(v.expectedAnswer()).isEqualTo("2.50");
-        assertThat(v.requiredInputLength()).isEqualTo(4);
-        assertThat(v.roundingInstruction()).isEqualTo("2dp");
     }
 
     @Test
@@ -165,7 +161,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2,50");
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertThat(r.validRows()).hasSize(1);
@@ -181,7 +176,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "02.5");
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertThat(r.validRows()).hasSize(1);
@@ -197,7 +191,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "-1.5");
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertThat(r.validRows()).hasSize(1);
@@ -215,7 +208,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             row.createCell(C_NUMERIC).setCellValue(2.5); // NUMERIC cell
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
@@ -230,7 +222,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             row.createCell(C_NUMERIC).setCellFormula("1+1"); // FORMULA
-            set(row, C_ROUNDING, "2dp");
         }));
 
         // Formula cell is detected up-front as ROW_INVALID.
@@ -246,7 +237,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.5"); // 3 chars
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
@@ -261,7 +251,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.500"); // 5 chars
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
@@ -276,7 +265,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, " 2.5"); // leading space, 4 chars
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
@@ -291,7 +279,6 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "1e10"); // 4 chars but invalid
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
@@ -306,14 +293,14 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "+1.5"); // 4 chars but plus not allowed
-            set(row, C_ROUNDING, "2dp");
         }));
 
         assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
-    void parse_numericRoundingBlank_isRejected() throws Exception {
+    void parse_numericNoRoundingColumn_stillValid() throws Exception {
+        // roundingInstruction now lives in the content; the rounding column is gone entirely.
         ImportResult r = parse(workbookWith(row -> {
             set(row, C_CODE, "QN8");
             set(row, C_TYPE, "NUMERIC_FILL");
@@ -321,11 +308,10 @@ class ExcelQuestionParserTest {
             set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.50");
-            // rounding left blank
         }));
 
-        assertSingleError(r, "rounding_instruction",
-                QuestionErrorCode.QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED);
+        assertThat(r.validRows()).hasSize(1);
+        assertThat(r.errors()).isEmpty();
     }
 
     // ==================== CHOICE rejections ====================

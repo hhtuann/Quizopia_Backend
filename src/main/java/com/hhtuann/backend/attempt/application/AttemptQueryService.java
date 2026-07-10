@@ -42,7 +42,7 @@ import java.util.StringJoiner;
  * <p><b>No N+1:</b> detail = auth(3) + attempt(1) + joined questions(1) + options batch(1) + answers
  * batch(1) = 7 constant; my = auth(3) + page(1) + count(1) = 5 constant.
  * <p><b>Data-leak:</b> only student-safe fields; {@code answer_key} is projected to
- * {@code roundingInstruction} only (never the full JSON); options carry no {@code isCorrect}.
+ * (never the answer key JSON); options carry no {@code isCorrect}.
  */
 @Service
 @Transactional(readOnly = true)
@@ -75,18 +75,17 @@ public class AttemptQueryService {
         Attempt attempt = loadOwnedAttempt(attemptId, profile); // 404 anti-enumeration
         Instant serverTime = Instant.now(clock);
 
-        // 1 joined query: ordered attempt_questions + safe exam_question fields + numeric rounding.
+        // 1 joined query: ordered attempt_questions + safe exam_question fields.
         List<AqRow> rows = jdbc.query(
                 "SELECT aq.id AS aq_id, aq.exam_question_id, aq.question_type, aq.default_points, "
-                        + "aq.display_order, aq.option_order, eq.content, "
-                        + "eq.answer_key ->> 'roundingInstruction' AS rounding_instruction "
+                        + "aq.display_order, aq.option_order, eq.content "
                         + "FROM attempt_questions aq JOIN exam_questions eq ON eq.id = aq.exam_question_id "
                         + "WHERE aq.attempt_id = ? ORDER BY aq.display_order ASC, aq.id ASC",
                 (rs, n) -> new AqRow(
                         rs.getLong("aq_id"), rs.getLong("exam_question_id"), rs.getString("question_type"),
                         rs.getBigDecimal("default_points"), rs.getInt("display_order"),
                         parseJson(rs.getString("option_order")),
-                        rs.getString("content"), rs.getString("rounding_instruction")),
+                        rs.getString("content")),
                 attemptId);
 
         Map<Long, Map<String, String>> contentByEqAndKey = batchOptions(rows);       // 2 options batch
@@ -108,7 +107,7 @@ public class AttemptQueryService {
                 }
             }
             questionViews.add(new QuestionView(r.aqId, r.examQuestionId, r.questionType, r.displayOrder,
-                    r.content, r.defaultPoints, r.roundingInstruction, options, savedAnswer));
+                    r.content, r.defaultPoints, options, savedAnswer));
         }
         return new AttemptDetailResponse(attempt.getId(), attempt.getExamSessionId(), attempt.getAttemptNumber(),
                 attempt.getStatus().name(), attempt.getStartedAt(), attempt.getDeadlineAt(),
@@ -228,7 +227,7 @@ public class AttemptQueryService {
     }
 
     private record AqRow(Long aqId, Long examQuestionId, String questionType, BigDecimal defaultPoints,
-                         Integer displayOrder, JsonNode optionOrder, String content, String roundingInstruction) {}
+                         Integer displayOrder, JsonNode optionOrder, String content) {}
 
     private record AnswerRow(JsonNode payload, Long sequence) {}
 }

@@ -168,17 +168,16 @@ class V6V7SchemaIntegrationTests {
     }
 
     @Test
-    void answerKeyRejectsString4() {
-        assertThatThrownBy(() -> insertVersionForNewQuestion("AK-STR", "NUMERIC_FILL",
-                "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":\"4\",\"roundingInstruction\":\"r2\"}'::jsonb"))
-                .isInstanceOf(DataIntegrityViolationException.class);
+    void answerKeyAcceptsExpectedAnswerOnly() {
+        // V12: only expectedAnswer is required.
+        insertVersionForNewQuestion("AK-MIN", "NUMERIC_FILL", "'{\"expectedAnswer\":\"2.50\"}'::jsonb");
     }
 
     @Test
-    void answerKeyRejectsNumber5() {
-        assertThatThrownBy(() -> insertVersionForNewQuestion("AK-5", "NUMERIC_FILL",
-                "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":5,\"roundingInstruction\":\"r2\"}'::jsonb"))
-                .isInstanceOf(DataIntegrityViolationException.class);
+    void answerKeyIgnoresLegacyExtraKeys() {
+        // Legacy 3-field literals still satisfy the relaxed CHECK.
+        insertVersionForNewQuestion("AK-LEGACY", "NUMERIC_FILL",
+                "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"r2\"}'::jsonb");
     }
 
     @Test
@@ -199,13 +198,6 @@ class V6V7SchemaIntegrationTests {
     void answerKeyRejectsComma() {
         assertThatThrownBy(() -> insertVersionForNewQuestion("AK-COMMA", "NUMERIC_FILL",
                 "'{\"expectedAnswer\":\"2,50\",\"requiredInputLength\":4,\"roundingInstruction\":\"r2\"}'::jsonb"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void answerKeyRejectsBlankRoundingInstruction() {
-        assertThatThrownBy(() -> insertVersionForNewQuestion("AK-BLANK", "NUMERIC_FILL",
-                "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"   \"}'::jsonb"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 

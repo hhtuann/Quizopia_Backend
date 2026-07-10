@@ -24,7 +24,6 @@ public record AttemptDetailResponse(
     public record QuestionView(
             Long attemptQuestionId, Long examQuestionId, String questionType,
             Integer displayOrder, String content, BigDecimal defaultPoints,
-            String roundingInstruction,
             List<OptionView> options,
             SavedAnswerView savedAnswer) {}
 

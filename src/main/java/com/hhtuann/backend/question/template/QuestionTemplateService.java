@@ -50,7 +50,7 @@ public class QuestionTemplateService {
             "statement_b", "statement_b_answer",
             "statement_c", "statement_c_answer",
             "statement_d", "statement_d_answer",
-            "numeric_answer", "rounding_instruction", "explanation");
+            "numeric_answer", "explanation");
 
     private static final int COL_NUMERIC_ANSWER = 20;
     private static final String TEXT_FORMAT = "@";
@@ -171,7 +171,7 @@ public class QuestionTemplateService {
         set(r, 7, "3");
         set(r, 8, "4");
         set(r, 11, "B");
-        set(r, 22, "2 is the correct answer.");
+        set(r, 21, "2 is the correct answer.");
     }
 
     private void writeMultipleChoiceExample(Sheet sheet, int rowIdx) {
@@ -209,13 +209,13 @@ public class QuestionTemplateService {
         Row r = getOrCreateRow(sheet, rowIdx);
         set(r, 0, "EX-NUM");
         set(r, 1, "NUMERIC_FILL");
-        set(r, 2, "What is 5/2?");
+        set(r, 2, "What is 5/2? (answer with 2 decimal places)");
         set(r, 3, "1");
         set(r, 4, "EASY");
         // numeric_answer MUST be a STRING cell. The Text style is applied to
         // this column after the examples are written (see buildQuestionsSheet).
+        // The rounding/format hint is part of the content (no separate column).
         r.createCell(COL_NUMERIC_ANSWER).setCellValue("2.50");
-        set(r, 21, "Round to 2 decimal places");
     }
 
     private static Row getOrCreateRow(Sheet sheet, int rowIdx) {
@@ -239,7 +239,7 @@ public class QuestionTemplateService {
                 "   exactly one correct answer.",
                 "7. MULTIPLE_CHOICE: options A-D required, at least two correct answers.",
                 "8. TRUE_FALSE_MATRIX: statements A-D required, each answered TRUE or FALSE.",
-                "9. NUMERIC_FILL: numeric_answer (4 chars, text) + rounding_instruction required.",
+                "9. NUMERIC_FILL: numeric_answer (4 chars, text). Put the rounding/format hint in the content.",
                 "10. question_code must be unique within the file (case-insensitive).",
                 "11. Blank rows are ignored."
         };

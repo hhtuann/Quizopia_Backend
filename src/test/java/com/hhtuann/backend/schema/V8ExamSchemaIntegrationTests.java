@@ -80,11 +80,11 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; the latest version is 11 (V9 Day 7 + V10 Classes + V11 Onboarding).
+        // V1–V8 are all applied; the latest version is 12 (V9 Day 7 + V10 Classes + V11 Onboarding + V12 Numeric answer_key).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("11");
+        assertThat(current).isEqualTo("12");
     }
 
     @Test
@@ -684,13 +684,9 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void numericRejectsRequiredInputLengthString() {
-        assertNumericRejected("'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":\"4\",\"roundingInstruction\":\"r2\"}'::jsonb");
-    }
-
-    @Test
-    void numericRejectsRequiredInputLengthNot4() {
-        assertNumericRejected("'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":5,\"roundingInstruction\":\"r2\"}'::jsonb");
+    void numericAcceptsExpectedAnswerOnly() {
+        // V12: only expectedAnswer is required (requiredInputLength/roundingInstruction removed).
+        assertNumericAccepted("'{\"expectedAnswer\":\"2.50\"}'::jsonb");
     }
 
     @Test
@@ -701,16 +697,6 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void numericRejectsCommaInExpectedAnswer() {
         assertNumericRejected("'{\"expectedAnswer\":\"2,50\",\"requiredInputLength\":4,\"roundingInstruction\":\"r2\"}'::jsonb");
-    }
-
-    @Test
-    void numericRejectsMissingProperty() {
-        assertNumericRejected("'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4}'::jsonb");
-    }
-
-    @Test
-    void numericRejectsBlankRoundingInstruction() {
-        assertNumericRejected("'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"   \"}'::jsonb");
     }
 
     @Test

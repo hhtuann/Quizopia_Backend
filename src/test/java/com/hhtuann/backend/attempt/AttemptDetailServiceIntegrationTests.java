@@ -291,21 +291,20 @@ class AttemptDetailServiceIntegrationTests {
         assertThat(r.questions()).allSatisfy(q -> assertThat(q.savedAnswer()).isNull());
     }
 
-    // === numeric rounding ===
+    // === numeric (rounding now lives in the question content, not the DTO) ===
 
     @Test
-    void detailNumericReturnsRoundingInstructionOnly() {
+    void detailNumericHasNoOptions() {
         AttemptDetailResponse.QuestionView numeric = byType(queryService.getAttemptDetail(studentUserId, activeAttempt()), "NUMERIC_FILL");
-        assertThat(numeric.roundingInstruction()).isEqualTo("two decimals");
         assertThat(numeric.options()).isEmpty(); // NUMERIC has 0 options
     }
 
     @Test
-    void detailNumericDoesNotLeakExpectedAnswerOrRequiredInputLength() {
+    void detailNumericDoesNotLeakAnswerKey() {
         AttemptDetailResponse.QuestionView numeric = byType(queryService.getAttemptDetail(studentUserId, activeAttempt()), "NUMERIC_FILL");
-        // The QuestionView record only exposes roundingInstruction; expectedAnswer/requiredInputLength are not fields.
-        assertThat(numeric.roundingInstruction()).isEqualTo("two decimals");
-        // Structural guarantee is enforced by AttemptDataLeakStructuralTest (reflection).
+        // The QuestionView record exposes no answer-key fields (expectedAnswer/answerKey/isCorrect);
+        // the structural guarantee is enforced by AttemptDataLeakStructuralTest (reflection).
+        assertThat(numeric.options()).isEmpty();
     }
 
     // === corrupted snapshot ===

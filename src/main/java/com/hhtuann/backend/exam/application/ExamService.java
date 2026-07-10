@@ -591,10 +591,7 @@ public class ExamService {
                         || answerKey == null
                         || !answerKey.path("expectedAnswer").isTextual()
                         || answerKey.path("expectedAnswer").asString().length() != 4
-                        || !answerKey.path("requiredInputLength").isNumber()
-                        || answerKey.path("requiredInputLength").asInt() != 4
-                        || !answerKey.path("roundingInstruction").isTextual()
-                        || answerKey.path("roundingInstruction").asString().isBlank()) {
+                        || !answerKey.path("expectedAnswer").asString().matches("^-?[0-9]+([.][0-9]+)?$")) {
                     throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR);
                 }
             }

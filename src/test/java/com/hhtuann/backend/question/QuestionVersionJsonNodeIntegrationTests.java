@@ -61,9 +61,7 @@ class QuestionVersionJsonNodeIntegrationTests {
                 new Question(bankId, "Q-JSON-1", userId));
 
         ObjectNode answerKey = JsonNodeFactory.instance.objectNode();
-        answerKey.put("expectedAnswer", "2.50");        // JSON string
-        answerKey.put("requiredInputLength", 4);          // JSON number
-        answerKey.put("roundingInstruction", "Round to 2 dp");
+        answerKey.put("expectedAnswer", "2.50");        // JSON string — the only key (V12)
 
         QuestionVersion version = new QuestionVersion(
                 question.getId(), 1, QuestionType.NUMERIC_FILL,
@@ -79,14 +77,11 @@ class QuestionVersionJsonNodeIntegrationTests {
         assertThat(ak).isNotNull();
         assertThat(ak.get("expectedAnswer").isString()).isTrue();
         assertThat(ak.get("expectedAnswer").asString()).isEqualTo("2.50");
-        assertThat(ak.get("requiredInputLength").isNumber()).isTrue();
-        assertThat(ak.get("requiredInputLength").intValue()).isEqualTo(4);
-        assertThat(ak.get("roundingInstruction").asString()).isEqualTo("Round to 2 dp");
         assertThat(readBack.getMetadata().isObject()).isTrue();
     }
 
     @Test
-    void persistRequiredInputLengthAsString_rejectedByDbCheck() {
+    void persistExpectedAnswerWrongLength_rejectedByDbCheck() {
         long[] ids = seedPrerequisites();
         long bankId = ids[0];
         long userId = ids[2];
@@ -95,9 +90,7 @@ class QuestionVersionJsonNodeIntegrationTests {
                 new Question(bankId, "Q-JSON-BAD", userId));
 
         ObjectNode badAnswerKey = JsonNodeFactory.instance.objectNode();
-        badAnswerKey.put("expectedAnswer", "1.25");
-        badAnswerKey.put("requiredInputLength", "4"); // STRING, not number!
-        badAnswerKey.put("roundingInstruction", "r2");
+        badAnswerKey.put("expectedAnswer", "1.2"); // 3 chars, not 4!
 
         QuestionVersion version = new QuestionVersion(
                 question.getId(), 1, QuestionType.NUMERIC_FILL,

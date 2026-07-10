@@ -15,9 +15,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Day 8 §13.1 — grader unit tests. Pure (no Spring); proves the frozen grading rules: all-or-nothing per
- * question, BigDecimal-only arithmetic, NUMERIC uses {@code compareTo} (1 == 1.0 == 1.00, never equals),
- * order-independent set/matrix comparison, and fail-closed on missing key / non-positive max score.
+ * Grader unit tests. Pure (no Spring); proves the grading rules: SINGLE/MULTIPLE/NUMERIC are
+ * all-or-nothing, TRUE_FALSE_MATRIX awards proportional credit, NUMERIC uses exact String equality
+ * (1.00 != 1), order-independent set/matrix comparison, BigDecimal-only arithmetic, and fail-closed on
+ * missing key / non-positive max score.
  */
 class GraderTest {
 
@@ -91,24 +92,41 @@ class GraderTest {
     class TrueFalseMatrix {
         private final Map<String, Boolean> key = Map.of("A", true, "B", false, "C", true, "D", false);
 
-        @Test void exactMatch() {
-            assertThat(Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true, "D", false)).correct()).isTrue();
+        @Test void exactMatch_fullCredit() {
+            QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true, "D", false));
+            assertThat(g.correct()).isTrue();
+            assertThat(g.awardedScore()).isEqualByComparingTo("2.00");
         }
         @Test void reorderedRowsMatch() {
             assertThat(Grader.gradeMatrix(TWO, key, Map.of("D", false, "C", true, "B", false, "A", true)).correct()).isTrue();
         }
-        @Test void oneWrongBoolean() {
-            assertThat(Grader.gradeMatrix(TWO, key, Map.of("A", false, "B", false, "C", true, "D", false)).correct()).isFalse();
+        @Test void threeOfFour_proportionalCredit() {
+            // 3 of 4 correct → 75% of maxScore; not "fully correct".
+            QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of("A", false, "B", false, "C", true, "D", false));
+            assertThat(g.correct()).isFalse();
+            assertThat(g.awardedScore()).isEqualByComparingTo("1.50");
         }
-        @Test void missingRow() {
-            assertThat(Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true)).correct()).isFalse();
+        @Test void oneOfFour_proportionalCredit() {
+            QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", true, "C", false, "D", true));
+            assertThat(g.correct()).isFalse();
+            assertThat(g.awardedScore()).isEqualByComparingTo("0.50");
         }
-        @Test void extraRow() {
-            assertThat(Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true, "D", false, "E", true)).correct()).isFalse();
+        @Test void missingRowCountsAsNotCorrect() {
+            // 3 answered (all right), 1 missing → 3/4 credit.
+            QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true));
+            assertThat(g.correct()).isFalse();
+            assertThat(g.awardedScore()).isEqualByComparingTo("1.50");
+        }
+        @Test void extraRowIgnoredForCredit() {
+            // A key outside the 4 statements is ignored; the 4 correct → full credit.
+            QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of("A", true, "B", false, "C", true, "D", false, "E", true));
+            assertThat(g.correct()).isTrue();
+            assertThat(g.awardedScore()).isEqualByComparingTo("2.00");
         }
         @Test void unanswered() {
             QuestionGrade g = Grader.gradeMatrix(TWO, key, Map.of());
             assertThat(g.correct()).isFalse(); assertThat(g.answered()).isFalse();
+            assertThat(g.awardedScore()).isEqualByComparingTo("0");
         }
         @Test void missingKeyThrows() {
             assertThatThrownBy(() -> Grader.gradeMatrix(TWO, Map.of(), Map.of("A", true))).isInstanceOf(GradingException.class);
@@ -117,37 +135,34 @@ class GraderTest {
 
     @Nested
     class NumericFill {
-        @Test void oneEqualsOnePointZero() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("1"), new BigDecimal("1.0")).correct()).isTrue();
+        @Test void exactStringMatch() {
+            assertThat(Grader.gradeNumeric(TWO, "1.00", "1.00").correct()).isTrue();
         }
-        @Test void onePointZeroZeroEqualsOne() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("1.00"), new BigDecimal("1")).correct()).isTrue();
+        @Test void differentRepresentationIsWrong() {
+            // Exact string match: "1" != "1.00" (no numeric normalization).
+            assertThat(Grader.gradeNumeric(TWO, "1.00", "1").correct()).isFalse();
         }
         @Test void negative() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("-1.25"), new BigDecimal("-1.25")).correct()).isTrue();
+            assertThat(Grader.gradeNumeric(TWO, "-1.25", "-1.25").correct()).isTrue();
         }
         @Test void zero() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("0"), new BigDecimal("0.00")).correct()).isTrue();
+            assertThat(Grader.gradeNumeric(TWO, "0.00", "0.00").correct()).isTrue();
         }
         @Test void decimal() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("2.50"), new BigDecimal("2.50")).correct()).isTrue();
-        }
-        @Test void largeValidDecimal() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("9999999999.99"), new BigDecimal("9999999999.99")).correct()).isTrue();
+            assertThat(Grader.gradeNumeric(TWO, "2.50", "2.50").correct()).isTrue();
         }
         @Test void wrongValue() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("2.50"), new BigDecimal("2.5")).correct())
-                    .as("compareTo treats 2.50 == 2.5 as equal").isTrue();
+            assertThat(Grader.gradeNumeric(TWO, "2.50", "3.00").correct()).isFalse();
         }
-        @Test void wrongValueActuallyDifferent() {
-            assertThat(Grader.gradeNumeric(TWO, new BigDecimal("2.50"), new BigDecimal("3.00")).correct()).isFalse();
+        @Test void trailingSpaceIsWrong() {
+            assertThat(Grader.gradeNumeric(TWO, "1.00", "1.0 ").correct()).isFalse();
         }
         @Test void unanswered() {
-            QuestionGrade g = Grader.gradeNumeric(TWO, new BigDecimal("2.50"), null);
+            QuestionGrade g = Grader.gradeNumeric(TWO, "2.50", null);
             assertThat(g.correct()).isFalse(); assertThat(g.answered()).isFalse();
         }
         @Test void missingExpectedThrows() {
-            assertThatThrownBy(() -> Grader.gradeNumeric(TWO, null, new BigDecimal("1")))
+            assertThatThrownBy(() -> Grader.gradeNumeric(TWO, null, "1"))
                     .isInstanceOf(GradingException.class);
         }
     }
@@ -159,7 +174,7 @@ class GraderTest {
                     Grader.gradeSingle(ONE, "B", "B"),
                     Grader.gradeMultiple(TWO, Set.of("A", "C"), Set.of("A", "C")),
                     Grader.gradeMatrix(ONE, Map.of("A", true), Map.of("A", true)),
-                    Grader.gradeNumeric(ONE, new BigDecimal("1"), new BigDecimal("1"))));
+                    Grader.gradeNumeric(ONE, "1.00", "1.00")));
             assertThat(a.maxScore()).isEqualByComparingTo("5");
             assertThat(a.score()).isEqualByComparingTo("5");
             assertThat(a.percentage()).isEqualByComparingTo("100.00");
@@ -167,7 +182,7 @@ class GraderTest {
         @Test void allWrong() {
             AttemptGrade a = Grader.aggregate(List.of(
                     Grader.gradeSingle(ONE, "B", "A"),
-                    Grader.gradeNumeric(ONE, new BigDecimal("1"), new BigDecimal("2"))));
+                    Grader.gradeNumeric(ONE, "1.00", "2.00")));
             assertThat(a.score()).isEqualByComparingTo("0");
             assertThat(a.percentage()).isEqualByComparingTo("0.00");
         }

@@ -70,13 +70,13 @@ class V9AttemptSchemaStagedFlywayTest {
                     .locations("classpath:db/migration")
                     .load().migrate();
 
-            // 5. Latest applied version is 11 (V9 + V10 + V11 applied after V8).
+            // 5. Latest applied version is 12 (V9 + V10 + V11 + V12 applied after V8).
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("11");
+                assertThat(rs.getString(1)).isEqualTo("12");
             }
 
             // 6. All six V9 tables now exist.

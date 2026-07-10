@@ -353,21 +353,6 @@ class QuestionImportServiceIntegrationTests {
                 "SELECT answer_key->>'expectedAnswer' FROM question_versions WHERE question_id = ?",
                 String.class, questionId);
         assertThat(expectedAnswer).isEqualTo("2.50");
-
-        String requiredInputLengthType = jdbc.queryForObject(
-                "SELECT jsonb_typeof(answer_key->'requiredInputLength') FROM question_versions WHERE question_id = ?",
-                String.class, questionId);
-        assertThat(requiredInputLengthType).isEqualTo("number");
-
-        Integer requiredInputLength = jdbc.queryForObject(
-                "SELECT (answer_key->'requiredInputLength')::text::int FROM question_versions WHERE question_id = ?",
-                Integer.class, questionId);
-        assertThat(requiredInputLength).isEqualTo(4);
-
-        String roundingInstruction = jdbc.queryForObject(
-                "SELECT answer_key->>'roundingInstruction' FROM question_versions WHERE question_id = ?",
-                String.class, questionId);
-        assertThat(roundingInstruction).isNotBlank().isEqualTo("2dp");
     }
 
     @Test

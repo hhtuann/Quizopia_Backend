@@ -42,10 +42,10 @@ class UserEncryptedPersonalDataIntegrationTests {
                 .createNativeQuery("SELECT version FROM flyway_schema_history WHERE type = 'SQL' ORDER BY installed_rank", String.class)
                 .getResultList();
 
-        // Latest version bumped to 11 by V11__student_onboarding.sql (Student Onboarding).
+        // Latest version bumped to 12 by V12__simplify_numeric_answer_key.sql (NUMERIC answer_key).
         // This test pins the current Flyway version and must be updated whenever a migration is added.
-        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11");
-        assertThat(versions).endsWith("11");
+        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12");
+        assertThat(versions).endsWith("12");
     }
 
     @Test

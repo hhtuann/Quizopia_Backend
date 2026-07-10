@@ -239,11 +239,8 @@ public class QuestionImportService {
         }
         ObjectNode node = JsonNodeFactory.instance.objectNode();
         // expectedAnswer: JSON string, preserved verbatim (no strip, no reparse).
+        // requiredInputLength is a constant 4 (frontend input); roundingInstruction lives in the content.
         node.put("expectedAnswer", row.expectedAnswer());
-        // requiredInputLength: JSON number (int, not string).
-        node.put("requiredInputLength", row.requiredInputLength());
-        // roundingInstruction: JSON string.
-        node.put("roundingInstruction", row.roundingInstruction());
         return node;
     }
 

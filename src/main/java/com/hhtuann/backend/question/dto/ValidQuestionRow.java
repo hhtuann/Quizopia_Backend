@@ -26,7 +26,5 @@ public record ValidQuestionRow(
         Map<String, String> statements,
         Map<String, Boolean> statementAnswers,
         // NUMERIC_FILL only
-        String expectedAnswer,
-        int requiredInputLength,
-        String roundingInstruction
+        String expectedAnswer
 ) {}

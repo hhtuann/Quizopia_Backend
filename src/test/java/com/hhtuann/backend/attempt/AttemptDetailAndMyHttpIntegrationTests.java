@@ -151,11 +151,10 @@ class AttemptDetailAndMyHttpIntegrationTests {
     }
 
     @Test
-    void detailNumericHasRoundingInstructionNoLeak() throws Exception {
+    void detailNumericHasNoAnswerKeyLeak() throws Exception {
         mockMvc.perform(get("/api/attempts/" + attemptId).with(jwt().jwt(j -> j.subject(String.valueOf(studentUserId)))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.questions[?(@.questionType=='NUMERIC_FILL')].roundingInstruction").value("two decimals"))
-                // No leak fields on any question/option:
+                // No leak fields on any question/option (roundingInstruction now lives in the content):
                 .andExpect(jsonPath("$.questions[*].answerKey").doesNotExist())
                 .andExpect(jsonPath("$.questions[*].expectedAnswer").doesNotExist())
                 .andExpect(jsonPath("$.questions[*].isCorrect").doesNotExist())

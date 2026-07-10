@@ -234,7 +234,7 @@ public class AttemptGradingService {
         return (n == null || n.isNull()) ? null : n.asString();
     }
 
-    private BigDecimal expectedNumeric(ExamQuestion eq) {
+    private String expectedNumeric(ExamQuestion eq) {
         JsonNode key = eq.getAnswerKey();
         if (key == null || !key.isObject()) {
             throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "numeric-fill missing answer key");
@@ -244,26 +244,14 @@ public class AttemptGradingService {
             throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT,
                     "numeric-fill missing expectedAnswer");
         }
-        return parseNumeric(node.asString());
+        return node.asString();
     }
 
-    private BigDecimal numericValue(JsonNode payload) {
+    private String numericValue(JsonNode payload) {
         if (payload == null) {
             return null;
         }
         JsonNode node = payload.get("value");
-        return (node == null || node.isNull() || !node.isString()) ? null : parseNumeric(node.asString());
-    }
-
-    /**
-     * Parses a stored numeric string to BigDecimal (comma → dot per Day 7 grading
-     * rule; never double).
-     */
-    private static BigDecimal parseNumeric(String raw) {
-        try {
-            return new BigDecimal(raw.replace(',', '.'));
-        } catch (NumberFormatException e) {
-            throw new GradingException(GradingErrorCode.GRADING_DATA_INCONSISTENT, "numeric-fill unparseable value");
-        }
+        return (node == null || node.isNull() || !node.isString()) ? null : node.asString();
     }
 }

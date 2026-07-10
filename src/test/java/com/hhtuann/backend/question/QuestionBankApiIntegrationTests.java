@@ -427,11 +427,11 @@ class QuestionBankApiIntegrationTests {
             assertThat(wb.getSheetName(1)).isEqualTo("Instructions");
 
             org.apache.poi.ss.usermodel.Sheet q = wb.getSheetAt(0);
-            // 23 headers in order
+            // 22 headers in order (rounding_instruction removed)
             org.apache.poi.ss.usermodel.Row header = q.getRow(0);
-            assertThat(header.getLastCellNum()).isEqualTo((short) 23);
+            assertThat(header.getLastCellNum()).isEqualTo((short) 22);
             assertThat(header.getCell(0).getStringCellValue()).isEqualTo("question_code");
-            assertThat(header.getCell(22).getStringCellValue()).isEqualTo("explanation");
+            assertThat(header.getCell(21).getStringCellValue()).isEqualTo("explanation");
 
             // 4 example rows, one per type (rows 1-4)
             assertThat(q.getRow(1).getCell(1).getStringCellValue()).isEqualTo("SINGLE_CHOICE");
