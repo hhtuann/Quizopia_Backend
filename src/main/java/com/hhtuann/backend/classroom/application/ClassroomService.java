@@ -237,13 +237,24 @@ public class ClassroomService {
 
         Collections.sort(duplicated);
         Collections.sort(invalid);
-        // Notify the teacher that students joined their class.
+        // Notify the teacher + each added student.
         if (!toInsert.isEmpty()) {
             notificationService.create(userId,
                     com.hhtuann.backend.notification.domain.model.NotificationType.STUDENT_JOINED_CLASS,
                     "Students joined class",
                     toInsert.size() + " student" + (toInsert.size() == 1 ? "" : "s") + " added to " + classroom.getName(),
                     "/classes/" + classroomId);
+            // Notify each student they were added to the class.
+            for (Long spId : toInsert) {
+                StudentProfile sp = profiles.get(spId);
+                if (sp != null) {
+                    notificationService.create(sp.getUserId(),
+                            com.hhtuann.backend.notification.domain.model.NotificationType.ADDED_TO_CLASS,
+                            "Added to class",
+                            "You were added to " + classroom.getName(),
+                            "/sessions");
+                }
+            }
         }
         return new AddMembersResponse(toInsert.size(), duplicated, invalid);
     }
