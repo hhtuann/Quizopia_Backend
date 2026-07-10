@@ -65,11 +65,13 @@ public class AttemptSubmitService {
     private final Clock clock;
     private final ApplicationEventPublisher eventPublisher;
     private final com.hhtuann.backend.grading.AttemptGradingService gradingService;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public AttemptSubmitService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                 IdempotencyRecordRepository idempotencyRepo, ObjectMapper objectMapper,
                                 Clock clock, ApplicationEventPublisher eventPublisher,
-                                com.hhtuann.backend.grading.AttemptGradingService gradingService) {
+                                com.hhtuann.backend.grading.AttemptGradingService gradingService,
+                                com.hhtuann.backend.notification.application.NotificationService notificationService) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.idempotencyRepo = idempotencyRepo;
@@ -77,6 +79,7 @@ public class AttemptSubmitService {
         this.clock = clock;
         this.eventPublisher = eventPublisher;
         this.gradingService = gradingService;
+        this.notificationService = notificationService;
     }
 
     @Transactional
@@ -166,6 +169,12 @@ public class AttemptSubmitService {
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
                 attempt.getStudentProfileId(), now));
+        // Notify the student that their result is graded.
+        notificationService.create(userId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.RESULT_GRADED,
+                "Result available",
+                "Your exam has been graded: " + grade.getFinalScore() + "/" + grade.getMaxScore(),
+                "/attempts/" + attemptId + "/result");
         return response;
     }
 

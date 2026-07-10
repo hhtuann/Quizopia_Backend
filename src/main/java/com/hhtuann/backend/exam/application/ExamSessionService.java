@@ -59,6 +59,7 @@ public class ExamSessionService {
     private final ClassroomRepository classroomRepository;
     private final NamedParameterJdbcTemplate jdbc;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public ExamSessionService(ExamAuthorizationService auth,
             ExamRepository examRepository,
@@ -67,7 +68,8 @@ public class ExamSessionService {
             ExamSessionParticipantRepository participantRepository,
             ClassroomRepository classroomRepository,
             NamedParameterJdbcTemplate jdbc,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher,
+            com.hhtuann.backend.notification.application.NotificationService notificationService) {
         this.auth = auth;
         this.examRepository = examRepository;
         this.versionRepository = versionRepository;
@@ -76,6 +78,7 @@ public class ExamSessionService {
         this.classroomRepository = classroomRepository;
         this.jdbc = jdbc;
         this.eventPublisher = eventPublisher;
+        this.notificationService = notificationService;
     }
 
     // ============================================================
@@ -336,6 +339,12 @@ public class ExamSessionService {
         session.close(now); // OPEN → CLOSED + closedAt (V8 invariant: openedAt & closedAt set)
         sessionRepository.saveAndFlush(session);
         eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
+        // Notify the session owner that the session has ended.
+        notificationService.create(session.getCreatedBy(),
+                com.hhtuann.backend.notification.domain.model.NotificationType.SESSION_ENDED,
+                "Session ended",
+                "Exam session has been closed.",
+                "/exam-sessions/" + sessionId);
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 

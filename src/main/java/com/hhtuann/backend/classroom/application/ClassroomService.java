@@ -58,6 +58,7 @@ public class ClassroomService {
     private final RolePermissionRepository rolePermissionRepository;
     private final EntityManager entityManager;
     private final Clock clock;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public ClassroomService(TeacherProfileRepository teacherProfileRepository,
             StudentProfileRepository studentProfileRepository,
@@ -66,7 +67,8 @@ public class ClassroomService {
             UserRoleRepository userRoleRepository,
             RolePermissionRepository rolePermissionRepository,
             EntityManager entityManager,
-            Clock clock) {
+            Clock clock,
+            com.hhtuann.backend.notification.application.NotificationService notificationService) {
         this.teacherProfileRepository = teacherProfileRepository;
         this.studentProfileRepository = studentProfileRepository;
         this.classroomRepository = classroomRepository;
@@ -75,6 +77,7 @@ public class ClassroomService {
         this.rolePermissionRepository = rolePermissionRepository;
         this.entityManager = entityManager;
         this.clock = clock;
+        this.notificationService = notificationService;
     }
 
     // ============================================================
@@ -234,6 +237,14 @@ public class ClassroomService {
 
         Collections.sort(duplicated);
         Collections.sort(invalid);
+        // Notify the teacher that students joined their class.
+        if (!toInsert.isEmpty()) {
+            notificationService.create(userId,
+                    com.hhtuann.backend.notification.domain.model.NotificationType.STUDENT_JOINED_CLASS,
+                    "Students joined class",
+                    toInsert.size() + " student" + (toInsert.size() == 1 ? "" : "s") + " added to " + classroom.getName(),
+                    "/classes/" + classroomId);
+        }
         return new AddMembersResponse(toInsert.size(), duplicated, invalid);
     }
 

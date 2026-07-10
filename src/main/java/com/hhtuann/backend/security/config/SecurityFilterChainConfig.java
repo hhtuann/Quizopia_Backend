@@ -72,6 +72,7 @@ public class SecurityFilterChainConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers("/api/questions/**").authenticated()
+                        .requestMatchers("/api/notifications/**").authenticated()
                         // Academic API (subjects CRUD + grade-levels). Permissions (SUBJECT_READ /
                         // SUBJECT_CREATE / SUBJECT_UPDATE / SUBJECT_STATUS_UPDATE / GRADE_LEVEL_READ)
                         // are enforced in AcademicService (deny-by-default); these rules only let an

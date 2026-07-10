@@ -50,6 +50,7 @@ public class QuestionImportService {
     private final QuestionVersionRepository versionRepository;
     private final QuestionOptionRepository optionRepository;
     private final Clock clock;
+    private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public QuestionImportService(UserRoleRepository userRoleRepository,
             RolePermissionRepository rolePermissionRepository,
@@ -58,7 +59,8 @@ public class QuestionImportService {
             QuestionRepository questionRepository,
             QuestionVersionRepository versionRepository,
             QuestionOptionRepository optionRepository,
-            Clock clock) {
+            Clock clock,
+            com.hhtuann.backend.notification.application.NotificationService notificationService) {
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
         this.teacherProfileRepository = teacherProfileRepository;
@@ -67,6 +69,7 @@ public class QuestionImportService {
         this.versionRepository = versionRepository;
         this.optionRepository = optionRepository;
         this.clock = clock;
+        this.notificationService = notificationService;
     }
 
     @SuppressWarnings("null")
@@ -106,6 +109,13 @@ public class QuestionImportService {
         allErrors.sort(Comparator.comparingInt(RowError::rowNumber));
 
         long invalidRows = allErrors.stream().map(RowError::rowNumber).distinct().count();
+
+        // Notify the teacher that the import is done.
+        notificationService.create(userId,
+                com.hhtuann.backend.notification.domain.model.NotificationType.IMPORT_COMPLETED,
+                "Import completed",
+                importedRows + "/" + parseResult.totalRows() + " questions imported" + (invalidRows > 0 ? " (" + invalidRows + " errors)" : ""),
+                "/question-banks/" + bankId);
 
         return new ImportResponse(
                 parseResult.totalRows(),
