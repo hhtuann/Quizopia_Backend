@@ -2,14 +2,19 @@ package com.hhtuann.backend.academic.application;
 
 import com.hhtuann.backend.academic.domain.model.AcademicStatus;
 import com.hhtuann.backend.academic.domain.model.GradeLevel;
+import com.hhtuann.backend.academic.domain.model.School;
 import com.hhtuann.backend.academic.domain.model.Subject;
 import com.hhtuann.backend.academic.domain.model.TeacherProfile;
+import com.hhtuann.backend.academic.dto.CreateSchoolRequest;
 import com.hhtuann.backend.academic.dto.CreateSubjectRequest;
 import com.hhtuann.backend.academic.dto.GradeLevelListResponse;
 import com.hhtuann.backend.academic.dto.GradeLevelView;
+import com.hhtuann.backend.academic.dto.SchoolListResponse;
+import com.hhtuann.backend.academic.dto.SchoolResponse;
 import com.hhtuann.backend.academic.dto.SubjectListResponse;
 import com.hhtuann.backend.academic.dto.SubjectResponse;
 import com.hhtuann.backend.academic.dto.SubjectView;
+import com.hhtuann.backend.academic.dto.UpdateSchoolRequest;
 import com.hhtuann.backend.academic.dto.UpdateSubjectRequest;
 import com.hhtuann.backend.academic.dto.UpdateSubjectStatusRequest;
 import com.hhtuann.backend.academic.exception.AcademicErrorCode;
@@ -53,6 +58,10 @@ public class AcademicService {
     static final String SUBJECT_UPDATE = "SUBJECT_UPDATE";
     static final String SUBJECT_STATUS_UPDATE = "SUBJECT_STATUS_UPDATE";
     static final String GRADE_LEVEL_READ = "GRADE_LEVEL_READ";
+    static final String SCHOOL_READ = "SCHOOL_READ";
+    static final String SCHOOL_CREATE = "SCHOOL_CREATE";
+    static final String SCHOOL_UPDATE = "SCHOOL_UPDATE";
+    private static final String SYSTEM_ADMIN_ROLE = "SYSTEM_ADMIN";
 
     private final TeacherProfileRepository teacherProfileRepository;
     private final SubjectRepository subjectRepository;
@@ -199,6 +208,80 @@ public class AcademicService {
     }
 
     // ============================================================
+    // GET /api/schools
+    // ============================================================
+
+    @Transactional(readOnly = true)
+    public SchoolListResponse listSchools(Long userId) {
+        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, Instant.now(clock));
+        if (roles.contains(SYSTEM_ADMIN_ROLE)) {
+            // SYSTEM_ADMIN → all schools (SCHOOL_CREATE implies full school access; V3 doesn't grant SCHOOL_READ to SYSTEM_ADMIN).
+            List<School> all = schoolRepository.findAllByOrderByCodeAsc();
+            return new SchoolListResponse(all.stream().map(this::toSchoolResponse).toList());
+        }
+        requirePermission(userId, SCHOOL_READ);
+        Long schoolId = resolveSchoolScope(userId, null);
+        List<School> schools = (schoolId != null)
+                ? schoolRepository.findAllById(List.of(schoolId))
+                : schoolRepository.findAllByOrderByCodeAsc();
+        return new SchoolListResponse(schools.stream().map(this::toSchoolResponse).toList());
+    }
+
+    // ============================================================
+    // POST /api/schools
+    // ============================================================
+
+    @Transactional
+    public SchoolResponse createSchool(Long userId, CreateSchoolRequest request) {
+        requireSystemAdmin(userId);
+        if (schoolRepository.existsByCodeIgnoreCase(request.code())) {
+            throw new AcademicException(AcademicErrorCode.ACADEMIC_SCHOOL_CODE_CONFLICT);
+        }
+        School school = new School(request.code().trim(), request.name().trim());
+        if (request.address() != null) {
+            school.setAddress(request.address().trim());
+        }
+        try {
+            schoolRepository.saveAndFlush(school);
+        } catch (DataIntegrityViolationException ex) {
+            if (isSchoolCodeConflict(ex)) {
+                throw new AcademicException(AcademicErrorCode.ACADEMIC_SCHOOL_CODE_CONFLICT);
+            }
+            throw ex;
+        }
+        return toSchoolResponse(school);
+    }
+
+    // ============================================================
+    // PUT /api/schools/{id}
+    // ============================================================
+
+    @Transactional
+    public SchoolResponse updateSchool(Long userId, Long schoolId, UpdateSchoolRequest request) {
+        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, Instant.now(clock));
+        if (!roles.contains(SYSTEM_ADMIN_ROLE)) {
+            requirePermission(userId, SCHOOL_UPDATE);
+        }
+        School school = schoolRepository.findById(schoolId)
+                .orElseThrow(() -> new AcademicException(AcademicErrorCode.ACADEMIC_SCHOOL_NOT_FOUND));
+        // Non-SYSTEM_ADMIN can only update their own school.
+        if (!roles.contains(SYSTEM_ADMIN_ROLE)) {
+            Long scopedId = resolveSchoolScope(userId, null);
+            if (scopedId == null || !scopedId.equals(schoolId)) {
+                throw new AcademicException(AcademicErrorCode.ACADEMIC_ACCESS_DENIED);
+            }
+        }
+        if (request.name() != null && !request.name().isBlank()) {
+            school.setName(request.name().trim());
+        }
+        if (request.address() != null) {
+            school.setAddress(request.address().trim());
+        }
+        schoolRepository.saveAndFlush(school);
+        return toSchoolResponse(school);
+    }
+
+    // ============================================================
     // Helpers
     // ============================================================
 
@@ -254,16 +337,38 @@ public class AcademicService {
 
     /** Detects a violation of {@code uk_subjects_school_grade_code_ci} (race fallback). */
     private static boolean isSubjectCodeUniqueViolation(DataIntegrityViolationException ex) {
+        return constraintContains(ex, "uk_subjects_school_grade_code_ci");
+    }
+
+    /** Detects a violation of {@code uk_schools_code_ci} (school code race fallback). */
+    private static boolean isSchoolCodeConflict(DataIntegrityViolationException ex) {
+        return constraintContains(ex, "uk_schools_code_ci");
+    }
+
+    private static boolean constraintContains(Throwable ex, String fragment) {
         Throwable cause = ex;
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
                 String name = cve.getConstraintName();
-                if (name != null && name.contains("uk_subjects_school_grade_code_ci")) {
+                if (name != null && name.contains(fragment)) {
                     return true;
                 }
             }
             cause = cause.getCause();
         }
         return false;
+    }
+
+    private void requireSystemAdmin(Long userId) {
+        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, Instant.now(clock));
+        if (!roles.contains(SYSTEM_ADMIN_ROLE)) {
+            throw new AcademicException(AcademicErrorCode.ACADEMIC_ACCESS_DENIED);
+        }
+    }
+
+    private SchoolResponse toSchoolResponse(School s) {
+        return new SchoolResponse(
+                s.getId(), s.getCode(), s.getName(), s.getAddress(),
+                s.getStatus().name(), s.getCreatedAt());
     }
 }

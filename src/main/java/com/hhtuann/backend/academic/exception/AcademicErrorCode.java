@@ -17,6 +17,7 @@ public enum AcademicErrorCode {
     ACADEMIC_SUBJECT_CODE_CONFLICT(HttpStatus.CONFLICT, "A subject with this code already exists for the school and grade level"),
     ACADEMIC_GRADE_LEVEL_NOT_FOUND(HttpStatus.NOT_FOUND, "Grade level not found in this school"),
     ACADEMIC_SCHOOL_NOT_FOUND(HttpStatus.NOT_FOUND, "School not found"),
+    ACADEMIC_SCHOOL_CODE_CONFLICT(HttpStatus.CONFLICT, "A school with this code already exists"),
     ACADEMIC_STUDENT_ALREADY_ASSIGNED(HttpStatus.CONFLICT, "Student already has a profile"),
     ACADEMIC_STUDENT_NOT_FOUND(HttpStatus.NOT_FOUND, "User is not a registered student"),
     ACADEMIC_SCHOOL_COUNTER_FAILED(HttpStatus.CONFLICT, "Failed to generate student code");

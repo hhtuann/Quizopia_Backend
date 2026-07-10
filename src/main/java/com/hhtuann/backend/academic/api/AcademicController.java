@@ -1,10 +1,14 @@
 package com.hhtuann.backend.academic.api;
 
 import com.hhtuann.backend.academic.application.AcademicService;
+import com.hhtuann.backend.academic.dto.CreateSchoolRequest;
 import com.hhtuann.backend.academic.dto.CreateSubjectRequest;
 import com.hhtuann.backend.academic.dto.GradeLevelListResponse;
+import com.hhtuann.backend.academic.dto.SchoolListResponse;
+import com.hhtuann.backend.academic.dto.SchoolResponse;
 import com.hhtuann.backend.academic.dto.SubjectListResponse;
 import com.hhtuann.backend.academic.dto.SubjectResponse;
+import com.hhtuann.backend.academic.dto.UpdateSchoolRequest;
 import com.hhtuann.backend.academic.dto.UpdateSubjectRequest;
 import com.hhtuann.backend.academic.dto.UpdateSubjectStatusRequest;
 import jakarta.validation.Valid;
@@ -96,5 +100,30 @@ public class AcademicController {
             @RequestParam(required = false) Long schoolId) {
         Long userId = Long.valueOf(jwt.getSubject());
         return academicService.listGradeLevelsForCaller(userId, schoolId);
+    }
+
+    // ============================================================
+    // /api/schools — School CRUD
+    // ============================================================
+
+    @GetMapping("/api/schools")
+    public SchoolListResponse listSchools(@AuthenticationPrincipal Jwt jwt) {
+        return academicService.listSchools(Long.valueOf(jwt.getSubject()));
+    }
+
+    @PostMapping("/api/schools")
+    public ResponseEntity<SchoolResponse> createSchool(
+            @Valid @RequestBody CreateSchoolRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(academicService.createSchool(Long.valueOf(jwt.getSubject()), request));
+    }
+
+    @PutMapping("/api/schools/{id}")
+    public SchoolResponse updateSchool(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateSchoolRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return academicService.updateSchool(Long.valueOf(jwt.getSubject()), id, request);
     }
 }
