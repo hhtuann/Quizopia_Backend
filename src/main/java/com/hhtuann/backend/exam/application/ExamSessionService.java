@@ -163,6 +163,9 @@ public class ExamSessionService {
         Instant now = Instant.now();
         sessionRepository.bulkLazyCloseExpiredOpenSessions(
                 profile.getId(), ExamSessionStatus.OPEN, ExamSessionStatus.CLOSED, now);
+        // Bulk lazy-open: due SCHEDULED → OPEN before the filter query.
+        sessionRepository.bulkLazyOpenScheduledSessions(
+                profile.getId(), ExamSessionStatus.SCHEDULED, ExamSessionStatus.OPEN, now);
 
         Page<ExamSession> sessions = sessionRepository.findOwnedByTeacher(
                 profile.getId(), trimmedSearch, statusFilter, examId, pageable);

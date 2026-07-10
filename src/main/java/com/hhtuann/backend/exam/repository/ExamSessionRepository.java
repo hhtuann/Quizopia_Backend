@@ -54,4 +54,17 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
                                          @Param("open") ExamSessionStatus openStatus,
                                          @Param("closed") ExamSessionStatus closedStatus,
                                          @Param("now") Instant now);
+
+    /**
+     * Bulk lazy-open: transitions ALL due SCHEDULED sessions for the owner to OPEN.
+     * Called BEFORE findOwnedByTeacher so the list view reflects the effective status.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ExamSession s SET s.status = :open, s.openedAt = :now "
+            + "WHERE s.ownerTeacherId = :ownerId AND s.status = :scheduled "
+            + "AND s.startsAt <= :now AND s.endsAt >= :now")
+    int bulkLazyOpenScheduledSessions(@Param("ownerId") Long ownerId,
+                                      @Param("scheduled") ExamSessionStatus scheduledStatus,
+                                      @Param("open") ExamSessionStatus openStatus,
+                                      @Param("now") Instant now);
 }
