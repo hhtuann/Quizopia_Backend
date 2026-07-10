@@ -199,8 +199,9 @@ public class QuestionImportService {
     private void persistRow(ValidQuestionRow row, Long bankId, Long userId) {
         String code = BusinessCodes.readableCode("QU", 8,
                 c -> questionRepository.existsByQuestionBankIdAndCodeIgnoreCase(bankId, c));
-        Question question = questionRepository.saveAndFlush(
-                new Question(bankId, code, userId));
+        Question question = new Question(bankId, code, userId);
+        question.setStatus(com.hhtuann.backend.question.domain.model.QuestionStatus.ACTIVE);
+        questionRepository.saveAndFlush(question);
 
         QuestionVersion version = buildVersion(question.getId(), row, userId);
         versionRepository.saveAndFlush(version);
