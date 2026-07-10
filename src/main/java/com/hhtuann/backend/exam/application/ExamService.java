@@ -145,7 +145,7 @@ public class ExamService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.uniqueCode(20, c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("EX", 8, c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         Exam exam = new Exam(schoolId, subject.getId(), profile.getId(), code, request.title());
         exam.setDescription(request.description());

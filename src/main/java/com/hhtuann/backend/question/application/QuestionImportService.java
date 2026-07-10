@@ -187,7 +187,7 @@ public class QuestionImportService {
     // ============================================================
 
     private void persistRow(ValidQuestionRow row, Long bankId, Long userId) {
-        String code = BusinessCodes.uniqueCode(20,
+        String code = BusinessCodes.readableCode("QU", 8,
                 c -> questionRepository.existsByQuestionBankIdAndCodeIgnoreCase(bankId, c));
         Question question = questionRepository.saveAndFlush(
                 new Question(bankId, code, userId));

@@ -105,7 +105,7 @@ public class ExamSessionService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.uniqueCode(20, c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("ES", 8, c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         ExamSession session = new ExamSession(schoolId, version.getId(), profile.getId(),
                 code, request.title(), request.startsAt(), request.endsAt(),

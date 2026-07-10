@@ -92,7 +92,7 @@ public class QuestionBankService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.uniqueCode(20, c -> questionBankRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("QB", 8, c -> questionBankRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         QuestionBank bank = new QuestionBank(
                 schoolId,

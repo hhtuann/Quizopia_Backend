@@ -4,52 +4,46 @@ import java.security.SecureRandom;
 import java.util.function.Predicate;
 
 /**
- * Generates opaque business codes for entities whose {@code code} column is an
- * internal owner-scoped unique key that the caller no longer supplies (e.g.
- * question banks, exams, exam sessions). Codes are random {@code [A-Z0-9]}
- * strings, never shown to or chosen by end users.
+ * Generates human-readable business codes for entities whose {@code code} column
+ * is an internal unique key that the caller no longer supplies (question banks,
+ * exams, exam sessions, questions). Codes use a short uppercase PREFIX followed
+ * by zero-padded random digits — e.g. {@code QU12345678}, {@code EX00001234}.
  *
- * <p>{@link #uniqueCode(int, Predicate)} retries on the (astronomically rare)
- * collision with an existing code, up to a small bound, so the result is
- * guaranteed free of an owner-scoped duplicate.
+ * <p>Prefix convention:
+ * <ul>
+ *   <li>{@code QB} — question banks</li>
+ *   <li>{@code QU} — questions (Excel import)</li>
+ *   <li>{@code EX} — exams</li>
+ *   <li>{@code ES} — exam sessions</li>
+ * </ul>
  */
 public final class BusinessCodes {
 
-    private static final char[] ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".toCharArray();
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int MAX_ATTEMPTS = 8;
 
     private BusinessCodes() {
     }
 
-    /** A random opaque code of the given length over {@code [A-Z0-9]}. */
-    public static String randomCode(int length) {
-        if (length <= 0) {
-            throw new IllegalArgumentException("length must be > 0");
-        }
-        char[] buf = new char[length];
-        for (int i = 0; i < length; i++) {
-            buf[i] = ALPHABET[RANDOM.nextInt(ALPHABET.length)];
-        }
-        return new String(buf);
-    }
-
     /**
-     * A random code that does NOT already exist, per {@code exists}. Retries a
-     * bounded number of times; at 20 chars (~103 bits of entropy) a collision
-     * is effectively impossible, so exhaustion signals a generator/seed fault.
+     * A human-readable code: {@code prefix + zero-padded random digits}.
+     * Retries on collision up to {@value #MAX_ATTEMPTS} times.
      *
-     * @param exists must return true when the candidate already belongs to the
-     *              relevant owner scope (e.g.
-     *              {@code repo.existsByOwnerTeacherIdAndCodeIgnoreCase(ownerId, c)})
+     * @param prefix short uppercase prefix (e.g. "QU", "EX")
+     * @param digits number of numeric digits (8 → ~100M combinations)
+     * @param exists returns true when the candidate already exists in the relevant scope
+     * @return a unique code like "QU12345678"
      */
-    public static String uniqueCode(int length, Predicate<String> exists) {
+    public static String readableCode(String prefix, int digits, Predicate<String> exists) {
+        int max = (int) Math.pow(10, digits);
         for (int i = 0; i < MAX_ATTEMPTS; i++) {
-            String candidate = randomCode(length);
-            if (!exists.test(candidate)) {
-                return candidate;
+            int num = RANDOM.nextInt(max);
+            String code = prefix + String.format("%0" + digits + "d", num);
+            if (!exists.test(code)) {
+                return code;
             }
         }
-        throw new IllegalStateException("Could not generate a unique business code after " + MAX_ATTEMPTS + " attempts");
+        throw new IllegalStateException(
+                "Could not generate a unique code with prefix '" + prefix + "' after " + MAX_ATTEMPTS + " attempts");
     }
 }
