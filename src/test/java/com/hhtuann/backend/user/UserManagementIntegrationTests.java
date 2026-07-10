@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -244,6 +245,29 @@ class UserManagementIntegrationTests {
         mockMvc.perform(post("/api/users/{id}/roles", targetId).with(jwtFor(adminId))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(assignRoleBody("BOGUS")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("USER_INVALID_ROLE"));
+    }
+
+    @Test
+    void removeRole_isIdempotent() throws Exception {
+        // seed TEACHER on the target
+        mockMvc.perform(post("/api/users/{id}/roles", targetId).with(jwtFor(adminId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(assignRoleBody("TEACHER")))
+                .andExpect(status().isOk());
+        // remove it → role disappears
+        mockMvc.perform(delete("/api/users/{id}/roles/{roleCode}", targetId, "TEACHER").with(jwtFor(adminId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roles[?(@ == 'TEACHER')]").isEmpty());
+        // removing again is a no-op (200)
+        mockMvc.perform(delete("/api/users/{id}/roles/{roleCode}", targetId, "TEACHER").with(jwtFor(adminId)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void removeRole_invalidRole_returns400() throws Exception {
+        mockMvc.perform(delete("/api/users/{id}/roles/{roleCode}", targetId, "BOGUS").with(jwtFor(adminId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("USER_INVALID_ROLE"));
     }

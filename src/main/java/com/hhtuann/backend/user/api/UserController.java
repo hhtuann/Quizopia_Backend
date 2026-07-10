@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -35,7 +36,8 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>{@code POST /api/users} — create (USER_CREATE).</li>
  *   <li>{@code PUT  /api/users/{id}} — update displayName/email (USER_UPDATE).</li>
  *   <li>{@code POST /api/users/{id}/{activate|disable|lock|unlock}}</li>
- *   <li>{@code POST /api/users/{id}/roles} — assign role (USER_ROLE_ASSIGN).</li>
+ *   <li>{@code POST   /api/users/{id}/roles} — assign role (USER_ROLE_ASSIGN).</li>
+ *   <li>{@code DELETE /api/users/{id}/roles/{roleCode}} — revoke role (USER_ROLE_ASSIGN).</li>
  *   <li>{@code GET  /api/roles} — role catalog (ROLE_READ).</li>
  * </ul>
  * Authorization (active SYSTEM_ADMIN role) is enforced in {@link UserService}.
@@ -109,6 +111,14 @@ public class UserController {
             @Valid @RequestBody AssignRoleRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         return userService.assignRole(Long.valueOf(jwt.getSubject()), id, request);
+    }
+
+    @DeleteMapping("/api/users/{id}/roles/{roleCode}")
+    public UserResponse removeRole(
+            @PathVariable Long id,
+            @PathVariable String roleCode,
+            @AuthenticationPrincipal Jwt jwt) {
+        return userService.removeRole(Long.valueOf(jwt.getSubject()), id, roleCode);
     }
 
     @GetMapping("/api/roles")

@@ -252,6 +252,23 @@ public class UserService {
     }
 
     // ============================================================
+    // DELETE /api/users/{id}/roles/{roleCode}
+    // ============================================================
+
+    @Transactional
+    public UserResponse removeRole(Long callerId, Long targetId, String roleCode) {
+        requireSystemAdmin(callerId);
+        User user = requireUser(targetId);
+        Role role = roleRepository.findByCode(roleCode == null ? "" : roleCode.trim())
+                .orElseThrow(() -> new UserException(UserErrorCode.USER_INVALID_ROLE));
+        // Idempotent: removing a role the user doesn't currently hold is a no-op (200).
+        userRoleRepository.findById(new UserRoleId(user.getId(), role.getId()))
+                .ifPresent(userRoleRepository::delete);
+        userRoleRepository.flush();
+        return toResponse(user);
+    }
+
+    // ============================================================
     // GET /api/roles
     // ============================================================
 
