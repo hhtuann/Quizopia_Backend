@@ -124,13 +124,13 @@ public class RegistrationService {
 
         userRoleRepository.save(new UserRole(user, role, null, null));
 
-        // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
-        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("ACADEMIC_ADMIN", java.time.Instant.now())) {
+        // Notify all SYSTEM_ADMINs that a new user registered.
+        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("SYSTEM_ADMIN", java.time.Instant.now())) {
             notificationService.create(adminId,
                     com.hhtuann.backend.notification.domain.model.NotificationType.NEW_USER_REGISTERED,
                     "New user registered",
-                    displayName + " (" + username + ") is awaiting school assignment.",
-                    "/admin/pending-students");
+                    displayName + " (" + username + ") registered.",
+                    "/admin/users");
         }
 
         // NOTE: Registration no longer auto-creates academic profiles (V11 Student Onboarding).
