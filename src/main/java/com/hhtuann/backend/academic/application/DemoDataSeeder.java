@@ -31,7 +31,9 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Internal, idempotent seeder that provisions a single demo school, grade
@@ -60,6 +62,33 @@ public class DemoDataSeeder implements ApplicationRunner {
 
     /** Business code of the single demo subject within the demo school. */
     public static final String DEMO_SUBJECT_CODE = "DEMO-SUBJECT";
+
+    /** Real Vietnamese high-school grade levels: {code, name, sort_order}. */
+    private static final String[][] REAL_GRADE_LEVELS = {
+            {"G10", "Grade 10", "10"},
+            {"G11", "Grade 11", "11"},
+            {"G12", "Grade 12", "12"}
+    };
+    private static final List<String> REAL_GRADE_CODES = List.of("G10", "G11", "G12");
+
+    /** Real Vietnamese curriculum subjects: {code, name}. Created for every grade level. */
+    private static final String[][] REAL_SUBJECTS = {
+            {"VAN", "Ngữ văn"},
+            {"TOAN", "Toán học"},
+            {"NGOAI_NGU", "Ngoại ngữ"},
+            {"GDTC", "Giáo dục thể chất"},
+            {"GDQP", "Giáo dục quốc phòng và an ninh"},
+            {"GDKT_PL", "Giáo dục kinh tế và pháp luật"},
+            {"HDTN_HN", "Hoạt động trải nghiệm, hướng nghiệp"},
+            {"LY", "Vật lý"},
+            {"HOA", "Hóa học"},
+            {"SINH", "Sinh học"},
+            {"SU", "Lịch sử"},
+            {"DIA", "Địa lý"},
+            {"GDCD", "Giáo dục công dân"},
+            {"TIN", "Tin học"},
+            {"CN", "Công nghệ"}
+    };
 
     /** Demo classroom code (owner = the demo teacher). */
     public static final String DEMO_CLASSROOM_CODE = "DEMO-CLASS";
@@ -132,22 +161,53 @@ public class DemoDataSeeder implements ApplicationRunner {
                         new School(DEMO_SCHOOL_CODE, "Quizopia Demo School")));
         Long schoolId = school.getId();
 
-        GradeLevel gradeLevel = gradeLevelRepository
-                .findBySchoolIdAndCodeIgnoreCase(schoolId, DEMO_GRADE_LEVEL_CODE)
-                .orElseGet(() -> gradeLevelRepository.saveAndFlush(
-                        new GradeLevel(schoolId, DEMO_GRADE_LEVEL_CODE, "Grade 12")));
-        Long gradeLevelId = gradeLevel.getId();
+        // Retire the legacy single demo grade level + subject (no-op while still referenced).
+        cleanupLegacyDemoRows(schoolId);
 
-        subjectRepository.findBySchoolIdAndGradeLevelIdAndCodeIgnoreCase(
-                        schoolId, gradeLevelId, DEMO_SUBJECT_CODE)
-                .orElseGet(() -> subjectRepository.saveAndFlush(
-                        new Subject(schoolId, gradeLevelId, DEMO_SUBJECT_CODE, "General Mathematics")));
+        // 3 real grade levels (Vietnamese high school): Grade 10 / 11 / 12.
+        Map<String, Long> gradeIdsByCode = new LinkedHashMap<>();
+        for (String[] g : REAL_GRADE_LEVELS) {
+            GradeLevel gradeLevel = gradeLevelRepository.findBySchoolIdAndCodeIgnoreCase(schoolId, g[0])
+                    .orElseGet(() -> {
+                        GradeLevel created = new GradeLevel(schoolId, g[0], g[1]);
+                        created.setSortOrder(Integer.parseInt(g[2]));
+                        return gradeLevelRepository.saveAndFlush(created);
+                    });
+            gradeIdsByCode.put(g[0], gradeLevel.getId());
+        }
+
+        // 15 real subjects, each created for every grade level (15 x 3 = 45 rows).
+        for (String gradeCode : REAL_GRADE_CODES) {
+            Long gradeLevelId = gradeIdsByCode.get(gradeCode);
+            for (String[] s : REAL_SUBJECTS) {
+                subjectRepository.findBySchoolIdAndGradeLevelIdAndCodeIgnoreCase(schoolId, gradeLevelId, s[0])
+                        .orElseGet(() -> subjectRepository.saveAndFlush(
+                                new Subject(schoolId, gradeLevelId, s[0], s[1])));
+            }
+        }
 
         seedExamPurposes(schoolId);
         seedDemoClassroom(schoolId);
 
-        log.info("Demo academic + classroom data ensured (school={}, classroom={})",
-                DEMO_SCHOOL_CODE, DEMO_CLASSROOM_CODE);
+        log.info("Demo academic + classroom data ensured (school={}, classroom={}, grades={}, subjects={})",
+                DEMO_SCHOOL_CODE, DEMO_CLASSROOM_CODE,
+                REAL_GRADE_LEVELS.length, REAL_GRADE_LEVELS.length * REAL_SUBJECTS.length);
+    }
+
+    /**
+     * Best-effort removal of the legacy single demo grade level and subject that
+     * earlier seeder versions created. Both deletes are conditional on no
+     * remaining references (ON DELETE RESTRICT), so this is a no-op while either
+     * row is still in use and never throws — the real-data seed always commits.
+     */
+    private void cleanupLegacyDemoRows(Long schoolId) {
+        gradeLevelRepository.findBySchoolIdAndCodeIgnoreCase(schoolId, DEMO_GRADE_LEVEL_CODE)
+                .ifPresent(gradeLevel -> {
+                    subjectRepository.findBySchoolIdAndGradeLevelIdAndCodeIgnoreCase(
+                                    schoolId, gradeLevel.getId(), DEMO_SUBJECT_CODE)
+                            .ifPresent(subject -> subjectRepository.deleteIfUnreferenced(subject.getId()));
+                    gradeLevelRepository.deleteIfNoSubjects(gradeLevel.getId());
+                });
     }
 
     /**

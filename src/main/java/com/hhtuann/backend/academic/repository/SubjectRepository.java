@@ -3,6 +3,9 @@ package com.hhtuann.backend.academic.repository;
 import com.hhtuann.backend.academic.domain.model.AcademicStatus;
 import com.hhtuann.backend.academic.domain.model.Subject;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
@@ -28,4 +31,17 @@ public interface SubjectRepository extends JpaRepository<Subject, Long> {
      * ACADEMIC_ADMIN lists subjects without narrowing to a single school.
      */
     List<Subject> findByStatusOrderBySchoolIdAscGradeLevelIdAscNameAsc(AcademicStatus status);
+
+    /**
+     * Deletes a subject only when no question bank and no exam still reference it
+     * (both FKs are ON DELETE RESTRICT). Used by the demo seeder to retire its
+     * legacy single demo subject idempotently: a no-op (0 rows) while the subject
+     * is still in use, so it never throws or poisons the seed transaction.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "DELETE FROM subjects WHERE id = :id "
+            + "AND NOT EXISTS (SELECT 1 FROM question_banks qb WHERE qb.subject_id = :id) "
+            + "AND NOT EXISTS (SELECT 1 FROM exams e WHERE e.subject_id = :id)",
+            nativeQuery = true)
+    int deleteIfUnreferenced(@Param("id") Long id);
 }
