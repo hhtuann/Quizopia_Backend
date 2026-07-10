@@ -402,9 +402,16 @@ public class ExamSessionService {
 
     private ExamSessionDetailResponse buildDetailResponse(ExamSession session, long participantCount) {
         ExamVersion version = versionRepository.findById(session.getExamVersionId()).orElse(null);
+        String examCode = null;
+        if (version != null && version.getExamId() != null) {
+            examCode = examRepository.findById(version.getExamId())
+                    .map(com.hhtuann.backend.exam.domain.model.Exam::getCode)
+                    .orElse(null);
+        }
         return new ExamSessionDetailResponse(
                 session.getId(),
                 version != null ? version.getExamId() : null,
+                examCode,
                 version != null ? version.getVersionNumber() : null,
                 session.getCode(), session.getTitle(), session.getStatus().name(),
                 session.getStartsAt(), session.getEndsAt(), session.getMaxAttempts(),
