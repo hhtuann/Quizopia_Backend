@@ -108,12 +108,14 @@ public class ExamSessionService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.readableCode("ES", 8, c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("ES", 8,
+                        c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         ExamSession session = new ExamSession(schoolId, version.getId(), profile.getId(),
                 code, request.title(), request.startsAt(), request.endsAt(),
                 request.maxAttempts(), userId);
-        // Visibility: CLASS_RESTRICTED is the safe default (teacher must explicitly choose PUBLIC).
+        // Visibility: CLASS_RESTRICTED is the safe default (teacher must explicitly
+        // choose PUBLIC).
         SessionVisibility visibility = request.visibility() != null
                 ? request.visibility()
                 : SessionVisibility.CLASS_RESTRICTED;
@@ -413,6 +415,7 @@ public class ExamSessionService {
         return session;
     }
 
+    @SuppressWarnings("null")
     private ExamSessionDetailResponse buildDetailResponse(ExamSession session, long participantCount) {
         ExamVersion version = versionRepository.findById(session.getExamVersionId()).orElse(null);
         String examCode = null;
@@ -504,7 +507,9 @@ public class ExamSessionService {
         return resolved;
     }
 
-    /** Replace the session's assigned classes (delete old + insert new) in one tx. */
+    /**
+     * Replace the session's assigned classes (delete old + insert new) in one tx.
+     */
     private void replaceSessionClasses(Long schoolId, Long sessionId, List<Classroom> classrooms) {
         jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid",
                 new MapSqlParameterSource("sid", sessionId));

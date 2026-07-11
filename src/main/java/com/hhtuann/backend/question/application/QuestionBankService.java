@@ -43,7 +43,6 @@ import java.util.stream.Collectors;
 @Service
 public class QuestionBankService {
 
-    private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "code");
 
@@ -92,7 +91,8 @@ public class QuestionBankService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.readableCode("QB", 8, c -> questionBankRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("QB", 8,
+                        c -> questionBankRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         QuestionBank bank = new QuestionBank(
                 schoolId,

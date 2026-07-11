@@ -1,13 +1,8 @@
 package com.hhtuann.backend.user.application;
 
-import com.hhtuann.backend.academic.application.DemoDataSeeder;
-import com.hhtuann.backend.academic.domain.model.School;
-import com.hhtuann.backend.academic.domain.model.StudentProfile;
-import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.SchoolRepository;
 import com.hhtuann.backend.academic.repository.StudentProfileRepository;
 import com.hhtuann.backend.academic.repository.TeacherProfileRepository;
-import com.hhtuann.backend.authentication.dto.AccountType;
 import com.hhtuann.backend.identity.domain.model.Role;
 import com.hhtuann.backend.identity.domain.model.User;
 import com.hhtuann.backend.identity.domain.model.UserRole;
@@ -44,11 +39,13 @@ import java.util.List;
  * Application service for the user-management API (SYSTEM_ADMIN only). Enforces
  * the active {@code SYSTEM_ADMIN} role at the service layer (deny by default).
  *
- * <p><strong>Security:</strong> response mapping ({@link #toListItem} /
+ * <p>
+ * <strong>Security:</strong> response mapping ({@link #toListItem} /
  * {@link #toResponse}) never copies the password hash, encrypted phone/national
  * id, token version or refresh tokens — only the public account metadata.
  *
- * <p>User creation mirrors {@code RegistrationService}: Argon2id password hash,
+ * <p>
+ * User creation mirrors {@code RegistrationService}: Argon2id password hash,
  * AES-256-GCM encryption of phone/national-id, role assignment, and (in demo
  * mode) the matching academic profile.
  */
@@ -67,35 +64,27 @@ public class UserService {
     private final RoleRepository roleRepository;
     private final PasswordHasher passwordHasher;
     private final SensitiveDataEncryptor encryptor;
-    private final SchoolRepository schoolRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final StudentProfileRepository studentProfileRepository;
     private final Clock clock;
-    private final boolean demoEnabled;
     private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public UserService(UserRepository userRepository,
-                       UserRoleRepository userRoleRepository,
-                       RoleRepository roleRepository,
-                       PasswordHasher passwordHasher,
-                       SensitiveDataEncryptor encryptor,
-                       SchoolRepository schoolRepository,
-                       TeacherProfileRepository teacherProfileRepository,
-                       StudentProfileRepository studentProfileRepository,
-                       Clock clock,
-                       com.hhtuann.backend.notification.application.NotificationService notificationService,
-                       @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
+            UserRoleRepository userRoleRepository,
+            RoleRepository roleRepository,
+            PasswordHasher passwordHasher,
+            SensitiveDataEncryptor encryptor,
+            SchoolRepository schoolRepository,
+            TeacherProfileRepository teacherProfileRepository,
+            StudentProfileRepository studentProfileRepository,
+            Clock clock,
+            com.hhtuann.backend.notification.application.NotificationService notificationService,
+            @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.encryptor = encryptor;
-        this.schoolRepository = schoolRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.studentProfileRepository = studentProfileRepository;
         this.clock = clock;
         this.notificationService = notificationService;
-        this.demoEnabled = demoEnabled;
     }
 
     // ============================================================
@@ -103,7 +92,8 @@ public class UserService {
     // ============================================================
 
     @Transactional(readOnly = true)
-    public PageResponse<UserListItem> listUsers(Long callerId, String search, UserStatus status, String roleCode, int page, int size) {
+    public PageResponse<UserListItem> listUsers(Long callerId, String search, UserStatus status, String roleCode,
+            int page, int size) {
         requireSystemAdmin(callerId);
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
@@ -222,7 +212,10 @@ public class UserService {
         return toResponse(user);
     }
 
-    /** Lock = set {@code lockedUntil} (now + 15 min). Does NOT change UserStatus (mirrors Day-4 lockout). */
+    /**
+     * Lock = set {@code lockedUntil} (now + 15 min). Does NOT change UserStatus
+     * (mirrors Day-4 lockout).
+     */
     @Transactional
     public UserResponse lock(Long callerId, Long targetId) {
         requireSystemAdmin(callerId);
@@ -330,17 +323,5 @@ public class UserService {
         return new UserResponse(u.getId(), u.getUsername(), u.getEmail(), u.getDisplayName(),
                 u.getStatus().name(), rolesOf(u.getId()), u.getCreatedAt(),
                 u.getLockedUntil(), u.getLastLoginAt());
-    }
-
-    private void assignDemoProfile(User user, AccountType accountType) {
-        School demoSchool = schoolRepository.findByCodeIgnoreCase(DemoDataSeeder.DEMO_SCHOOL_CODE)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Demo data not seeded but quizopia.demo.data.enabled=true; ensure DemoDataSeeder ran"));
-        Long schoolId = demoSchool.getId();
-        if (accountType == AccountType.TEACHER) {
-            teacherProfileRepository.saveAndFlush(new TeacherProfile(user.getId(), schoolId, user.getUsername()));
-        } else {
-            studentProfileRepository.saveAndFlush(new StudentProfile(user.getId(), schoolId, user.getUsername()));
-        }
     }
 }

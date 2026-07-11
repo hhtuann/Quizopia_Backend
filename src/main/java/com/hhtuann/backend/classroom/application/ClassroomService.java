@@ -110,6 +110,7 @@ public class ClassroomService {
     // GET /api/classrooms/my
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional(readOnly = true)
     public MyClassroomsResponse listMyClassrooms(Long userId) {
         requirePermission(userId, "CLASSROOM_READ");
@@ -130,6 +131,7 @@ public class ClassroomService {
     // GET /api/classrooms/{id}
     // ============================================================
 
+    @SuppressWarnings("null")
     @Transactional(readOnly = true)
     public ClassroomDetailView getClassroom(Long userId, Long classroomId) {
         requirePermission(userId, "CLASSROOM_READ");
@@ -242,7 +244,8 @@ public class ClassroomService {
             notificationService.create(userId,
                     com.hhtuann.backend.notification.domain.model.NotificationType.STUDENT_JOINED_CLASS,
                     "Students joined class",
-                    toInsert.size() + " student" + (toInsert.size() == 1 ? "" : "s") + " added to " + classroom.getName(),
+                    toInsert.size() + " student" + (toInsert.size() == 1 ? "" : "s") + " added to "
+                            + classroom.getName(),
                     "/classes/" + classroomId);
             // Notify each student they were added to the class.
             for (Long spId : toInsert) {
@@ -365,6 +368,7 @@ public class ClassroomService {
         return counts;
     }
 
+    @SuppressWarnings("null")
     private Map<Long, StudentProfile> batchStudentProfiles(List<Long> studentProfileIds) {
         if (studentProfileIds.isEmpty()) {
             return Map.of();

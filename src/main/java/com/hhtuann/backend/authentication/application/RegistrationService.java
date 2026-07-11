@@ -1,9 +1,5 @@
 package com.hhtuann.backend.authentication.application;
 
-import com.hhtuann.backend.academic.application.DemoDataSeeder;
-import com.hhtuann.backend.academic.domain.model.School;
-import com.hhtuann.backend.academic.domain.model.StudentProfile;
-import com.hhtuann.backend.academic.domain.model.TeacherProfile;
 import com.hhtuann.backend.academic.repository.SchoolRepository;
 import com.hhtuann.backend.academic.repository.StudentProfileRepository;
 import com.hhtuann.backend.academic.repository.TeacherProfileRepository;
@@ -31,8 +27,10 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Public account registration. Hashes the password with Argon2id, encrypts phone
- * and national identifier with AES-256-GCM (only ciphertext is stored), resolves
+ * Public account registration. Hashes the password with Argon2id, encrypts
+ * phone
+ * and national identifier with AES-256-GCM (only ciphertext is stored),
+ * resolves
  * the foundational role by code, and persists user + role assignment in one
  * transaction. The response echoes the plaintext phone/national-id the caller
  * supplied; the ciphertext, password hash and token version are never returned.
@@ -49,34 +47,26 @@ public class RegistrationService {
     private final PasswordHasher passwordHasher;
     private final SensitiveDataEncryptor encryptor;
     private final SecurityProperties properties;
-    private final SchoolRepository schoolRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final StudentProfileRepository studentProfileRepository;
-    private final boolean demoEnabled;
     private final com.hhtuann.backend.notification.application.NotificationService notificationService;
 
     public RegistrationService(UserRepository userRepository,
-                                UserRoleRepository userRoleRepository,
-                                RoleRepository roleRepository,
-                                PasswordHasher passwordHasher,
-                                SensitiveDataEncryptor encryptor,
-                                SecurityProperties properties,
-                                SchoolRepository schoolRepository,
-                                TeacherProfileRepository teacherProfileRepository,
-                                StudentProfileRepository studentProfileRepository,
-                                com.hhtuann.backend.notification.application.NotificationService notificationService,
-                                @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
+            UserRoleRepository userRoleRepository,
+            RoleRepository roleRepository,
+            PasswordHasher passwordHasher,
+            SensitiveDataEncryptor encryptor,
+            SecurityProperties properties,
+            SchoolRepository schoolRepository,
+            TeacherProfileRepository teacherProfileRepository,
+            StudentProfileRepository studentProfileRepository,
+            com.hhtuann.backend.notification.application.NotificationService notificationService,
+            @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.encryptor = encryptor;
         this.properties = properties;
-        this.schoolRepository = schoolRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.studentProfileRepository = studentProfileRepository;
         this.notificationService = notificationService;
-        this.demoEnabled = demoEnabled;
     }
 
     @Transactional
@@ -124,18 +114,20 @@ public class RegistrationService {
 
         userRoleRepository.save(new UserRole(user, role, null, null));
 
-        // Notify all SYSTEM_ADMINs that a new user registered.
-        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("SYSTEM_ADMIN", java.time.Instant.now())) {
+        // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
+        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("ACADEMIC_ADMIN", java.time.Instant.now())) {
             notificationService.create(adminId,
                     com.hhtuann.backend.notification.domain.model.NotificationType.NEW_USER_REGISTERED,
                     "New user registered",
-                    displayName + " (" + username + ") registered.",
-                    "/admin/users");
+                    displayName + " (" + username + ") is awaiting school assignment.",
+                    "/admin/pending-students");
         }
 
-        // NOTE: Registration no longer auto-creates academic profiles (V11 Student Onboarding).
+        // NOTE: Registration no longer auto-creates academic profiles (V11 Student
+        // Onboarding).
         // Students self-register → PENDING (user + STUDENT role, no profile).
-        // ACADEMIC_ADMIN assigns them to a school via POST /api/admin/students/{userId}/assign-school
+        // ACADEMIC_ADMIN assigns them to a school via POST
+        // /api/admin/students/{userId}/assign-school
         // which creates the student_profiles row with an auto-generated student_code.
         // DemoDataSeeder writes profiles directly (bypasses registration).
 
@@ -170,28 +162,5 @@ public class RegistrationService {
 
     private static String trimmed(String value) {
         return value == null ? null : value.trim();
-    }
-
-    /**
-     * Creates the academic profile that matches the account type, attached to
-     * the single demo school provisioned by {@link DemoDataSeeder}. Runs only
-     * when {@code quizopia.demo.data.enabled=true}. The profile code is derived
-     * deterministically from the (globally unique) username, so it is unique
-     * within the demo school. Any failure here rolls back the whole
-     * user + role + profile transaction.
-     */
-    private void assignDemoProfile(User user, AccountType accountType) {
-        School demoSchool = schoolRepository.findByCodeIgnoreCase(DemoDataSeeder.DEMO_SCHOOL_CODE)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Demo data not seeded but quizopia.demo.data.enabled=true; "
-                                + "ensure DemoDataSeeder ran at startup"));
-        Long schoolId = demoSchool.getId();
-        if (accountType == AccountType.TEACHER) {
-            teacherProfileRepository.saveAndFlush(
-                    new TeacherProfile(user.getId(), schoolId, user.getUsername()));
-        } else {
-            studentProfileRepository.saveAndFlush(
-                    new StudentProfile(user.getId(), schoolId, user.getUsername()));
-        }
     }
 }

@@ -42,13 +42,13 @@ public class QuestionService {
     private final Clock clock;
 
     public QuestionService(QuestionRepository questionRepository,
-                           QuestionBankRepository questionBankRepository,
-                           QuestionVersionRepository versionRepository,
-                           QuestionOptionRepository optionRepository,
-                           TeacherProfileRepository teacherProfileRepository,
-                           UserRoleRepository userRoleRepository,
-                           RolePermissionRepository rolePermissionRepository,
-                           Clock clock) {
+            QuestionBankRepository questionBankRepository,
+            QuestionVersionRepository versionRepository,
+            QuestionOptionRepository optionRepository,
+            TeacherProfileRepository teacherProfileRepository,
+            UserRoleRepository userRoleRepository,
+            RolePermissionRepository rolePermissionRepository,
+            Clock clock) {
         this.questionRepository = questionRepository;
         this.questionBankRepository = questionBankRepository;
         this.versionRepository = versionRepository;
@@ -151,6 +151,7 @@ public class QuestionService {
     // Response mapping
     // ============================================================
 
+    @SuppressWarnings("null")
     private QuestionDetailResponse toDetail(Question question) {
         QuestionVersion version = versionRepository
                 .findByQuestionIdAndVersionNumber(question.getId(), question.getCurrentVersionNumber())

@@ -59,7 +59,6 @@ import java.util.stream.Collectors;
 @Service
 public class ExamService {
 
-    private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status",
             "currentVersionNumber");
@@ -145,7 +144,8 @@ public class ExamService {
         }
 
         String code = (request.code() == null || request.code().isBlank())
-                ? BusinessCodes.readableCode("EX", 8, c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                ? BusinessCodes.readableCode("EX", 8,
+                        c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
         Exam exam = new Exam(schoolId, subject.getId(), profile.getId(), code, request.title());
         exam.setDescription(request.description());
