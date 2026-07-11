@@ -17,7 +17,6 @@ import com.hhtuann.backend.identity.repository.RolePermissionRepository;
 import com.hhtuann.backend.identity.repository.UserRepository;
 import com.hhtuann.backend.identity.repository.UserRoleRepository;
 import com.hhtuann.backend.question.dto.PageResponse;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -25,9 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Student onboarding: pending-student list, school assignment with auto-generated

@@ -233,10 +233,9 @@ public class AttemptSubmitService {
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
                 attempt.getStudentProfileId(), deadline));
-        Long userId = studentProfileRepo.findById(attempt.getStudentProfileId())
-                .map(StudentProfile::getUserId).orElse(null);
-        if (userId != null) {
-            notificationService.create(userId,
+        StudentProfile profile = studentProfileRepo.findById(attempt.getStudentProfileId()).orElse(null);
+        if (profile != null) {
+            notificationService.create(profile.getUserId(),
                     com.hhtuann.backend.notification.domain.model.NotificationType.RESULT_GRADED,
                     "Result available",
                     "Time ran out — your exam was auto-submitted and graded: "
