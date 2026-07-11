@@ -276,16 +276,36 @@ public class DemoDataSeeder implements ApplicationRunner {
                     "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
             userRoleRepository.saveAndFlush(new UserRole(user, role, null, null));
         }
-        // Academic profile (idempotent find-or-create).
+        // Academic profile (idempotent find-or-create). Codes use the system-wide
+        // prefix + 8-digit convention (TCH for teachers, STU for students).
         if (TEACHER_ROLE_CODE.equals(roleCode)) {
             teacherProfileRepository.findByUserId(user.getId())
                     .orElseGet(() -> teacherProfileRepository.saveAndFlush(
-                            new TeacherProfile(user.getId(), schoolId, username)));
+                            new TeacherProfile(user.getId(), schoolId, nextCounterCode(schoolId, "TCH", true))));
         } else {
             studentProfileRepository.findByUserId(user.getId())
                     .orElseGet(() -> studentProfileRepository.saveAndFlush(
-                            new StudentProfile(user.getId(), schoolId, username)));
+                            new StudentProfile(user.getId(), schoolId, nextCounterCode(schoolId, "STU", false))));
         }
         return user.getId();
+    }
+
+    /**
+     * Atomically increment the demo school's counter and return {@code prefix + 8-digit}
+     * zero-padded code (TCH00000001 / STU00000001), matching the BusinessCodes convention
+     * (prefix + 8 digits). Single-threaded startup, so load-increment-save is safe here
+     * (the real onboarding path uses an atomic UPDATE ... RETURNING).
+     */
+    private String nextCounterCode(Long schoolId, String prefix, boolean teacher) {
+        School school = schoolRepository.findById(schoolId)
+                .orElseThrow(() -> new IllegalStateException("demo school not found: " + schoolId));
+        long counter = (teacher ? school.getTeacherCounter() : school.getStudentCounter()) + 1;
+        if (teacher) {
+            school.setTeacherCounter(counter);
+        } else {
+            school.setStudentCounter(counter);
+        }
+        schoolRepository.saveAndFlush(school);
+        return prefix + String.format("%08d", counter);
     }
 }
