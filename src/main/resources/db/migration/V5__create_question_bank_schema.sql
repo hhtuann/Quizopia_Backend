@@ -99,27 +99,21 @@ CREATE TABLE question_versions (
         CHECK (answer_key IS NULL OR jsonb_typeof(answer_key) = 'object'),
     CONSTRAINT chk_question_versions_metadata_object
         CHECK (jsonb_typeof(metadata) = 'object'),
-    -- NUMERIC_FILL answer_key: required keys + JSON type checks + non-blank roundingInstruction.
-    -- (NO stripTrailingZeros semantics in app; representation/trailing zeros preserved;
-    --  allows 4-char integers like 1234.)
-    -- Type-safe requiredInputLength: answer_key->'requiredInputLength' = '4'::jsonb
-    -- distinguishes JSON number 4 from JSON string "4" (a text cast ->> cannot).
+    -- NUMERIC_FILL answer_key: simplified to require only expectedAnswer
+    -- (absorbed from legacy V12 — requiredInputLength/roundingInstruction
+    --  are frontend/UI concerns, no longer stored in the answer_key JSON).
     CONSTRAINT chk_question_versions_numeric_answer_key
         CHECK (
             question_type <> 'NUMERIC_FILL'
             OR (
                 answer_key ? 'expectedAnswer'
-                AND answer_key ? 'requiredInputLength'
-                AND answer_key ? 'roundingInstruction'
                 AND jsonb_typeof(answer_key -> 'expectedAnswer') = 'string'
-                AND jsonb_typeof(answer_key -> 'requiredInputLength') = 'number'
-                AND answer_key -> 'requiredInputLength' = '4'::jsonb
-                AND jsonb_typeof(answer_key -> 'roundingInstruction') = 'string'
-                AND LENGTH(TRIM(answer_key ->> 'roundingInstruction')) > 0
                 AND LENGTH(answer_key ->> 'expectedAnswer') = 4
                 AND answer_key ->> 'expectedAnswer' ~ '^-?[0-9]+([.][0-9]+)?$'
             )
-        )
+        ),
+    -- Composite unique for FK target from exam_questions (moved from V8 ALTER).
+    CONSTRAINT uk_question_versions_question_id UNIQUE (question_id, id)
 );
 CREATE UNIQUE INDEX uk_question_versions_question_version
     ON question_versions (question_id, version_number);

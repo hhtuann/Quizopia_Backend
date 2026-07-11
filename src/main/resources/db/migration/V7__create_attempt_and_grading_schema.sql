@@ -1,5 +1,5 @@
 -- ============================================================
--- Quizopia Flyway Migration V9
+-- Quizopia Flyway Migration V7
 -- Purpose: Attempt & Grading schema for MVP Day 7 (6 tables).
 --   attempts, attempt_questions, attempt_answers, grades, grade_items,
 --   idempotency_records

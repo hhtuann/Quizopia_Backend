@@ -88,7 +88,7 @@ class V9AttemptSchemaIntegrationTests {
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("12");
+        assertThat(current).isEqualTo("9");
     }
 
     @Test
@@ -99,9 +99,9 @@ class V9AttemptSchemaIntegrationTests {
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
         }
-        // No out-of-scope Day-7 tables.
+        // No out-of-scope tables. NOTE: `notifications` is now V9 (consolidated).
         for (String forbidden : new String[]{"attempt_events", "attempt_sessions", "proctor_assignments",
-                "manual_overrides", "audit_log", "outbox_events", "notifications", "heartbeat",
+                "manual_overrides", "audit_log", "outbox_events", "heartbeat",
                 "attempt_question_versions"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + forbidden + "'", Integer.class))

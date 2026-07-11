@@ -6,8 +6,8 @@
 --   - 84 permissions (catalog approved in docs/security.md)
 --   - role-permission matrix approved in docs/security.md:
 --         SYSTEM_ADMIN   -> 13
---         ACADEMIC_ADMIN -> 51
---         TEACHER        -> 46
+--         ACADEMIC_ADMIN -> 54
+--         TEACHER        -> 50
 --         STUDENT        ->  9
 --
 -- Rules followed:
@@ -210,7 +210,7 @@ JOIN permissions p
 WHERE r.code = 'SYSTEM_ADMIN';
 
 -- ------------------------------------------------------------
--- 3.2. ACADEMIC_ADMIN — 51
+-- 3.2. ACADEMIC_ADMIN — 54
 -- ------------------------------------------------------------
 INSERT INTO role_permissions (role_id, permission_id, granted_by)
 SELECT r.id, p.id, NULL
@@ -218,6 +218,9 @@ FROM roles r
 JOIN permissions p
   ON p.code IN (
         'USER_READ',
+        'USER_CREATE',
+        'USER_UPDATE',
+        'USER_DISABLE',
         'SCHOOL_READ',
         'SCHOOL_UPDATE',
         'SCHOOL_STATUS_UPDATE',
@@ -272,7 +275,7 @@ JOIN permissions p
 WHERE r.code = 'ACADEMIC_ADMIN';
 
 -- ------------------------------------------------------------
--- 3.3. TEACHER — 46
+-- 3.3. TEACHER — 50
 -- ------------------------------------------------------------
 INSERT INTO role_permissions (role_id, permission_id, granted_by)
 SELECT r.id, p.id, NULL
@@ -285,7 +288,11 @@ JOIN permissions p
         'TEACHER_PROFILE_READ',
         'STUDENT_PROFILE_READ',
         'CLASSROOM_READ',
+        'CLASSROOM_CREATE',
+        'CLASSROOM_UPDATE',
         'CLASSROOM_MEMBER_READ',
+        'CLASSROOM_MEMBER_ADD',
+        'CLASSROOM_MEMBER_REMOVE',
         'QUESTION_BANK_CREATE',
         'QUESTION_BANK_READ',
         'QUESTION_BANK_UPDATE',
@@ -473,12 +480,12 @@ BEGIN
         v_errors := v_errors || 'SYSTEM_ADMIN expected 13 permissions, found ' || v_system_admin || '. ';
     END IF;
 
-    IF v_academic_admin <> 51 THEN
-        v_errors := v_errors || 'ACADEMIC_ADMIN expected 51 permissions, found ' || v_academic_admin || '. ';
+    IF v_academic_admin <> 54 THEN
+        v_errors := v_errors || 'ACADEMIC_ADMIN expected 54 permissions, found ' || v_academic_admin || '. ';
     END IF;
 
-    IF v_teacher <> 46 THEN
-        v_errors := v_errors || 'TEACHER expected 46 permissions, found ' || v_teacher || '. ';
+    IF v_teacher <> 50 THEN
+        v_errors := v_errors || 'TEACHER expected 50 permissions, found ' || v_teacher || '. ';
     END IF;
 
     IF v_student <> 9 THEN

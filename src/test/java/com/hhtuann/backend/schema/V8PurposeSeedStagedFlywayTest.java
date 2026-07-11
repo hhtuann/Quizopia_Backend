@@ -42,19 +42,19 @@ class V8PurposeSeedStagedFlywayTest {
             String user = pg.getUsername();
             String pass = pg.getPassword();
 
-            // 1. Migrate clean DB up to V7 (no exam tables yet).
+            // 1. Migrate clean DB up to V5 (no exam tables yet — exam schema is V6).
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
-                    .target(MigrationVersion.fromVersion("7"))
+                    .target(MigrationVersion.fromVersion("5"))
                     .load().migrate();
 
-            // 2. Insert a school BEFORE V8 runs.
+            // 2. Insert a school BEFORE V6 runs.
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement()) {
                 st.execute("INSERT INTO schools (code, name) VALUES ('SEED-SCH','Seed School')");
             }
 
-            // 3. Continue to V8 (creates exam tables + seeds purposes).
+            // 3. Continue migration (V6 creates exam tables + seeds purposes for existing schools).
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
                     .load().migrate();

@@ -21,6 +21,10 @@ CREATE TABLE schools (
     address    VARCHAR(500),
     timezone   VARCHAR(80)  NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
     status     VARCHAR(30)  NOT NULL DEFAULT 'ACTIVE',
+    -- Auto-incrementing counters for student/teacher code generation
+    -- (absorbed from legacy V11).
+    student_counter BIGINT  NOT NULL DEFAULT 0,
+    teacher_counter BIGINT  NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_schools_status CHECK (status IN ('ACTIVE','INACTIVE','ARCHIVED')),

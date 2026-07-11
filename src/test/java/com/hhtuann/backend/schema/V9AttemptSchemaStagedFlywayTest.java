@@ -43,16 +43,16 @@ class V9AttemptSchemaStagedFlywayTest {
             String user = pg.getUsername();
             String pass = pg.getPassword();
 
-            // 1. Migrate clean DB up to V8 (no attempt tables yet).
+            // 1. Migrate clean DB up to V6 (no attempt tables yet — attempt schema is V7).
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
-                    .target(MigrationVersion.fromVersion("8"))
+                    .target(MigrationVersion.fromVersion("6"))
                     .load().migrate();
 
-            // 2. Insert a realistic V8 chain (school -> ... -> exam_session + participant) BEFORE V9.
+            // 2. Insert a realistic V6 chain (school -> ... -> exam_session + participant) BEFORE V7.
             long[] v8ids = insertV8Chain(url, user, pass);
 
-            // 3. V9 tables must NOT exist yet at V8.
+            // 3. V7 tables must NOT exist yet at V6.
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement()) {
                 for (String t : V9_TABLES) {
@@ -60,23 +60,23 @@ class V9AttemptSchemaStagedFlywayTest {
                             "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'")) {
                         assertThat(rs.next()).isTrue();
                         assertThat(rs.getInt(1))
-                                .as("V9 table %s must not exist at V8", t).isZero();
+                                .as("V7 table %s must not exist at V6", t).isZero();
                     }
                 }
             }
 
-            // 4. Continue to V9.
+            // 4. Continue migration (V7 creates attempt tables, V8 classrooms, V9 notifications).
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
                     .load().migrate();
 
-            // 5. Latest applied version is 12 (V9 + V10 + V11 + V12 applied after V8).
+            // 5. Latest applied version is 9.
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("12");
+                assertThat(rs.getString(1)).isEqualTo("9");
             }
 
             // 6. All six V9 tables now exist.

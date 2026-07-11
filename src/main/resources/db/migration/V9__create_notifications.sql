@@ -1,4 +1,8 @@
--- V13: In-app notifications table.
+-- ============================================================
+-- Quizopia Flyway Migration V9
+-- Purpose: In-app notifications table.
+-- ============================================================
+-- In-app notifications table.
 -- Each notification belongs to a single user (recipient). WebSocket-delivered
 -- via /user/queue/notifications on creation. read_at = NULL means unread.
 

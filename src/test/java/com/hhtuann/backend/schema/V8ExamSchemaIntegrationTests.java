@@ -80,11 +80,11 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; the latest version is 12 (V9 Day 7 + V10 Classes + V11 Onboarding + V12 Numeric answer_key).
+        // V1–V8 are all applied; latest version is 9 (pre-release consolidation: V1–V15 → V1–V9).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("12");
+        assertThat(current).isEqualTo("9");
     }
 
     @Test
@@ -95,10 +95,10 @@ class V8ExamSchemaIntegrationTests {
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
         }
-        // No out-of-scope exam tables. NOTE: `attempts` is V9 (Day 7); `classrooms`/`classroom_members`/
-        // `exam_session_classes` are V10 (Classes Phase 1) — none are forbidden here.
+        // No out-of-scope exam tables. NOTE: `notifications` is now V9 (consolidated);
+        // `attempts` is V7; `classrooms`/`classroom_members`/`exam_session_classes` are V8.
         for (String forbidden : new String[]{"proctor_assignments",
-                "session_announcements", "audit_log", "outbox_events", "notifications", "import_jobs"}) {
+                "session_announcements", "audit_log", "outbox_events", "import_jobs"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + forbidden + "'", Integer.class))
                     .as("forbidden table %s must not exist", forbidden).isZero();
@@ -795,13 +795,25 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void sessionMaxAttemptsNonPositiveRejected() {
+    void sessionMaxAttemptsNegativeRejected() {
         long exam = newExam("SS3");
         long v = newPublishedVersion(exam, 1);
         assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
                         + "code, title, starts_at, ends_at, max_attempts, created_by) VALUES (" + schoolId + "," + v + ","
-                        + teacherProfileId + ",'S','t',now(),now()+interval '1 hour',0," + userId + ")"))
+                        + teacherProfileId + ",'S','t',now(),now()+interval '1 hour',-1," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void sessionMaxAttemptsZeroAccepted() {
+        // max_attempts = 0 means unlimited (absorbed from legacy V14); the DB CHECK is >= 0.
+        long exam = newExam("SS3A");
+        long v = newPublishedVersion(exam, 1);
+        long sessionId = jdbc.queryForObject("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
+                        + "code, title, starts_at, ends_at, max_attempts, created_by) VALUES (" + schoolId + "," + v + ","
+                        + teacherProfileId + ",'S0','t',now(),now()+interval '1 hour',0," + userId
+                        + ") RETURNING id", Long.class);
+        assertThat(sessionId).isPositive();
     }
 
     // M1 consistency rejections.

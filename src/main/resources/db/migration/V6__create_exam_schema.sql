@@ -1,5 +1,5 @@
 -- ============================================================
--- Quizopia Flyway Migration V8
+-- Quizopia Flyway Migration V6
 -- Purpose: Exam schema for MVP (8 tables).
 --   exam_purposes, exams, exam_versions, exam_sections,
 --   exam_questions, exam_question_options, exam_sessions,
@@ -150,11 +150,7 @@ CREATE TABLE exam_sections (
     CONSTRAINT uk_exam_sections_version_id UNIQUE (exam_version_id, id)
 );
 
--- H1 remediation: composite-FK target on question_versions (added here in V8; V7 file untouched).
--- exam_questions then references (question_id, id) so a pinned source version MUST belong to its
--- source question (provenance), exactly mirroring the same-school composite-FK pattern.
-ALTER TABLE question_versions
-    ADD CONSTRAINT uk_question_versions_question_id UNIQUE (question_id, id);
+-- (question_versions uk_question_versions_question_id moved to V7 CREATE TABLE.)
 
 -- 5. EXAM_QUESTIONS (immutable snapshot for attempt/grading; source version PINNED)
 CREATE TABLE exam_questions (
@@ -199,21 +195,14 @@ CREATE TABLE exam_questions (
     CONSTRAINT chk_exam_questions_answer_object
         CHECK (answer_key IS NULL OR jsonb_typeof(answer_key) = 'object'),
     CONSTRAINT chk_exam_questions_metadata_object CHECK (jsonb_typeof(metadata) = 'object'),
-    -- NUMERIC_FILL answer_key: required keys + type-safe JSON checks + non-blank roundingInstruction.
-    -- Type-safe requiredInputLength: answer_key->'requiredInputLength' = '4'::jsonb distinguishes
-    -- JSON number 4 from JSON string "4". Representation/trailing zeros preserved (no strip).
+    -- NUMERIC_FILL answer_key: simplified to require only expectedAnswer
+    -- (absorbed from legacy V12 — requiredInputLength/roundingInstruction no longer stored).
     CONSTRAINT chk_exam_questions_numeric_answer_key
         CHECK (
             question_type <> 'NUMERIC_FILL'
             OR (
                 answer_key ? 'expectedAnswer'
-                AND answer_key ? 'requiredInputLength'
-                AND answer_key ? 'roundingInstruction'
                 AND jsonb_typeof(answer_key -> 'expectedAnswer') = 'string'
-                AND jsonb_typeof(answer_key -> 'requiredInputLength') = 'number'
-                AND answer_key -> 'requiredInputLength' = '4'::jsonb
-                AND jsonb_typeof(answer_key -> 'roundingInstruction') = 'string'
-                AND LENGTH(TRIM(answer_key ->> 'roundingInstruction')) > 0
                 AND LENGTH(answer_key ->> 'expectedAnswer') = 4
                 AND answer_key ->> 'expectedAnswer' ~ '^-?[0-9]+([.][0-9]+)?$'
             )
@@ -260,6 +249,11 @@ CREATE TABLE exam_sessions (
     created_by        BIGINT       NOT NULL,
     opened_at         TIMESTAMPTZ,
     closed_at         TIMESTAMPTZ,
+    -- Class-based visibility (absorbed from legacy V10).
+    visibility        VARCHAR(20)  NOT NULL DEFAULT 'PUBLIC',
+    -- Optional session-level duration override (absorbed from legacy V15).
+    -- NULL = inherit exam version duration; 0 = unlimited; positive = exact minutes.
+    duration_minutes  INTEGER,
     version           INTEGER      NOT NULL DEFAULT 0,
     created_at        TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at        TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -274,7 +268,10 @@ CREATE TABLE exam_sessions (
     CONSTRAINT chk_exam_sessions_status
         CHECK (status IN ('DRAFT','SCHEDULED','OPEN','CLOSED','CANCELLED')),
     CONSTRAINT chk_exam_sessions_window CHECK (ends_at > starts_at),
-    CONSTRAINT chk_exam_sessions_max_attempts CHECK (max_attempts > 0),
+    -- max_attempts >= 0 (0 = unlimited; absorbed from legacy V14).
+    CONSTRAINT chk_exam_sessions_max_attempts CHECK (max_attempts >= 0),
+    -- visibility CHECK (absorbed from legacy V10).
+    CONSTRAINT chk_exam_sessions_visibility CHECK (visibility IN ('PUBLIC','CLASS_RESTRICTED')),
     CONSTRAINT chk_exam_sessions_version_col CHECK (version >= 0),
     CONSTRAINT chk_exam_sessions_code_not_blank CHECK (LENGTH(TRIM(code)) > 0),
     CONSTRAINT chk_exam_sessions_title_not_blank CHECK (LENGTH(TRIM(title)) > 0),
