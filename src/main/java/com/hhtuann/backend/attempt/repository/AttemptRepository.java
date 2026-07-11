@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
+import java.time.Instant;
 import java.util.List;
 import org.springframework.data.repository.query.Param;
 
@@ -51,4 +52,14 @@ public interface AttemptRepository extends JpaRepository<Attempt, Long> {
 
     /** Per-student attempt history, newest first. */
     Page<Attempt> findByStudentProfileIdOrderByCreatedAtDesc(Long studentProfileId, Pageable pageable);
+
+    /**
+     * IDs of IN_PROGRESS attempts whose deadline has passed, oldest deadline
+     * first — the work-list for the timeout sweeper. Returns IDs only (the
+     * sweeper locks + finalizes each one individually via
+     * {@link #findByIdForUpdate} so no long-held locks).
+     */
+    @Query("SELECT a.id FROM Attempt a WHERE a.status = :status AND a.deadlineAt < :now "
+            + "ORDER BY a.deadlineAt ASC")
+    List<Long> findExpiredInProgressIds(@Param("status") AttemptStatus status, @Param("now") Instant now);
 }

@@ -25,6 +25,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
@@ -66,12 +67,14 @@ public class AttemptSubmitService {
     private final ApplicationEventPublisher eventPublisher;
     private final com.hhtuann.backend.grading.AttemptGradingService gradingService;
     private final com.hhtuann.backend.notification.application.NotificationService notificationService;
+    private final com.hhtuann.backend.academic.repository.StudentProfileRepository studentProfileRepo;
 
     public AttemptSubmitService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                 IdempotencyRecordRepository idempotencyRepo, ObjectMapper objectMapper,
                                 Clock clock, ApplicationEventPublisher eventPublisher,
                                 com.hhtuann.backend.grading.AttemptGradingService gradingService,
-                                com.hhtuann.backend.notification.application.NotificationService notificationService) {
+                                com.hhtuann.backend.notification.application.NotificationService notificationService,
+                                com.hhtuann.backend.academic.repository.StudentProfileRepository studentProfileRepo) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.idempotencyRepo = idempotencyRepo;
@@ -80,6 +83,7 @@ public class AttemptSubmitService {
         this.eventPublisher = eventPublisher;
         this.gradingService = gradingService;
         this.notificationService = notificationService;
+        this.studentProfileRepo = studentProfileRepo;
     }
 
     @Transactional
@@ -176,6 +180,69 @@ public class AttemptSubmitService {
                 "Your exam has been graded: " + grade.getFinalScore() + "/" + grade.getMaxScore(),
                 "/attempts/" + attemptId + "/result");
         return response;
+    }
+
+    // ============================================================
+    // Timeout auto-finalize (server-side sweep)
+    // ============================================================
+
+    /**
+     * IDs of IN_PROGRESS attempts whose deadline has passed — the work-list for
+     * {@link com.hhtuann.backend.attempt.application.AttemptTimeoutScheduler}.
+     * Read-only; the sweeper finalizes each ID via {@link #finalizeAttempt(Long)}
+     * (own transaction, own lock).
+     */
+    @Transactional(readOnly = true)
+    public List<Long> findExpiredAttemptIds() {
+        return attemptRepo.findExpiredInProgressIds(AttemptStatus.IN_PROGRESS, Instant.now(clock));
+    }
+
+    /**
+     * Finalize one expired IN_PROGRESS attempt: transition to SUBMITTED with
+     * {@code submittedAt = deadlineAt} (NOT now — the attempt is recorded as
+     * submitted when the allotted time expired, regardless of when this sweep
+     * runs), then grade and notify. Server-side backstop for students who left
+     * the attempt page before the timer hit 0 (the client-side auto-submit only
+     * fires while the page is open).
+     *
+     * <p>Own transaction + pessimistic lock per attempt so one failure can't roll
+     * back others and locks are short-lived. The status re-check after the lock
+     * handles the race with a concurrent manual/client submit (already SUBMITTED
+     * → no-op). No idempotency-cache row is inserted: the auto-timeout key is
+     * never known to any client, so no cached retry can target it.
+     */
+    @Transactional
+    public void finalizeAttempt(Long attemptId) {
+        Attempt attempt = attemptRepo.findByIdForUpdate(attemptId).orElse(null);
+        if (attempt == null) {
+            return;
+        }
+        // Race: a manual/client submit beat the sweep to it — nothing to do.
+        if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
+            return;
+        }
+        Instant deadline = attempt.getDeadlineAt();
+        // submittedAt = the deadline (not now): duration is recorded as exactly
+        // the allowed time, not start→now.
+        String key = "auto-timeout-" + attemptId;
+        attempt.submit(deadline, key);
+        com.hhtuann.backend.attempt.domain.model.Grade grade = gradingService.gradeAndPersist(attempt);
+        attemptRepo.saveAndFlush(attempt); // surface uk_attempts_student_submit_key etc.
+
+        // Realtime + notification mirror the manual submit path.
+        eventPublisher.publishEvent(new AttemptRealtimeEvent(
+                RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
+                attempt.getStudentProfileId(), deadline));
+        Long userId = studentProfileRepo.findById(attempt.getStudentProfileId())
+                .map(StudentProfile::getUserId).orElse(null);
+        if (userId != null) {
+            notificationService.create(userId,
+                    com.hhtuann.backend.notification.domain.model.NotificationType.RESULT_GRADED,
+                    "Result available",
+                    "Time ran out — your exam was auto-submitted and graded: "
+                            + grade.getFinalScore() + "/" + grade.getMaxScore(),
+                    "/attempts/" + attemptId + "/result");
+        }
     }
 
     /**
