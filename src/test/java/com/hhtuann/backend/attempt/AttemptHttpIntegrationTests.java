@@ -328,7 +328,8 @@ class AttemptHttpIntegrationTests {
         }
 
         @Test
-        void startReturns409SCHEDULED() throws Exception {
+        void startAutoOpensSCHEDULEDInWindow() throws Exception {
+                // Lazy-open: SCHEDULED within the time window → auto-opened → 200 (not 409).
                 jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', opened_at=NULL WHERE id=" + sessionId);
                 mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(
                                 org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
@@ -336,8 +337,7 @@ class AttemptHttpIntegrationTests {
                                                 .jwt(j -> j.subject(jwt())))
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{}"))
-                                .andExpect(status().isConflict())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_SESSION_NOT_OPEN"));
+                                .andExpect(status().isCreated());
         }
 
         @Test

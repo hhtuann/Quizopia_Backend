@@ -239,10 +239,12 @@ class AttemptDetailAndMyHttpIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].attemptId").value(attemptId))
-                // No leak fields:
+                // No leak fields: answerPayload/questions/grade/studentProfileId must not exist.
+                // score/maxScore DO exist in the list DTO (as null) — the actual values come
+                // from the detail endpoint, not the list.
                 .andExpect(jsonPath("$.items[*].answerPayload").doesNotExist())
                 .andExpect(jsonPath("$.items[*].questions").doesNotExist())
-                .andExpect(jsonPath("$.items[*].score").doesNotExist())
+                .andExpect(jsonPath("$.items[*].score").value(org.hamcrest.Matchers.everyItem(org.hamcrest.Matchers.nullValue())))
                 .andExpect(jsonPath("$.items[*].grade").doesNotExist())
                 .andExpect(jsonPath("$.items[*].studentProfileId").doesNotExist());
     }

@@ -356,13 +356,12 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsScheduledSession() {
+        void startAutoOpensScheduledSessionInWindow() {
+                // Lazy-open: SCHEDULED within the time window → auto-transitioned to OPEN on student access.
                 jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', opened_at=NULL WHERE id=" + sessionId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_SESSION_NOT_OPEN"));
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp).isNotNull();
         }
 
         @Test
@@ -376,11 +375,12 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void availableSCHEDULEDVisibleButCannotStart() {
+        void availableSCHEDULEDInWindowCanStart() {
+                // Lazy-open: SCHEDULED within window → canStartNow is true (auto-opened on start).
                 jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', opened_at=NULL WHERE id=" + sessionId);
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
                 assertThat(resp.items()).hasSize(1);
-                assertThat(resp.items().get(0).canStartNow()).isFalse();
+                assertThat(resp.items().get(0).canStartNow()).isTrue();
                 assertThat(resp.items().get(0).sessionStatus()).isEqualTo("SCHEDULED");
         }
 

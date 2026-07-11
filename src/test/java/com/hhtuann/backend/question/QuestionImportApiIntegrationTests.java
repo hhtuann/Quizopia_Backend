@@ -135,6 +135,7 @@ class QuestionImportApiIntegrationTests {
         jdbc.update("DELETE FROM grade_levels WHERE code = 'GL-IMP'");
         jdbc.update("DELETE FROM schools WHERE code = 'API-IMP-SCH'");
         jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
+        jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
         jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
         jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')");
     }

@@ -174,11 +174,11 @@ class SessionStatisticsIntegrationTests {
     }
 
     private long[] createStudentAndSubmit() {
-        long su = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('stu-" + tag + UUID.randomUUID().toString().substring(0, 4) + "','s" + UUID.randomUUID() + "@t.com','h','Student')");
+        long su = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('stu-" + tag + UUID.randomUUID().toString().substring(0, 8) + "','s" + UUID.randomUUID() + "@t.com','h','Student')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + su + "," + sr + ")");
         long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + su + "," + school + ",'SC" + tag + UUID.randomUUID().toString().substring(0, 4) + "')");
+        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + su + "," + school + ",'SC" + tag + UUID.randomUUID().toString().substring(0, 8) + "')");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + teacherUserId + ")");
         long attemptId = attemptService.startAttempt(su, sessionId, new com.hhtuann.backend.attempt.dto.StartAttemptRequest(null)).attemptId();
         em.flush(); em.clear();

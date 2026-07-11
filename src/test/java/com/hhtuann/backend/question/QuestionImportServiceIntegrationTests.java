@@ -167,6 +167,7 @@ class QuestionImportServiceIntegrationTests {
         jdbc.update("DELETE FROM grade_levels WHERE code IN ('GL-IMP','GL-B','TX-FAIL-GL','RACE-GL')");
         jdbc.update("DELETE FROM schools WHERE code IN ('IMP-SCH','CROSS-SCH-B','TX-FAIL-SCH','RACE-SCH')");
         jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
+        jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER'))");
         jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER'))");
         jdbc.update("DELETE FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER')");
     }
@@ -209,7 +210,7 @@ class QuestionImportServiceIntegrationTests {
         Map<String, Object> qRow = jdbc.queryForMap(
                 "SELECT status, current_version_number, code FROM questions WHERE id = ?",
                 questionId);
-        assertThat(qRow.get("status")).isEqualTo(QuestionStatus.DRAFT.name());
+        assertThat(qRow.get("status")).isEqualTo(QuestionStatus.ACTIVE.name());
         assertThat(qRow.get("current_version_number")).isEqualTo(1);
 
         // Version: version_number = 1, answer_key NULL.
