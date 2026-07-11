@@ -129,7 +129,8 @@ public class AttemptService {
             Instant startsAt = rs.getTimestamp("starts_at").toInstant();
             Instant endsAt = rs.getTimestamp("ends_at").toInstant();
             boolean canResume = activeId != null && activeDeadline != null && !now.isAfter(activeDeadline);
-            boolean canStartNow = activeId == null && "OPEN".equals(status)
+            boolean canStartNow = activeId == null
+                    && ("OPEN".equals(status) || "SCHEDULED".equals(status))
                     && !now.isBefore(startsAt) && !now.isAfter(endsAt) && remaining > 0;
             return new AvailableSessionItem(
                     rs.getLong("id"), rs.getString("code"), rs.getString("title"), status,
