@@ -144,9 +144,9 @@ public class StudentOnboardingService {
         StudentProfile profile = new StudentProfile(targetUserId, schoolId, studentCode);
         studentProfileRepository.saveAndFlush(profile);
 
-        // Notify the student they've been assigned to a school.
+        // Notify the student they've been approved and assigned to a school.
         notificationService.create(targetUserId,
-                com.hhtuann.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                com.hhtuann.backend.notification.domain.model.NotificationType.ADDED_TO_SCHOOL,
                 "School assignment approved",
                 "You have been assigned to " + school.getName() + ". Your student code is " + studentCode + ".",
                 "/sessions");

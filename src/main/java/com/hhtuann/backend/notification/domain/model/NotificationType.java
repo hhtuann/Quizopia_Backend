@@ -10,5 +10,7 @@ public enum NotificationType {
     STUDENT_STARTED_EXAM,
     NEW_USER_REGISTERED,
     NEW_ACADEMIC_ACTIVITY,
-    USER_STATUS_CHANGED
+    USER_STATUS_CHANGED,
+    /** ACADEMIC_ADMIN approved a newly-registered student into a school (onboarding). */
+    ADDED_TO_SCHOOL
 }
