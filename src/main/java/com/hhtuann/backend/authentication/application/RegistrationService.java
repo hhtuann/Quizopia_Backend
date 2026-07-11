@@ -75,7 +75,6 @@ public class RegistrationService {
         String email = trimmed(request.email());
         String displayName = trimmed(request.displayName());
         String phone = trimmed(request.phone());
-        String nationalId = trimmed(request.nationalId());
 
         if (username.contains("@")) {
             throw new AuthenticationException(AuthErrorCode.AUTH_VALIDATION_ERROR,
@@ -101,11 +100,9 @@ public class RegistrationService {
 
         String passwordHash = passwordHasher.hash(request.password());
         String phoneEncrypted = encryptor.encrypt(phone);
-        String nationalIdEncrypted = encryptor.encrypt(nationalId);
 
         User user = new User(username, email, passwordHash, displayName);
         user.setPhoneEncrypted(phoneEncrypted);
-        user.setNationalIdEncrypted(nationalIdEncrypted);
         userRepository.saveAndFlush(user);
 
         Role role = roleRepository.findByCode(roleCode)
@@ -137,7 +134,6 @@ public class RegistrationService {
                 user.getEmail(),
                 user.getDisplayName(),
                 phone,
-                nationalId,
                 user.getStatus(),
                 List.of(role.getCode()));
     }

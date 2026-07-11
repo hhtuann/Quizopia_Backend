@@ -29,7 +29,6 @@ CREATE TABLE users (
 
     -- AES-256-GCM encrypted personal data (absorbed from legacy V5).
     phone_encrypted TEXT,
-    national_id_encrypted TEXT,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -60,10 +59,7 @@ CREATE TABLE users (
     -- Encrypted personal data must use versioned ciphertext prefix
     -- (absorbed from legacy V5).
     CONSTRAINT chk_users_phone_encrypted_format
-        CHECK (phone_encrypted IS NULL OR phone_encrypted LIKE 'v1:%'),
-
-    CONSTRAINT chk_users_national_id_encrypted_format
-        CHECK (national_id_encrypted IS NULL OR national_id_encrypted LIKE 'v1:%')
+        CHECK (phone_encrypted IS NULL OR phone_encrypted LIKE 'v1:%')
 );
 
 CREATE UNIQUE INDEX uk_users_username_ci

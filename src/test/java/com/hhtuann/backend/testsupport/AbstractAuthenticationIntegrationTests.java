@@ -32,17 +32,17 @@ public abstract class AbstractAuthenticationIntegrationTests {
     protected ObjectMapper objectMapper;
 
     protected String studentRegisterJson(String username, String email, String password,
-                                         String displayName, String phone, String nationalId) {
+                                         String displayName, String phone) {
         return """
-                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","nationalId":"%s","accountType":"STUDENT"}
-                """.formatted(username, email, password, displayName, phone, nationalId);
+                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"STUDENT"}
+                """.formatted(username, email, password, displayName, phone);
     }
 
     protected String teacherRegisterJson(String username, String email, String password,
-                                         String displayName, String phone, String nationalId, String invite) {
+                                         String displayName, String phone, String invite) {
         return """
-                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","nationalId":"%s","accountType":"TEACHER","teacherInviteCode":"%s"}
-                """.formatted(username, email, password, displayName, phone, nationalId, invite);
+                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"TEACHER","teacherInviteCode":"%s"}
+                """.formatted(username, email, password, displayName, phone, invite);
     }
 
     protected String loginJson(String identifier, String password) {

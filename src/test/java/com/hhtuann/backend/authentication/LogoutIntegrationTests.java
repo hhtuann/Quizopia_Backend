@@ -70,7 +70,7 @@ class LogoutIntegrationTests extends AbstractAuthenticationIntegrationTests {
     // ---------- helpers ----------
 
     private void registerStudent(String username) throws Exception {
-        String json = studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567", "001234567890");
+        String json = studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567");
         register(json);
     }
 

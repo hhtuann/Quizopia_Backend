@@ -52,7 +52,7 @@ class RegistrationProfileIntegrationTests {
 
     private static RegisterRequest request(String username, String email, AccountType type) {
         return new RegisterRequest(
-                username, email, "password123", "Display", "0123456789", "ID123",
+                username, email, "password123", "Display", "0123456789",
                 type,
                 type == AccountType.TEACHER ? "test-teacher-invite-code-only" : null);
     }

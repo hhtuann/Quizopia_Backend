@@ -99,7 +99,6 @@ class UserManagementIntegrationTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].passwordHash").doesNotExist())
                 .andExpect(jsonPath("$.items[0].phoneEncrypted").doesNotExist())
-                .andExpect(jsonPath("$.items[0].nationalIdEncrypted").doesNotExist())
                 .andExpect(jsonPath("$.items[0].tokenVersion").doesNotExist());
     }
 
@@ -130,7 +129,7 @@ class UserManagementIntegrationTests {
     void createUser_returns201() throws Exception {
         mockMvc.perform(post("/api/users").with(jwtFor(adminId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(createUserBody("um-new", "um-new@test.com", "Password123", "UM New", "STUDENT", null, null)))
+                        .content(createUserBody("um-new", "um-new@test.com", "Password123", "UM New", "STUDENT", null)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").exists())
                 .andExpect(jsonPath("$.username").value("um-new"))
@@ -144,7 +143,7 @@ class UserManagementIntegrationTests {
     void createUser_duplicateUsername_returns409() throws Exception {
         mockMvc.perform(post("/api/users").with(jwtFor(adminId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(createUserBody("um-target", "other-dup@test.com", "Password123", "Dup", "STUDENT", null, null)))
+                        .content(createUserBody("um-target", "other-dup@test.com", "Password123", "Dup", "STUDENT", null)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("USER_USERNAME_ALREADY_EXISTS"));
     }
@@ -153,7 +152,7 @@ class UserManagementIntegrationTests {
     void createUser_duplicateEmail_returns409() throws Exception {
         mockMvc.perform(post("/api/users").with(jwtFor(adminId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(createUserBody("um-other", "um-target@test.com", "Password123", "Dup", "STUDENT", null, null)))
+                        .content(createUserBody("um-other", "um-target@test.com", "Password123", "Dup", "STUDENT", null)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("USER_EMAIL_ALREADY_EXISTS"));
     }
@@ -162,7 +161,7 @@ class UserManagementIntegrationTests {
     void createUser_blankUsername_returns400() throws Exception {
         mockMvc.perform(post("/api/users").with(jwtFor(adminId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(createUserBody(" ", "um-blank@test.com", "Password123", "Blank", "STUDENT", null, null)))
+                        .content(createUserBody(" ", "um-blank@test.com", "Password123", "Blank", "STUDENT", null)))
                 .andExpect(status().isBadRequest());
     }
 
@@ -300,7 +299,7 @@ class UserManagementIntegrationTests {
         // ACADEMIC_ADMIN holds USER_READ but is NOT SYSTEM_ADMIN → blocked.
         mockMvc.perform(post("/api/users").with(jwtFor(academicId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(createUserBody("um-x", "um-x@test.com", "Password123", "X", "STUDENT", null, null)))
+                        .content(createUserBody("um-x", "um-x@test.com", "Password123", "X", "STUDENT", null)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("USER_ACCESS_DENIED"));
     }
@@ -327,11 +326,10 @@ class UserManagementIntegrationTests {
 
     private static String createUserBody(String username, String email, String password,
                                          String displayName, String accountType,
-                                         String phone, String nationalId) {
+                                         String phone) {
         return "{\"username\":\"" + username + "\",\"email\":\"" + email + "\",\"password\":\"" + password
                 + "\",\"displayName\":\"" + displayName + "\",\"accountType\":\"" + accountType + "\""
                 + (phone == null ? "" : ",\"phone\":\"" + phone + "\"")
-                + (nationalId == null ? "" : ",\"nationalId\":\"" + nationalId + "\"")
                 + "}";
     }
 

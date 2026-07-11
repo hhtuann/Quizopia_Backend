@@ -72,7 +72,6 @@ class JwtAuthoritiesIntegrationTests {
                 "Passw0rd!",
                 username + " Name",
                 "+84991234567",
-                "001234567890",
                 AccountType.STUDENT,
                 null)).id();
     }

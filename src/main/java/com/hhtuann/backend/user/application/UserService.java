@@ -145,9 +145,6 @@ public class UserService {
         if (request.phone() != null && !request.phone().isBlank()) {
             user.setPhoneEncrypted(encryptor.encrypt(request.phone().trim()));
         }
-        if (request.nationalId() != null && !request.nationalId().isBlank()) {
-            user.setNationalIdEncrypted(encryptor.encrypt(request.nationalId().trim()));
-        }
         userRepository.saveAndFlush(user);
 
         Role role = roleRepository.findByCode(roleCode)

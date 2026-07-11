@@ -81,25 +81,25 @@ class ErrorContractIntegrationTests extends AbstractAuthenticationIntegrationTes
     }
 
     private MvcResult shortPasswordRegister() throws Exception {
-        String json = studentRegisterJson(unique("short"), emailFor(unique("short")), "Short1!", "Short", "+8499", "123456");
+        String json = studentRegisterJson(unique("short"), emailFor(unique("short")), "Short1!", "Short", "+8499");
         return mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andReturn();
     }
 
     private MvcResult registerTeacherWrongInvite() throws Exception {
-        String json = teacherRegisterJson(unique("teach"), emailFor(unique("teach")), "Passw0rd!", "Teach", "+8499", "123456", "wrong");
+        String json = teacherRegisterJson(unique("teach"), emailFor(unique("teach")), "Passw0rd!", "Teach", "+8499", "wrong");
         return mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andReturn();
     }
 
     private void registerStudent(String username) throws Exception {
         mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
-                .content(studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567", "001234567890")));
+                .content(studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567")));
     }
 
     private MvcResult registerStudentRaw(String username, String email) throws Exception {
         return mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
-                .content(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567", "001234567890"))).andReturn();
+                .content(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"))).andReturn();
     }
 
     private static String unique(String base) {

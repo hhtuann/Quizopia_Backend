@@ -9,10 +9,10 @@ import jakarta.validation.constraints.Size;
 /**
  * Request body for {@code POST /api/users} (USER_CREATE). The SYSTEM_ADMIN
  * supplies credentials + the foundational account type (STUDENT/TEACHER); the
- * backend hashes the password (Argon2id), encrypts phone/national-id
- * (AES-256-GCM), persists the user + role assignment, and (in demo mode) the
- * matching academic profile. Other roles (ACADEMIC_ADMIN/SYSTEM_ADMIN) are
- * granted later via {@link AssignRoleRequest}.
+ * backend hashes the password (Argon2id), encrypts phone (AES-256-GCM),
+ * persists the user + role assignment, and (in demo mode) the matching academic
+ * profile. Other roles (ACADEMIC_ADMIN/SYSTEM_ADMIN) are granted later via
+ * {@link AssignRoleRequest}.
  */
 public record CreateUserRequest(
         @NotBlank @Size(max = 50) String username,
@@ -20,6 +20,5 @@ public record CreateUserRequest(
         @NotBlank @Size(min = 8, max = 128) String password,
         @NotBlank @Size(max = 150) String displayName,
         @NotNull AccountType accountType,
-        @Size(max = 20) String phone,
-        @Size(max = 50) String nationalId
+        @Size(max = 20) String phone
 ) {}

@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>The context load itself proves Hibernate {@code ddl-auto=validate} accepts
  * the new {@link User} mapping against the V5 schema. These tests then verify
  * Flyway reached version 5, that ciphertext can be persisted and read back, and
- * that no plaintext {@code phone}/{@code national_id} columns exist.
+ * that no plaintext {@code phone} column exists.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -56,14 +56,12 @@ class UserEncryptedPersonalDataIntegrationTests {
                 "argon2id-fake-hash",
                 "Encrypted Data User");
         user.setPhoneEncrypted("v1:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnh5eg");
-        user.setNationalIdEncrypted("v1:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0");
         User saved = userRepository.saveAndFlush(user);
         entityManager.clear();
 
         User reloaded = userRepository.findById(saved.getId()).orElseThrow();
 
         assertThat(reloaded.getPhoneEncrypted()).isEqualTo("v1:YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnh5eg");
-        assertThat(reloaded.getNationalIdEncrypted()).isEqualTo("v1:MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0");
     }
 
     @Test
@@ -79,21 +77,20 @@ class UserEncryptedPersonalDataIntegrationTests {
         User reloaded = userRepository.findById(saved.getId()).orElseThrow();
 
         assertThat(reloaded.getPhoneEncrypted()).isNull();
-        assertThat(reloaded.getNationalIdEncrypted()).isNull();
     }
 
     @Test
-    void noPlaintextPhoneOrNationalIdColumnsExist() {
+    void noPlaintextPhoneColumnExists() {
         @SuppressWarnings("unchecked")
         List<String> columns = entityManager
                 .createNativeQuery(
                         "SELECT column_name FROM information_schema.columns "
                                 + "WHERE table_name = 'users' "
-                                + "AND column_name IN ('phone', 'national_id', 'phone_encrypted', 'national_id_encrypted')",
+                                + "AND column_name IN ('phone', 'phone_encrypted')",
                         String.class)
                 .getResultList();
 
         assertThat(columns)
-                .containsExactlyInAnyOrder("phone_encrypted", "national_id_encrypted");
+                .containsExactlyInAnyOrder("phone_encrypted");
     }
 }

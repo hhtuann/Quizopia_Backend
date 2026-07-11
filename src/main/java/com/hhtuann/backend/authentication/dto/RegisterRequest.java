@@ -9,7 +9,7 @@ import jakarta.validation.constraints.Size;
  *
  * <p>{@code accountType} is optional: a {@code null} value means STUDENT.
  * {@code teacherInviteCode} is required only when {@code accountType} is
- * TEACHER (enforced by the service). No complex phone / national-id regex is
+ * TEACHER (enforced by the service). No complex phone regex is
  * applied beyond presence; the service trims surrounding whitespace from the
  * identifier and display fields. The password is never trimmed.
  */
@@ -19,7 +19,6 @@ public record RegisterRequest(
         @NotBlank @Size(min = 8, max = 128) String password,
         @NotBlank @Size(max = 150) String displayName,
         @NotBlank String phone,
-        @NotBlank String nationalId,
         AccountType accountType,
         String teacherInviteCode
 ) {

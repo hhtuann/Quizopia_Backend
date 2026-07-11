@@ -33,7 +33,6 @@ public class AuthScenario {
                 password,
                 username + " Name",
                 "+84991234567",
-                "001234567890",
                 AccountType.STUDENT,
                 null));
         return loginService.login(

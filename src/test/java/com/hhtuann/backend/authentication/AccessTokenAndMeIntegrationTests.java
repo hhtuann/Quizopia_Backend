@@ -54,7 +54,7 @@ class AccessTokenAndMeIntegrationTests extends AbstractAuthenticationIntegration
         assertThat(jwt.getIssuedAt()).isNotNull();
         assertThat(jwt.getExpiresAt()).isNotNull();
         assertThat(jwt.getClaims().keySet())
-                .doesNotContain("email", "phone", "national_id", "password_hash", "permissions");
+                .doesNotContain("email", "phone", "password_hash", "permissions");
     }
 
     @Test
@@ -70,7 +70,6 @@ class AccessTokenAndMeIntegrationTests extends AbstractAuthenticationIntegration
         JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
         assertThat(body.get("username").asString()).isEqualTo(username);
         assertThat(body.get("phone").asString()).isEqualTo("+84991234567");
-        assertThat(body.get("nationalId").asString()).isEqualTo("001234567890");
         assertThat(body.get("status").asString()).isEqualTo("ACTIVE");
         assertThat(body.get("roles").get(0).asString()).isEqualTo("STUDENT");
         assertThat(body.get("permissions").toString()).contains("ATTEMPT_START", "EXAM_READ");
@@ -126,7 +125,7 @@ class AccessTokenAndMeIntegrationTests extends AbstractAuthenticationIntegration
     }
 
     private void registerStudent(String username, String password) throws Exception {
-        String json = studentRegisterJson(username, emailFor(username), password, username + " Name", "+84991234567", "001234567890");
+        String json = studentRegisterJson(username, emailFor(username), password, username + " Name", "+84991234567");
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON).content(json));
     }

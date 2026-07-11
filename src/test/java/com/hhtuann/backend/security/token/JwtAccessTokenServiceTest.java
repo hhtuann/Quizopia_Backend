@@ -114,7 +114,7 @@ class JwtAccessTokenServiceTest {
         Jwt jwt = decoder.decode(issued.getTokenValue());
 
         assertThat(jwt.getClaims().keySet())
-                .doesNotContain("email", "phone", "national_id", "password_hash", "permissions");
+                .doesNotContain("email", "phone", "password_hash", "permissions");
     }
 
     @Test
