@@ -234,9 +234,11 @@ public class ExamSessionService {
             eventPublisher
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
         }
-        // Lazy-close: SCHEDULED past window (never opened) → CLOSED.
+        // Lazy-close: SCHEDULED past window (never opened) → CLOSED. Uses expire()
+        // (not close()) so openedAt is also set — the V8 invariant requires CLOSED
+        // rows to have both timestamps non-null, and this session was never opened.
         if (session.getStatus() == ExamSessionStatus.SCHEDULED && now.isAfter(session.getEndsAt())) {
-            session.close(now);
+            session.expire(now);
             sessionRepository.saveAndFlush(session);
             eventPublisher
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));

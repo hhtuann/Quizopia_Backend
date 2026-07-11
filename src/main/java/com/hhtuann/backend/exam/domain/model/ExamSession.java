@@ -209,6 +209,22 @@ public class ExamSession {
     }
 
     /**
+     * Transition SCHEDULED → CLOSED for a session whose time window passed
+     * without ever being opened. Unlike {@link #close(Instant)}, this also
+     * sets {@code openedAt} — the V8 invariant {@code chk_exam_sessions_state_timestamps}
+     * requires CLOSED rows to have BOTH timestamps non-null, and a never-opened
+     * SCHEDULED session still has {@code openedAt = null}. Recording both as
+     * {@code now} (the moment lazy finalization detected the expiry) keeps the
+     * row valid without implying a real OPEN period.
+     */
+    public void expire(Instant now) {
+        Objects.requireNonNull(now, "now must not be null");
+        this.status = ExamSessionStatus.CLOSED;
+        this.openedAt = now;
+        this.closedAt = now;
+    }
+
+    /**
      * Transition DRAFT/SCHEDULED → CANCELLED. Does not set timestamps (the DB
      * invariant requires both null for CANCELLED).
      */

@@ -70,10 +70,12 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
 
     /**
      * Bulk close expired SCHEDULED sessions: transitions SCHEDULED sessions past
-     * their window directly to CLOSED (they were never opened — skip OPEN).
+     * their window directly to CLOSED (they were never opened — skip OPEN). Sets
+     * BOTH openedAt and closedAt so the row satisfies the V8 invariant
+     * chk_exam_sessions_state_timestamps (CLOSED requires both timestamps non-null).
      */
     @Modifying(clearAutomatically = true)
-    @Query("UPDATE ExamSession s SET s.status = :closed, s.closedAt = :now "
+    @Query("UPDATE ExamSession s SET s.status = :closed, s.openedAt = :now, s.closedAt = :now "
             + "WHERE s.ownerTeacherId = :ownerId AND s.status = :scheduled AND s.endsAt < :now")
     int bulkCloseExpiredScheduledSessions(@Param("ownerId") Long ownerId,
                                          @Param("scheduled") ExamSessionStatus scheduledStatus,
