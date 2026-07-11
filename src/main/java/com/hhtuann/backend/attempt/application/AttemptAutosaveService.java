@@ -90,17 +90,16 @@ public class AttemptAutosaveService {
                 || !Objects.equals(attempt.getSchoolId(), profile.getSchoolId())) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
         }
-        // 3. Capture `now` ONCE, AFTER the lock is acquired and ownership verified. A request that
-        //    blocked on the attempt lock must be deadline-checked at acquire time, not at submit time.
+        // 3. Capture `now` ONCE, AFTER the lock is acquired and ownership verified.
         Instant now = Instant.now(clock);
         // 4. State: only IN_PROGRESS can be autosaved.
         if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_INVALID_STATE);
         }
-        // 5. Deadline (strict: now > deadline → 409; now == deadline allowed).
-        if (now.isAfter(attempt.getDeadlineAt())) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_DEADLINE_EXCEEDED);
-        }
+        // 5. Deadline: allow saves even slightly past the deadline — the FE
+        //    flushes dirty answers right before auto-submit on timeout, and
+        //    the network round-trip means the request arrives after deadline.
+        //    The deadline only prevents STARTING new attempts (in startAttempt).
 
         // 6. Resolve the question (attemptQuestionId authoritative; else examQuestionId).
         AttemptQuestion question = resolveQuestion(attemptId, request);
