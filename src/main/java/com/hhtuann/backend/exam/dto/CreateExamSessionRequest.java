@@ -17,6 +17,8 @@ public record CreateExamSessionRequest(
         @NotNull Instant startsAt,
         @NotNull Instant endsAt,
         @NotNull @jakarta.validation.constraints.Min(0) Integer maxAttempts,
+        /** Session-level duration override (minutes). NULL = use exam version's duration. 0 = unlimited. */
+        Integer durationMinutes,
         /** PUBLIC = all same-school students; CLASS_RESTRICTED (default) = assigned classes only. */
         SessionVisibility visibility,
         /** Assigned classrooms (required-meaningful only when visibility = CLASS_RESTRICTED). Ignored when PUBLIC. */
@@ -25,7 +27,7 @@ public record CreateExamSessionRequest(
     /** Convenience: create without explicit visibility (defaults to CLASS_RESTRICTED, no classes). */
     public CreateExamSessionRequest(Long examId, Integer examVersionNumber, String code, String title,
             Instant startsAt, Instant endsAt, Integer maxAttempts) {
-        this(examId, examVersionNumber, code, title, startsAt, endsAt, maxAttempts, null, null);
+        this(examId, examVersionNumber, code, title, startsAt, endsAt, maxAttempts, null, null, null);
     }
 }
 

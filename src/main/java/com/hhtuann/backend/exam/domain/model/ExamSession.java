@@ -56,6 +56,10 @@ public class ExamSession {
     @Column(name = "max_attempts", nullable = false)
     private Integer maxAttempts = 1;
 
+    /** Session-level duration override (minutes). NULL = use exam version's duration. 0 = unlimited. */
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
     @Column(name = "created_by", nullable = false)
     private Long createdBy;
 
@@ -143,6 +147,14 @@ public class ExamSession {
 
     public Integer getMaxAttempts() {
         return maxAttempts;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(Integer durationMinutes) {
+        this.durationMinutes = durationMinutes;
     }
 
     public Long getCreatedBy() {

@@ -67,4 +67,16 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
                                       @Param("scheduled") ExamSessionStatus scheduledStatus,
                                       @Param("open") ExamSessionStatus openStatus,
                                       @Param("now") Instant now);
+
+    /**
+     * Bulk close expired SCHEDULED sessions: transitions SCHEDULED sessions past
+     * their window directly to CLOSED (they were never opened — skip OPEN).
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ExamSession s SET s.status = :closed, s.closedAt = :now "
+            + "WHERE s.ownerTeacherId = :ownerId AND s.status = :scheduled AND s.endsAt < :now")
+    int bulkCloseExpiredScheduledSessions(@Param("ownerId") Long ownerId,
+                                         @Param("scheduled") ExamSessionStatus scheduledStatus,
+                                         @Param("closed") ExamSessionStatus closedStatus,
+                                         @Param("now") Instant now);
 }

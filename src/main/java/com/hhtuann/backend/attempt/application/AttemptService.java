@@ -102,7 +102,7 @@ public class AttemptService {
         // least one classroom assigned to the session via exam_session_classes.
         String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
-                + "ev.duration_minutes, "
+                + "COALESCE(s.duration_minutes, ev.duration_minutes) AS duration_minutes, "
                 + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.student_profile_id = ?) AS used, "
                 + "act.id AS active_id, act.deadline_at AS active_deadline "
                 + "FROM exam_sessions s "
@@ -231,12 +231,18 @@ public class AttemptService {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_MAX_REACHED);
         }
 
-        // Deadline = min(session.endsAt, startedAt + version.durationMinutes).
-        int durationMinutes = fetchDurationMinutes(session.getExamVersionId());
+        // Deadline = min(session.endsAt, startedAt + duration). Duration priority:
+        // 1. session.durationMinutes (override) if non-null.
+        // 2. exam version's durationMinutes.
+        // 3. 0 = unlimited (deadline = session.endsAt).
+        Integer sessionDuration = session.getDurationMinutes();
+        int durationMinutes = sessionDuration != null ? sessionDuration : fetchDurationMinutes(session.getExamVersionId());
         Instant deadline = session.getEndsAt();
-        Instant durationEnd = now.plusSeconds(durationMinutes * 60L);
-        if (durationEnd.isBefore(deadline)) {
-            deadline = durationEnd;
+        if (durationMinutes > 0) {
+            Instant durationEnd = now.plusSeconds(durationMinutes * 60L);
+            if (durationEnd.isBefore(deadline)) {
+                deadline = durationEnd;
+            }
         }
 
         // Wrap ENTIRE creation+snapshot in error boundary (Fix B).

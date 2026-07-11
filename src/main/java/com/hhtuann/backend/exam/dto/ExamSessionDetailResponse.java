@@ -13,6 +13,7 @@ public record ExamSessionDetailResponse(
         Instant startsAt,
         Instant endsAt,
         Integer maxAttempts,
+        Integer durationMinutes,
         Instant openedAt,
         Instant closedAt,
         long participantCount,

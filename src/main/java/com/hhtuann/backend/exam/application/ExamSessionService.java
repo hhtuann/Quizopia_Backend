@@ -118,6 +118,7 @@ public class ExamSessionService {
                 ? request.visibility()
                 : SessionVisibility.CLASS_RESTRICTED;
         session.setVisibility(visibility);
+        session.setDurationMinutes(request.durationMinutes());
 
         try {
             session = sessionRepository.saveAndFlush(session);
@@ -166,6 +167,9 @@ public class ExamSessionService {
         // Bulk lazy-open: due SCHEDULED → OPEN before the filter query.
         sessionRepository.bulkLazyOpenScheduledSessions(
                 profile.getId(), ExamSessionStatus.SCHEDULED, ExamSessionStatus.OPEN, now);
+        // Bulk close expired SCHEDULED sessions (never opened, past window → CLOSED).
+        sessionRepository.bulkCloseExpiredScheduledSessions(
+                profile.getId(), ExamSessionStatus.SCHEDULED, ExamSessionStatus.CLOSED, now);
 
         Page<ExamSession> sessions = sessionRepository.findOwnedByTeacher(
                 profile.getId(), trimmedSearch, statusFilter, examId, pageable);
@@ -229,6 +233,13 @@ public class ExamSessionService {
             sessionRepository.saveAndFlush(session);
             eventPublisher
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
+        }
+        // Lazy-close: SCHEDULED past window (never opened) → CLOSED.
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED && now.isAfter(session.getEndsAt())) {
+            session.close(now);
+            sessionRepository.saveAndFlush(session);
+            eventPublisher
+                    .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
         }
 
         long participantCount = participantRepository.countByExamSessionId(sessionId);
@@ -415,6 +426,7 @@ public class ExamSessionService {
                 version != null ? version.getVersionNumber() : null,
                 session.getCode(), session.getTitle(), session.getStatus().name(),
                 session.getStartsAt(), session.getEndsAt(), session.getMaxAttempts(),
+                session.getDurationMinutes(),
                 session.getOpenedAt(), session.getClosedAt(),
                 participantCount, session.getVersion(), session.getCreatedAt(),
                 session.getVisibility().name());
