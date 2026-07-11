@@ -133,11 +133,14 @@ public class AttemptSubmitService {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_IDEMPOTENCY_CONFLICT);
         }
 
-        // 4. Capture `now` ONCE, AFTER the lock. Note: we do NOT reject late
-        //    submissions here — an IN_PROGRESS attempt may be submitted even after
-        //    the deadline (the auto-submit on timeout + manual submit both need this).
-        //    The deadline only prevents STARTING new attempts (enforced in startAttempt).
+        // 4. Capture `now` ONCE, AFTER the lock. Strict deadline enforcement:
+        //    manual submit after deadline → 409 ATTEMPT_DEADLINE_EXCEEDED.
+        //    The sweeper (finalizeAttempt) bypasses this check via an internal-only path
+        //    and uses attempt.getDeadlineAt() as submittedAt — it does NOT call submitAttempt.
         Instant now = Instant.now(clock);
+        if (now.isAfter(attempt.getDeadlineAt())) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_DEADLINE_EXCEEDED);
+        }
 
         // 5. Transition + grade (atomic) + freeze response + cache. Grading runs inside this transaction
         //    (Propagation.REQUIRED); a GradingException rolls the whole submit — status, Grade, GradeItems,

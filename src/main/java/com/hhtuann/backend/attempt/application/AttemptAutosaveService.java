@@ -96,10 +96,11 @@ public class AttemptAutosaveService {
         if (attempt.getStatus() != AttemptStatus.IN_PROGRESS) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_INVALID_STATE);
         }
-        // 5. Deadline: allow saves even slightly past the deadline — the FE
-        //    flushes dirty answers right before auto-submit on timeout, and
-        //    the network round-trip means the request arrives after deadline.
-        //    The deadline only prevents STARTING new attempts (in startAttempt).
+        // 5. Strict deadline enforcement: autosave after deadline → 409 ATTEMPT_DEADLINE_EXCEEDED.
+        //    Server time is the source of truth. No grace period.
+        if (now.isAfter(attempt.getDeadlineAt())) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_DEADLINE_EXCEEDED);
+        }
 
         // 6. Resolve the question (attemptQuestionId authoritative; else examQuestionId).
         AttemptQuestion question = resolveQuestion(attemptId, request);
