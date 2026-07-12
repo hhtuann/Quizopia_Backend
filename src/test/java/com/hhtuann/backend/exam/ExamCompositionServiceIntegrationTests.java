@@ -260,7 +260,7 @@ class ExamCompositionServiceIntegrationTests {
     }
 
     @Test
-    void crossSchoolAndWrongSubjectAndInactiveRejected() {
+    void crossSchoolAndInactiveRejected_wrongSubjectAllowed() {
         // Cross-school bank (different school, different owner user).
         long s2 = insert("INSERT INTO schools (code, name) VALUES ('XS','XS')");
         long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL','G')");
@@ -295,9 +295,9 @@ class ExamCompositionServiceIntegrationTests {
         // Cross-school -> 403.
         assertThatThrownBy(() -> putOne(examIdCs, qCs)).isInstanceOfSatisfying(ExamException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
-        // Wrong-subject -> 403.
-        assertThatThrownBy(() -> putOne(examIdWs, qWs)).isInstanceOfSatisfying(ExamException.class,
-                ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
+        // Wrong-subject (same owner + school) -> ALLOWED (the bank subject is
+        // metadata; a teacher may compose from any of their own banks).
+        putOne(examIdWs, qWs); // no exception expected
         // Inactive bank -> 400.
         assertThatThrownBy(() -> putOne(examIdIn, qIn)).isInstanceOfSatisfying(ExamException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));

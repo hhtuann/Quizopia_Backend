@@ -697,11 +697,13 @@ public class ExamService {
             if (bank == null || bank.getStatus() != QuestionBankStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR); // missing/inactive bank
             }
-            // STRICT source ownership: bank owner + school + subject must match the exam.
+            // Source ownership: bank owner + school must match the exam. The
+            // bank's subject is metadata only — a teacher may compose an exam
+            // from any of their own banks (e.g. a mixed-topic quiz), so the
+            // exam subject need not equal the bank subject.
             if (!bank.getOwnerTeacherId().equals(exam.getOwnerTeacherId())
-                    || !bank.getSchoolId().equals(exam.getSchoolId())
-                    || !bank.getSubjectId().equals(exam.getSubjectId())) {
-                throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED); // foreign/cross-school/wrong-subject
+                    || !bank.getSchoolId().equals(exam.getSchoolId())) {
+                throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED); // foreign/cross-school
             }
         }
 
