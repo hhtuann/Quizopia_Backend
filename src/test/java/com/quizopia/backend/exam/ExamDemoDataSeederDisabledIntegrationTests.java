@@ -19,7 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link DemoDataSeeder} does NOT create the demo school or seed exam purposes.
  * Uses a dedicated Spring context with the demo flag disabled.
  *
- * <p>V8 migration seed (purpose seed for existing schools) does NOT interfere:
+ * <p>
+ * V8 migration seed (purpose seed for existing schools) does NOT interfere:
  * V8 runs at Flyway time before any schools exist on a clean DB, so it inserts
  * 0 rows. This test verifies the DemoDataSeeder path specifically.
  */
@@ -28,9 +29,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Import(PostgresTestContainerConfiguration.class)
 class ExamDemoDataSeederDisabledIntegrationTests {
 
-    @Autowired private JdbcTemplate jdbc;
-    @Autowired private SchoolRepository schoolRepo;
-    @Autowired private ExamPurposeRepository purposeRepo;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private SchoolRepository schoolRepo;
 
     @Test
     @Transactional
