@@ -9,8 +9,6 @@ import com.hhtuann.backend.question.exception.QuestionErrorCode;
 import com.hhtuann.backend.question.exception.QuestionException;
 import com.hhtuann.backend.question.importer.ExcelQuestionParser;
 import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.ss.usermodel.CellStyle;
-import org.apache.poi.ss.usermodel.DataFormat;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -26,49 +24,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pure unit tests for {@link ExcelQuestionParser}. Workbooks are built in
- * memory with Apache POI; no Spring context is involved. Each assertion
- * checks rowNumber + field + code, not just the error count.
+ * Pure unit tests for {@link ExcelQuestionParser} (simplified 9-column format).
+ * Workbooks are built in memory with Apache POI; no Spring context is involved.
+ * Each assertion checks rowNumber + field + code, not just the error count.
  */
 class ExcelQuestionParserTest {
 
     private final ExcelQuestionParser parser = new ExcelQuestionParser();
 
-    // 0-based column indexes (must match the parser's 18-column header order).
-    // Removed columns (question_code, default_points, option_e/f) are kept as -1
-    // so legacy set(...) calls below become no-ops (see the set helper).
-    private static final int C_CODE = -1;
+    // 0-based column indexes (must match the parser's 9-column header order).
     private static final int C_TYPE = 0;
     private static final int C_CONTENT = 1;
-    private static final int C_POINTS = -1;
     private static final int C_DIFFICULTY = 2;
     private static final int C_OPT_A = 3;
     private static final int C_OPT_B = 4;
     private static final int C_OPT_C = 5;
     private static final int C_OPT_D = 6;
-    private static final int C_OPT_E = -1;
-    private static final int C_OPT_F = -1;
     private static final int C_CORRECT = 7;
-    private static final int C_ST_A = 8;
-    private static final int C_ST_A_ANS = 9;
-    private static final int C_ST_B = 10;
-    private static final int C_ST_B_ANS = 11;
-    private static final int C_ST_C = 12;
-    private static final int C_ST_C_ANS = 13;
-    private static final int C_ST_D = 14;
-    private static final int C_ST_D_ANS = 15;
-    private static final int C_NUMERIC = 16;
-    private static final int C_EXPL = 17;
+    private static final int C_EXPLANATION = 8;
 
     // ==================== Happy paths ====================
 
     @Test
     void parse_validSingleChoice_returnsValidRow() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q1");
             set(row, C_TYPE, "SINGLE_CHOICE");
             set(row, C_CONTENT, "What is 2+2?");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             set(row, C_OPT_A, "1");
             set(row, C_OPT_B, "2");
@@ -89,18 +70,17 @@ class ExcelQuestionParserTest {
     }
 
     @Test
-    void parse_validMultipleChoice_returnsValidRow() throws Exception {
+    void parse_validMultipleChoiceConcatenated_returnsValidRow() throws Exception {
+        // correct_answers is the correct letters concatenated without separators.
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q2");
             set(row, C_TYPE, "MULTIPLE_CHOICE");
             set(row, C_CONTENT, "Even numbers");
-            set(row, C_POINTS, "2");
             set(row, C_DIFFICULTY, "MEDIUM");
             set(row, C_OPT_A, "2");
             set(row, C_OPT_B, "3");
             set(row, C_OPT_C, "4");
             set(row, C_OPT_D, "5");
-            set(row, C_CORRECT, "A,C");
+            set(row, C_CORRECT, "AC");
         }));
 
         assertThat(r.validRows()).hasSize(1);
@@ -111,20 +91,16 @@ class ExcelQuestionParserTest {
 
     @Test
     void parse_validTrueFalseMatrix_returnsValidRow() throws Exception {
+        // The 4 options ARE the 4 statements; correct_answers = T/F for A-D.
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q3");
             set(row, C_TYPE, "TRUE_FALSE_MATRIX");
             set(row, C_CONTENT, "Statements");
-            set(row, C_POINTS, "3");
             set(row, C_DIFFICULTY, "HARD");
-            set(row, C_ST_A, "Sun is a star");
-            set(row, C_ST_A_ANS, "TRUE");
-            set(row, C_ST_B, "Water at 50");
-            set(row, C_ST_B_ANS, "FALSE");
-            set(row, C_ST_C, "Iron heavy");
-            set(row, C_ST_C_ANS, "true"); // case-insensitive
-            set(row, C_ST_D, "Sound faster");
-            set(row, C_ST_D_ANS, "false");
+            set(row, C_OPT_A, "Sun is a star");
+            set(row, C_OPT_B, "Water at 50");
+            set(row, C_OPT_C, "Iron heavy");
+            set(row, C_OPT_D, "Sound faster");
+            set(row, C_CORRECT, "TFTF");
         }));
 
         assertThat(r.validRows()).hasSize(1);
@@ -135,12 +111,28 @@ class ExcelQuestionParserTest {
     }
 
     @Test
+    void parse_trueFalseLowercaseTf_isAccepted() throws Exception {
+        // lowercase "tftf" is upper-cased by the parser.
+        ImportResult r = parse(workbookWith(row -> {
+            set(row, C_TYPE, "TRUE_FALSE_MATRIX");
+            set(row, C_CONTENT, "x");
+            set(row, C_OPT_A, "s");
+            set(row, C_OPT_B, "s");
+            set(row, C_OPT_C, "s");
+            set(row, C_OPT_D, "s");
+            set(row, C_CORRECT, "tftf");
+        }));
+
+        assertThat(r.validRows()).hasSize(1);
+        assertThat(r.validRows().get(0).statementAnswers()).containsEntry("A", true)
+                .containsEntry("B", false).containsEntry("C", true).containsEntry("D", false);
+    }
+
+    @Test
     void parse_validNumericDot_returnsValidRow() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q4");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "5/2");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.50");
         }));
@@ -154,10 +146,8 @@ class ExcelQuestionParserTest {
     void parse_numericComma_normalizesToDotAndKeepsTrailingZero() throws Exception {
         // "2,50" → normalized "2.50" (4 chars, trailing zero preserved)
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q5");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2,50");
         }));
@@ -169,10 +159,8 @@ class ExcelQuestionParserTest {
     @Test
     void parse_numericLeadingZero02_5_isValid() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q6");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "02.5");
         }));
@@ -184,10 +172,8 @@ class ExcelQuestionParserTest {
     @Test
     void parse_negativeNumericValid() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "Q7");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "-1.5");
         }));
@@ -201,116 +187,86 @@ class ExcelQuestionParserTest {
     @Test
     void parse_numericCellTypeNumeric_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN1");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
-            row.createCell(C_NUMERIC).setCellValue(2.5); // NUMERIC cell
+            row.createCell(C_CORRECT).setCellValue(2.5); // NUMERIC cell
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
     void parse_numericFormula_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN2");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
-            row.createCell(C_NUMERIC).setCellFormula("1+1"); // FORMULA
+            row.createCell(C_CORRECT).setCellFormula("1+1"); // FORMULA
         }));
 
         // Formula cell is detected up-front as ROW_INVALID.
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID);
     }
 
     @Test
     void parse_numericThreeChars_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN3");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.5"); // 3 chars
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
     void parse_numericFiveChars_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN4");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "2.500"); // 5 chars
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
     void parse_numericWhitespace_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN5");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, " 2.5"); // leading space, 4 chars
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
     void parse_numericExponent_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN6");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "1e10"); // 4 chars but invalid
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     @Test
     void parse_numericPlusSign_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN7");
             set(row, C_TYPE, "NUMERIC_FILL");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             setNumericString(row, "+1.5"); // 4 chars but plus not allowed
         }));
 
-        assertSingleError(r, C_NUMERICLabel(), QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
-    }
-
-    @Test
-    void parse_numericNoRoundingColumn_stillValid() throws Exception {
-        // roundingInstruction now lives in the content; the rounding column is gone entirely.
-        ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QN8");
-            set(row, C_TYPE, "NUMERIC_FILL");
-            set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
-            set(row, C_DIFFICULTY, "EASY");
-            setNumericString(row, "2.50");
-        }));
-
-        assertThat(r.validRows()).hasSize(1);
-        assertThat(r.errors()).isEmpty();
+        assertSingleError(r, "correct_answers", QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER);
     }
 
     // ==================== CHOICE rejections ====================
@@ -318,16 +274,14 @@ class ExcelQuestionParserTest {
     @Test
     void parse_singleChoiceMultipleCorrect_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QS1");
             set(row, C_TYPE, "SINGLE_CHOICE");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             set(row, C_OPT_A, "a");
             set(row, C_OPT_B, "b");
             set(row, C_OPT_C, "c");
             set(row, C_OPT_D, "d");
-            set(row, C_CORRECT, "A,B");
+            set(row, C_CORRECT, "AB"); // 2 correct → not single
         }));
 
         assertSingleError(r, "correct_answers",
@@ -337,10 +291,8 @@ class ExcelQuestionParserTest {
     @Test
     void parse_multipleChoiceOneCorrect_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QM1");
             set(row, C_TYPE, "MULTIPLE_CHOICE");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             set(row, C_OPT_A, "a");
             set(row, C_OPT_B, "b");
@@ -354,22 +306,25 @@ class ExcelQuestionParserTest {
     }
 
     @Test
-    void parse_singleChoiceExcessStatement_isRejected() throws Exception {
+    void parse_singleChoiceInvalidCorrectKey_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QE1");
             set(row, C_TYPE, "SINGLE_CHOICE");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
             set(row, C_OPT_A, "a");
             set(row, C_OPT_B, "b");
             set(row, C_OPT_C, "c");
             set(row, C_OPT_D, "d");
-            set(row, C_CORRECT, "A");
-            set(row, C_ST_A, "excess"); // not allowed for choice
+            set(row, C_CORRECT, "E"); // invalid key
         }));
 
-        assertSingleError(r, "statement_a", QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID);
+        // An invalid key yields at least one INVALID_CORRECT_ANSWERS error on
+        // correct_answers (the empty resulting set also trips the "exactly one"
+        // rule, so there can be more than one error).
+        assertThat(r.validRows()).isEmpty();
+        assertThat(r.errors()).isNotEmpty();
+        assertThat(r.errors()).anyMatch(e -> e.field().equals("correct_answers")
+                && e.code().equals(QuestionErrorCode.QUESTION_IMPORT_INVALID_CORRECT_ANSWERS.name()));
     }
 
     // ==================== TRUE_FALSE rejections ====================
@@ -377,58 +332,46 @@ class ExcelQuestionParserTest {
     @Test
     void parse_trueFalseMissingStatement_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QT1");
             set(row, C_TYPE, "TRUE_FALSE_MATRIX");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
-            set(row, C_ST_A, "s");
-            set(row, C_ST_A_ANS, "TRUE");
-            set(row, C_ST_B, "s");
-            set(row, C_ST_B_ANS, "FALSE");
-            set(row, C_ST_C, "s");
-            set(row, C_ST_C_ANS, "TRUE");
-            // statement_d missing
-            set(row, C_ST_D_ANS, "FALSE");
+            set(row, C_OPT_A, "s");
+            set(row, C_OPT_B, "s");
+            set(row, C_OPT_C, "s");
+            // option_d missing (statement D)
+            set(row, C_CORRECT, "TFTF");
         }));
 
         List<RowError> errs = r.errors();
-        assertThat(errs).anyMatch(e -> e.field().equals("statement_d")
+        assertThat(errs).anyMatch(e -> e.field().equals("option_d")
                 && e.code().equals(QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID.name()));
     }
 
     @Test
-    void parse_trueFalseMissingBoolean_isRejected() throws Exception {
+    void parse_trueFalseInvalidCorrectString_isRejected() throws Exception {
+        // correct_answers must be 4 chars T/F; "MAYBE" is invalid.
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QT2");
             set(row, C_TYPE, "TRUE_FALSE_MATRIX");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
-            set(row, C_ST_A, "s");
-            set(row, C_ST_A_ANS, "MAYBE"); // invalid
-            set(row, C_ST_B, "s");
-            set(row, C_ST_B_ANS, "FALSE");
-            set(row, C_ST_C, "s");
-            set(row, C_ST_C_ANS, "TRUE");
-            set(row, C_ST_D, "s");
-            set(row, C_ST_D_ANS, "FALSE");
+            set(row, C_OPT_A, "s");
+            set(row, C_OPT_B, "s");
+            set(row, C_OPT_C, "s");
+            set(row, C_OPT_D, "s");
+            set(row, C_CORRECT, "MAYBE");
         }));
 
-        List<RowError> errs = r.errors();
-        assertThat(errs).anyMatch(e -> e.field().equals("statement_a_answer")
-                && e.code().equals(QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID.name()));
+        assertSingleError(r, "correct_answers",
+                QuestionErrorCode.QUESTION_IMPORT_INVALID_CORRECT_ANSWERS);
     }
 
-    // ==================== Type / duplicate / structural ====================
+    // ==================== Type / structural ====================
 
     @Test
     void parse_unsupportedType_isRejected() throws Exception {
         ImportResult r = parse(workbookWith(row -> {
-            set(row, C_CODE, "QU1");
             set(row, C_TYPE, "ESSAY");
             set(row, C_CONTENT, "x");
-            set(row, C_POINTS, "1");
             set(row, C_DIFFICULTY, "EASY");
         }));
 
@@ -437,14 +380,11 @@ class ExcelQuestionParserTest {
     }
 
     @Test
-    void parse_twoRowsNoCodeColumn_bothValid() throws Exception {
-        // question_code is auto-generated (column removed); two otherwise-valid rows both parse.
+    void parse_twoRows_bothValid() throws Exception {
         ImportResult r = parse(workbookWith(
                 row -> {
-                    set(row, C_CODE, "DUP-1"); // ignored (no-op, C_CODE = -1)
                     set(row, C_TYPE, "SINGLE_CHOICE");
                     set(row, C_CONTENT, "x");
-                    set(row, C_POINTS, "1");
                     set(row, C_DIFFICULTY, "EASY");
                     set(row, C_OPT_A, "a");
                     set(row, C_OPT_B, "b");
@@ -502,7 +442,7 @@ class ExcelQuestionParserTest {
         try (Workbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Questions");
             Row header = sheet.createRow(0);
-            // Only 22 of 23 headers
+            // One header short of the expected 9.
             for (int i = 0; i < ExcelQuestionParser.EXPECTED_HEADERS.size() - 1; i++) {
                 header.createCell(i).setCellValue(ExcelQuestionParser.EXPECTED_HEADERS.get(i));
             }
@@ -525,12 +465,11 @@ class ExcelQuestionParserTest {
     @Test
     void parse_blankRowsAreIgnored() throws Exception {
         ImportResult r = parse(workbookWith(
-                row -> { /* fully blank row */ },
                 row -> {
-                    set(row, C_CODE, "QB1");
+                    /* fully blank row */ },
+                row -> {
                     set(row, C_TYPE, "SINGLE_CHOICE");
                     set(row, C_CONTENT, "x");
-                    set(row, C_POINTS, "1");
                     set(row, C_DIFFICULTY, "EASY");
                     set(row, C_OPT_A, "a");
                     set(row, C_OPT_B, "b");
@@ -538,7 +477,8 @@ class ExcelQuestionParserTest {
                     set(row, C_OPT_D, "d");
                     set(row, C_CORRECT, "A");
                 },
-                row -> { /* another blank row */ }));
+                row -> {
+                    /* another blank row */ }));
 
         // Blank rows not counted; only the one data row counts.
         assertThat(r.totalRows()).isEqualTo(1);
@@ -546,10 +486,6 @@ class ExcelQuestionParserTest {
     }
 
     // ==================== Helpers ====================
-
-    private static String C_NUMERICLabel() {
-        return "numeric_answer";
-    }
 
     private void assertSingleError(ImportResult r, String field, QuestionErrorCode code) {
         assertThat(r.validRows()).isEmpty();
@@ -584,7 +520,7 @@ class ExcelQuestionParserTest {
         for (int i = 0; i < ExcelQuestionParser.EXPECTED_HEADERS.size(); i++) {
             header.createCell(i).setCellValue(ExcelQuestionParser.EXPECTED_HEADERS.get(i));
         }
-        RowPopulator[] pops = {row1, row2, row3};
+        RowPopulator[] pops = { row1, row2, row3 };
         for (int i = 0; i < pops.length; i++) {
             if (pops[i] != null) {
                 pops[i].populate(sheet.createRow(i + 1));
@@ -609,25 +545,15 @@ class ExcelQuestionParserTest {
     }
 
     private static void set(Row row, int col, String value) {
-        if (value == null || col < 0) {
-            return; // col < 0 = removed column (question_code/default_points/option_e/f) → no-op
+        if (value == null) {
+            return;
         }
         row.createCell(col).setCellValue(value);
     }
 
-    /** Sets the numeric_answer cell as a STRING (Text-formatted) value. */
-    @SuppressWarnings("unused")
+    /** Sets the correct_answers cell as a STRING value (for NUMERIC_FILL tests). */
     private static void setNumericString(Row row, String value) {
-        Cell cell = row.createCell(C_NUMERIC);
+        Cell cell = row.createCell(C_CORRECT);
         cell.setCellValue(value); // STRING cell type
-    }
-
-    /** Unused but reserved for future text-format assertions. */
-    @SuppressWarnings("unused")
-    private static CellStyle textFormat(Workbook wb) {
-        DataFormat df = wb.createDataFormat();
-        CellStyle s = wb.createCellStyle();
-        s.setDataFormat(df.getFormat("@"));
-        return s;
     }
 }

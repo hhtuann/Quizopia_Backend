@@ -19,6 +19,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -33,37 +34,41 @@ import java.util.Set;
  * than aborting the workbook; only unrecoverable structural problems (corrupt
  * file, missing sheet, wrong header) throw a {@link QuestionException}.
  *
- * <p>Template layout (18 columns, in fixed order): {@code question_type,
- * content, difficulty, option_a..option_d, correct_answers, statement_a..
- * statement_d_answer (8), numeric_answer, explanation}. {@code question_code}
- * (auto-generated), {@code default_points} (always 1) and {@code option_e}/
- * {@code option_f} were removed.
+ * <p><b>Template layout (9 columns, fixed order):</b>
+ * {@code question_type, content, difficulty, option_a, option_b, option_c,
+ * option_d, correct_answers, explanation}. All four question types share the
+ * same {@code option_a..option_d} columns and the single {@code correct_answers}
+ * column, whose meaning depends on {@code question_type}:
+ * <ul>
+ *   <li><b>SINGLE_CHOICE</b> — one letter A-D, e.g. {@code B}.</li>
+ *   <li><b>MULTIPLE_CHOICE</b> — the correct letters concatenated without
+ *       separators, e.g. {@code ACD}.</li>
+ *   <li><b>TRUE_FALSE_MATRIX</b> — exactly 4 characters {@code T}/{@code F} for
+ *       statements A-D in order, e.g. {@code TFTF}.</li>
+ *   <li><b>NUMERIC_FILL</b> — the numeric answer as text (4 chars), e.g.
+ *       {@code 2.50}. Options are left blank.</li>
+ * </ul>
  *
  * <p>Strict rules enforced:
  * <ul>
  * <li>Only the {@code "Questions"} sheet (index 0) is read.</li>
- * <li>The header row must match exactly 18 columns in a fixed order.</li>
- * <li>{@code numeric_answer} must be a STRING cell — never NUMERIC, never a
- * FORMULA, never trimmed, never read through a DataFormatter.</li>
+ * <li>The header row must match exactly 9 columns in a fixed order.</li>
+ * <li>{@code correct_answers} for NUMERIC_FILL must be a STRING cell — never
+ *     NUMERIC, never a FORMULA, never trimmed (the template pre-formats the
+ *     column as Text).</li>
  * <li>Any FORMULA cell in a data field invalidates its row.</li>
  * </ul>
  */
 @Component
 public class ExcelQuestionParser {
 
-    /** Exact header order (lower-cased on read for comparison). 18 columns. */
+    /** Exact header order (lower-cased on read for comparison). 9 columns. */
     public static final List<String> EXPECTED_HEADERS = List.of(
             "question_type", "content", "difficulty",
             "option_a", "option_b", "option_c", "option_d",
-            "correct_answers",
-            "statement_a", "statement_a_answer",
-            "statement_b", "statement_b_answer",
-            "statement_c", "statement_c_answer",
-            "statement_d", "statement_d_answer",
-            "numeric_answer", "explanation");
+            "correct_answers", "explanation");
 
-    // Column indexes (0-based). question_code / default_points / option_e / option_f
-    // were removed: the code is auto-generated, default_points is always 1, only A-D options.
+    // Column indexes (0-based).
     private static final int COL_QUESTION_TYPE = 0;
     private static final int COL_CONTENT = 1;
     private static final int COL_DIFFICULTY = 2;
@@ -72,23 +77,16 @@ public class ExcelQuestionParser {
     private static final int COL_OPTION_C = 5;
     private static final int COL_OPTION_D = 6;
     private static final int COL_CORRECT_ANSWERS = 7;
-    private static final int COL_STATEMENT_A = 8;
-    private static final int COL_STATEMENT_A_ANSWER = 9;
-    private static final int COL_STATEMENT_B = 10;
-    private static final int COL_STATEMENT_B_ANSWER = 11;
-    private static final int COL_STATEMENT_C = 12;
-    private static final int COL_STATEMENT_C_ANSWER = 13;
-    private static final int COL_STATEMENT_D = 14;
-    private static final int COL_STATEMENT_D_ANSWER = 15;
-    private static final int COL_NUMERIC_ANSWER = 16;
-    private static final int COL_EXPLANATION = 17;
+    private static final int COL_EXPLANATION = 8;
 
-    private static final int HEADER_COUNT = EXPECTED_HEADERS.size(); // 18
+    private static final int HEADER_COUNT = EXPECTED_HEADERS.size(); // 9
 
     private static final String KEY_PATTERN = "^[A-D]$";
     private static final String NUMERIC_PATTERN = "^-?[0-9]+([,.][0-9]+)?$";
     private static final int NUMERIC_RAW_LENGTH = 4;
-    private static final Set<String> STATEMENT_KEYS = Set.of("A", "B", "C", "D");
+    private static final List<String> OPTION_KEYS = List.of("A", "B", "C", "D");
+    /** correct_answers for TRUE_FALSE_MATRIX: exactly 4 chars, each T or F. */
+    private static final String TF_PATTERN = "^[TF]{4}$";
 
     /**
      * Parses the given xlsx stream. The caller owns the InputStream; this method
@@ -203,32 +201,37 @@ public class ExcelQuestionParser {
         String explanation = readStringTrimmed(row.getCell(COL_EXPLANATION));
 
         QuestionType type = parseType(typeRaw);
+        QuestionDifficulty difficulty = parseDifficulty(difficultyRaw, rowNumber, errors);
 
         if (content.isBlank()) {
             errors.add(rowError(rowNumber, "content", "content is required"));
         }
-
-        QuestionDifficulty difficulty = parseDifficulty(difficultyRaw, rowNumber, errors);
-
-        ValidQuestionRow valid = null;
         if (type == null) {
-            if (!typeRaw.isBlank()) {
+            if (typeRaw.isBlank()) {
+                errors.add(rowError(rowNumber, "question_type", "question_type is required"));
+            } else {
                 errors.add(new RowError(rowNumber, null, "question_type",
                         QuestionErrorCode.QUESTION_IMPORT_UNSUPPORTED_TYPE.name(),
                         "Unsupported question type: " + typeRaw));
-            } else {
-                errors.add(rowError(rowNumber, "question_type", "question_type is required"));
             }
-        } else {
-            valid = switch (type) {
-                case SINGLE_CHOICE, MULTIPLE_CHOICE ->
-                        parseChoiceRow(row, rowNumber, type, content, difficulty, explanation, errors);
-                case TRUE_FALSE_MATRIX ->
-                        parseTrueFalseRow(row, rowNumber, type, content, difficulty, explanation, errors);
-                case NUMERIC_FILL ->
-                        parseNumericRow(row, rowNumber, type, content, difficulty, explanation, errors);
-            };
+            return null;
         }
+
+        Map<String, String> options = new LinkedHashMap<>();
+        options.put("A", readStringTrimmed(row.getCell(COL_OPTION_A)));
+        options.put("B", readStringTrimmed(row.getCell(COL_OPTION_B)));
+        options.put("C", readStringTrimmed(row.getCell(COL_OPTION_C)));
+        options.put("D", readStringTrimmed(row.getCell(COL_OPTION_D)));
+        String correctRaw = readStringTrimmed(row.getCell(COL_CORRECT_ANSWERS));
+
+        ValidQuestionRow valid = switch (type) {
+            case SINGLE_CHOICE, MULTIPLE_CHOICE ->
+                    parseChoice(rowNumber, type, content, difficulty, explanation, options, correctRaw, errors);
+            case TRUE_FALSE_MATRIX ->
+                    parseTrueFalse(rowNumber, type, content, difficulty, explanation, options, correctRaw, errors);
+            case NUMERIC_FILL ->
+                    parseNumeric(row, rowNumber, type, content, difficulty, explanation, errors);
+        };
         return errors.isEmpty() ? valid : null;
     }
 
@@ -257,33 +260,18 @@ public class ExcelQuestionParser {
 
     // ==================== CHOICE rows (SINGLE / MULTIPLE) ====================
 
-    private ValidQuestionRow parseChoiceRow(Row row, int rowNumber, QuestionType type,
-            String content, QuestionDifficulty difficulty,
-            String explanation, List<RowError> errors) {
-        Map<String, String> options = new LinkedHashMap<>();
-        readOption(row, COL_OPTION_A, "A", options);
-        readOption(row, COL_OPTION_B, "B", options);
-        readOption(row, COL_OPTION_C, "C", options);
-        readOption(row, COL_OPTION_D, "D", options);
-
-        // Required A-D
-        for (String k : List.of("A", "B", "C", "D")) {
+    private ValidQuestionRow parseChoice(int rowNumber, QuestionType type, String content,
+            QuestionDifficulty difficulty, String explanation,
+            Map<String, String> options, String correctRaw, List<RowError> errors) {
+        // Options A-D required.
+        for (String k : OPTION_KEYS) {
             if (options.get(k) == null || options.get(k).isBlank()) {
                 errors.add(rowError(rowNumber, "option_" + k.toLowerCase(Locale.ROOT),
                         "option_" + k.toLowerCase(Locale.ROOT) + " is required"));
             }
         }
 
-        // Excess fields for this type: statements / numeric must be blank.
-        rejectExcessFields(row, rowNumber, errors,
-                List.of(COL_STATEMENT_A, COL_STATEMENT_A_ANSWER,
-                        COL_STATEMENT_B, COL_STATEMENT_B_ANSWER,
-                        COL_STATEMENT_C, COL_STATEMENT_C_ANSWER,
-                        COL_STATEMENT_D, COL_STATEMENT_D_ANSWER,
-                        COL_NUMERIC_ANSWER),
-                "statement/numeric fields are not allowed for choice questions");
-
-        Set<String> correct = parseCorrectAnswers(row.getCell(COL_CORRECT_ANSWERS));
+        Set<String> correct = parseCorrectKeys(correctRaw, rowNumber, errors);
         Set<String> presentKeys = new HashSet<>();
         for (Map.Entry<String, String> e : options.entrySet()) {
             if (e.getValue() != null && !e.getValue().isBlank()) {
@@ -305,9 +293,31 @@ public class ExcelQuestionParser {
                 cleanOptions, correct, null, null, null);
     }
 
-    private void readOption(Row row, int col, String key, Map<String, String> options) {
-        Cell cell = row.getCell(col);
-        options.put(key, cell == null ? null : readStringTrimmed(cell));
+    /**
+     * Extracts the A-D letters from {@code correct_answers}. The simplified
+     * format concatenates them with no separator ({@code "ACD"}), but commas,
+     * semicolons and whitespace are tolerated so legacy {@code "A,C,D"} sheets
+     * still import. Any other character is an error.
+     */
+    private Set<String> parseCorrectKeys(String raw, int rowNumber, List<RowError> errors) {
+        Set<String> keys = new LinkedHashSet<>();
+        if (raw == null || raw.isEmpty()) {
+            return keys;
+        }
+        String up = raw.toUpperCase(Locale.ROOT);
+        for (int i = 0; i < up.length(); i++) {
+            char c = up.charAt(i);
+            if (c >= 'A' && c <= 'D') {
+                keys.add(String.valueOf(c));
+            } else if (c == ',' || c == ';' || Character.isWhitespace(c)) {
+                // tolerated separator — ignored
+            } else {
+                errors.add(new RowError(rowNumber, null, "correct_answers",
+                        QuestionErrorCode.QUESTION_IMPORT_INVALID_CORRECT_ANSWERS.name(),
+                        "Invalid correct_answers character: " + c));
+            }
+        }
+        return keys;
     }
 
     private void validateCorrectAnswersForChoice(Set<String> correct, Set<String> presentKeys,
@@ -339,125 +349,73 @@ public class ExcelQuestionParser {
         }
     }
 
-    private Set<String> parseCorrectAnswers(Cell cell) {
-        if (cell == null || cell.getCellType() == CellType.BLANK) {
-            return Set.of();
-        }
-        String raw = readStringTrimmed(cell);
-        if (raw.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> keys = new HashSet<>();
-        for (String part : raw.split(",")) {
-            String p = part.trim().toUpperCase(Locale.ROOT);
-            if (!p.isEmpty()) {
-                keys.add(p);
-            }
-        }
-        return keys;
-    }
-
     // ==================== TRUE_FALSE_MATRIX rows ====================
 
-    private ValidQuestionRow parseTrueFalseRow(Row row, int rowNumber, QuestionType type,
-            String content, QuestionDifficulty difficulty,
-            String explanation, List<RowError> errors) {
-        Map<String, String> statements = new LinkedHashMap<>();
-        Map<String, Boolean> answers = new LinkedHashMap<>();
-        statements.put("A", readStringTrimmed(row.getCell(COL_STATEMENT_A)));
-        statements.put("B", readStringTrimmed(row.getCell(COL_STATEMENT_B)));
-        statements.put("C", readStringTrimmed(row.getCell(COL_STATEMENT_C)));
-        statements.put("D", readStringTrimmed(row.getCell(COL_STATEMENT_D)));
-        answers.put("A", parseBoolean(row.getCell(COL_STATEMENT_A_ANSWER)));
-        answers.put("B", parseBoolean(row.getCell(COL_STATEMENT_B_ANSWER)));
-        answers.put("C", parseBoolean(row.getCell(COL_STATEMENT_C_ANSWER)));
-        answers.put("D", parseBoolean(row.getCell(COL_STATEMENT_D_ANSWER)));
-
-        for (String k : STATEMENT_KEYS) {
-            String s = statements.get(k);
-            if (s == null || s.isBlank()) {
-                errors.add(rowError(rowNumber, "statement_" + k.toLowerCase(Locale.ROOT),
-                        "statement_" + k.toLowerCase(Locale.ROOT) + " is required"));
-            }
-            if (answers.get(k) == null) {
-                errors.add(rowError(rowNumber, "statement_" + k.toLowerCase(Locale.ROOT) + "_answer",
-                        "statement_" + k.toLowerCase(Locale.ROOT) + "_answer must be TRUE or FALSE"));
+    private ValidQuestionRow parseTrueFalse(int rowNumber, QuestionType type, String content,
+            QuestionDifficulty difficulty, String explanation,
+            Map<String, String> options, String correctRaw, List<RowError> errors) {
+        // The 4 options ARE the 4 statements — all required.
+        for (String k : OPTION_KEYS) {
+            if (options.get(k) == null || options.get(k).isBlank()) {
+                errors.add(rowError(rowNumber, "option_" + k.toLowerCase(Locale.ROOT),
+                        "option_" + k.toLowerCase(Locale.ROOT) + " is required"));
             }
         }
-        // Excess fields
-        rejectExcessFields(row, rowNumber, errors,
-                List.of(COL_OPTION_A, COL_OPTION_B, COL_OPTION_C, COL_OPTION_D,
-                        COL_CORRECT_ANSWERS, COL_NUMERIC_ANSWER),
-                "option/correct_answers/numeric fields are not allowed for true-false matrix questions");
+        // correct_answers = 4-char T/F string for statements A-D in order.
+        String tf = correctRaw == null ? "" : correctRaw.toUpperCase(Locale.ROOT);
+        Map<String, Boolean> answers = new LinkedHashMap<>();
+        if (!tf.matches(TF_PATTERN)) {
+            errors.add(new RowError(rowNumber, null, "correct_answers",
+                    QuestionErrorCode.QUESTION_IMPORT_INVALID_CORRECT_ANSWERS.name(),
+                    "TRUE_FALSE_MATRIX correct_answers must be exactly 4 characters T/F (e.g. TFTF)"));
+        } else {
+            for (int i = 0; i < OPTION_KEYS.size(); i++) {
+                answers.put(OPTION_KEYS.get(i), tf.charAt(i) == 'T');
+            }
+        }
 
         if (!errors.isEmpty()) {
             return null;
         }
-        Map<String, String> cleanStatements = new LinkedHashMap<>();
-        Map<String, Boolean> cleanAnswers = new LinkedHashMap<>();
-        for (String k : STATEMENT_KEYS) {
-            cleanStatements.put(k, statements.get(k).trim());
-            cleanAnswers.put(k, answers.get(k));
+        Map<String, String> statements = new LinkedHashMap<>();
+        for (String k : OPTION_KEYS) {
+            statements.put(k, options.get(k).trim());
         }
         return new ValidQuestionRow(rowNumber, type, content, difficulty, explanation,
-                null, null, cleanStatements, cleanAnswers, null);
-    }
-
-    private Boolean parseBoolean(Cell cell) {
-        if (cell == null || cell.getCellType() == CellType.BLANK) {
-            return null;
-        }
-        String raw = readStringTrimmed(cell).toUpperCase(Locale.ROOT);
-        if ("TRUE".equals(raw)) {
-            return Boolean.TRUE;
-        }
-        if ("FALSE".equals(raw)) {
-            return Boolean.FALSE;
-        }
-        return null;
+                null, null, statements, answers, null);
     }
 
     // ==================== NUMERIC_FILL rows ====================
 
     @SuppressWarnings("null")
-    private ValidQuestionRow parseNumericRow(Row row, int rowNumber, QuestionType type,
-            String content, QuestionDifficulty difficulty,
-            String explanation, List<RowError> errors) {
-        Cell numericCell = row.getCell(COL_NUMERIC_ANSWER);
-        if (numericCell == null || numericCell.getCellType() == CellType.BLANK) {
-            errors.add(new RowError(rowNumber, null, "numeric_answer",
+    private ValidQuestionRow parseNumeric(Row row, int rowNumber, QuestionType type, String content,
+            QuestionDifficulty difficulty, String explanation, List<RowError> errors) {
+        // For NUMERIC_FILL, correct_answers holds the numeric answer as TEXT.
+        Cell cell = row.getCell(COL_CORRECT_ANSWERS);
+        if (cell == null || cell.getCellType() == CellType.BLANK) {
+            errors.add(new RowError(rowNumber, null, "correct_answers",
                     QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
-                    "numeric_answer is required and must be a text value"));
+                    "correct_answers is required and must be a text value"));
         } else {
-            CellType ct = numericCell.getCellType();
+            CellType ct = cell.getCellType();
             if (ct == CellType.NUMERIC) {
-                errors.add(new RowError(rowNumber, null, "numeric_answer",
+                errors.add(new RowError(rowNumber, null, "correct_answers",
                         QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
-                        "numeric_answer must be a text value, not a number"));
+                        "correct_answers must be a text value, not a number"));
             } else if (ct == CellType.FORMULA) {
-                errors.add(new RowError(rowNumber, null, "numeric_answer",
+                errors.add(new RowError(rowNumber, null, "correct_answers",
                         QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID.name(),
-                        "numeric_answer must not be a formula"));
+                        "correct_answers must not be a formula"));
             } else if (ct == CellType.STRING) {
-                validateNumericAnswer(numericCell.getStringCellValue(), rowNumber, errors);
+                validateNumericAnswer(cell.getStringCellValue(), rowNumber, errors);
             }
         }
-
-        // Excess fields
-        rejectExcessFields(row, rowNumber, errors,
-                List.of(COL_OPTION_A, COL_OPTION_B, COL_OPTION_C, COL_OPTION_D,
-                        COL_CORRECT_ANSWERS,
-                        COL_STATEMENT_A, COL_STATEMENT_A_ANSWER,
-                        COL_STATEMENT_B, COL_STATEMENT_B_ANSWER,
-                        COL_STATEMENT_C, COL_STATEMENT_C_ANSWER,
-                        COL_STATEMENT_D, COL_STATEMENT_D_ANSWER),
-                "option/correct_answers/statement fields are not allowed for numeric questions");
 
         if (!errors.isEmpty()) {
             return null;
         }
         // Build expected answer from the RAW (untrimmed) string normalized to dot.
-        String raw = numericCell.getStringCellValue();
+        String raw = cell.getStringCellValue();
         String normalized = raw.replace(',', '.');
         return new ValidQuestionRow(rowNumber, type, content, difficulty, explanation,
                 null, null, null, null, normalized);
@@ -465,39 +423,25 @@ public class ExcelQuestionParser {
 
     private void validateNumericAnswer(String raw, int rowNumber, List<RowError> errors) {
         if (raw == null || raw.length() != NUMERIC_RAW_LENGTH) {
-            errors.add(new RowError(rowNumber, null, "numeric_answer",
+            errors.add(new RowError(rowNumber, null, "correct_answers",
                     QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
-                    "numeric_answer must be exactly " + NUMERIC_RAW_LENGTH + " characters"));
+                    "correct_answers for NUMERIC_FILL must be exactly " + NUMERIC_RAW_LENGTH + " characters"));
             return;
         }
         if (raw.chars().anyMatch(c -> c == ' ' || c == '\t' || c == '\n' || c == '\r')) {
-            errors.add(new RowError(rowNumber, null, "numeric_answer",
+            errors.add(new RowError(rowNumber, null, "correct_answers",
                     QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
-                    "numeric_answer must not contain whitespace"));
+                    "correct_answers for NUMERIC_FILL must not contain whitespace"));
             return;
         }
         if (!raw.matches(NUMERIC_PATTERN)) {
-            errors.add(new RowError(rowNumber, null, "numeric_answer",
+            errors.add(new RowError(rowNumber, null, "correct_answers",
                     QuestionErrorCode.QUESTION_IMPORT_INVALID_NUMERIC_ANSWER.name(),
-                    "numeric_answer must match " + NUMERIC_PATTERN));
+                    "correct_answers for NUMERIC_FILL must match " + NUMERIC_PATTERN));
         }
     }
 
     // ==================== Shared helpers ====================
-
-    private void rejectExcessFields(Row row, int rowNumber, List<RowError> errors,
-            List<Integer> cols, String message) {
-        for (int col : cols) {
-            Cell cell = row.getCell(col);
-            if (cell != null && cell.getCellType() != CellType.BLANK) {
-                String v = readStringTrimmed(cell);
-                if (!v.isBlank()) {
-                    errors.add(new RowError(rowNumber, null, EXPECTED_HEADERS.get(col),
-                            QuestionErrorCode.QUESTION_IMPORT_ROW_INVALID.name(), message));
-                }
-            }
-        }
-    }
 
     private RowError rowError(int rowNumber, String field, String message) {
         return new RowError(rowNumber, null, field,
@@ -505,8 +449,9 @@ public class ExcelQuestionParser {
     }
 
     /**
-     * Reads a cell as a trimmed string. Used for all fields EXCEPT
-     * {@code numeric_answer}, which must be read raw without trimming.
+     * Reads a cell as a trimmed string. Used for all fields EXCEPT the
+     * NUMERIC_FILL {@code correct_answers}, which must be read raw without
+     * trimming (see {@link #parseNumeric}).
      * Does not execute formulas (caller rejects formulas first).
      */
     private String readStringTrimmed(Cell cell) {

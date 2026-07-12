@@ -93,7 +93,6 @@ class QuestionImportApiIntegrationTests {
     private static final int C_OPT_C = 5;
     private static final int C_OPT_D = 6;
     private static final int C_CORRECT = 7;
-    private static final int C_NUMERIC = 16;
     private static final int C_ROUNDING = -1;
 
     @BeforeEach

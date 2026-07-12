@@ -95,8 +95,8 @@ class QuestionImportServiceIntegrationTests {
     private Long subjectId;
     private Long bankId;
 
-    // 0-based column indexes (must match the parser's 18-column header order).
-    // Removed columns (question_code, default_points, option_e/f, rounding_instruction)
+    // 0-based column indexes (must match the parser's 9-column header order).
+    // Removed columns (question_code, default_points, rounding_instruction)
     // are -1 so legacy set(...) calls become no-ops (see the set helper).
     private static final int C_CODE = -1;
     private static final int C_TYPE = 0;
@@ -107,20 +107,9 @@ class QuestionImportServiceIntegrationTests {
     private static final int C_OPT_B = 4;
     private static final int C_OPT_C = 5;
     private static final int C_OPT_D = 6;
-    private static final int C_OPT_E = -1;
-    private static final int C_OPT_F = -1;
     private static final int C_CORRECT = 7;
-    private static final int C_ST_A = 8;
-    private static final int C_ST_A_ANS = 9;
-    private static final int C_ST_B = 10;
-    private static final int C_ST_B_ANS = 11;
-    private static final int C_ST_C = 12;
-    private static final int C_ST_C_ANS = 13;
-    private static final int C_ST_D = 14;
-    private static final int C_ST_D_ANS = 15;
-    private static final int C_NUMERIC = 16;
+    private static final int C_EXPL = 8;
     private static final int C_ROUNDING = -1;
-    private static final int C_EXPL = 17;
 
     @BeforeEach
     void setUp() {
@@ -250,7 +239,7 @@ class QuestionImportServiceIntegrationTests {
             set(row, C_OPT_B, "3");
             set(row, C_OPT_C, "4");
             set(row, C_OPT_D, "5");
-            set(row, C_CORRECT, "A,C");
+            set(row, C_CORRECT, "AC");
         }));
 
         ImportResponse response = importService.importParsedQuestions(teacherUserId, bankId, parse);
@@ -283,14 +272,12 @@ class QuestionImportServiceIntegrationTests {
             set(row, C_CONTENT, "Statements");
             set(row, C_POINTS, "3");
             set(row, C_DIFFICULTY, "HARD");
-            set(row, C_ST_A, "Sun is a star");
-            set(row, C_ST_A_ANS, "TRUE");
-            set(row, C_ST_B, "Water boils at 50C");
-            set(row, C_ST_B_ANS, "FALSE");
-            set(row, C_ST_C, "Iron is heavy");
-            set(row, C_ST_C_ANS, "TRUE");
-            set(row, C_ST_D, "Sound is faster than light");
-            set(row, C_ST_D_ANS, "FALSE");
+            // The 4 options ARE the 4 statements; correct_answers = T/F for A-D.
+            set(row, C_OPT_A, "Sun is a star");
+            set(row, C_OPT_B, "Water boils at 50C");
+            set(row, C_OPT_C, "Iron is heavy");
+            set(row, C_OPT_D, "Sound is faster than light");
+            set(row, C_CORRECT, "TFTF");
         }));
 
         ImportResponse response = importService.importParsedQuestions(teacherUserId, bankId, parse);
@@ -1057,7 +1044,8 @@ class QuestionImportServiceIntegrationTests {
 
     /** Sets the numeric_answer cell as a STRING (text-formatted) value. */
     private static void setNumericString(Row row, String value) {
-        Cell cell = row.createCell(C_NUMERIC);
+        // For NUMERIC_FILL the answer lives in the correct_answers column as text.
+        Cell cell = row.createCell(C_CORRECT);
         cell.setCellValue(value); // STRING cell type
     }
 }
