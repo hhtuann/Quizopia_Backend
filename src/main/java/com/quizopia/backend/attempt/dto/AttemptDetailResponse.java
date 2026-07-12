@@ -18,12 +18,13 @@ import java.util.List;
 public record AttemptDetailResponse(
         Long attemptId, Long sessionId, Integer attemptNumber, String status,
         Instant startedAt, Instant deadlineAt, Instant submittedAt, Instant serverTime,
-        int answeredCount, int totalQuestions,
+        int answeredCount, int totalQuestions, String examTitle,
         List<QuestionView> questions) {
 
     public record QuestionView(
             Long attemptQuestionId, Long examQuestionId, String questionType,
             Integer displayOrder, String content, BigDecimal defaultPoints,
+            String sectionTitle, String sectionInstructions, Integer sectionPosition,
             List<OptionView> options,
             SavedAnswerView savedAnswer) {}
 

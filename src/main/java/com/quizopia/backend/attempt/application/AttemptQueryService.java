@@ -75,17 +75,22 @@ public class AttemptQueryService {
         Attempt attempt = loadOwnedAttempt(attemptId, profile); // 404 anti-enumeration
         Instant serverTime = Instant.now(clock);
 
-        // 1 joined query: ordered attempt_questions + safe exam_question fields.
+        // 1 joined query: ordered attempt_questions + safe exam_question fields + section info.
         List<AqRow> rows = jdbc.query(
                 "SELECT aq.id AS aq_id, aq.exam_question_id, aq.question_type, aq.default_points, "
-                        + "aq.display_order, aq.option_order, eq.content "
+                        + "aq.display_order, aq.option_order, eq.content, "
+                        + "es.title AS section_title, es.instructions AS section_instructions, "
+                        + "es.position AS section_position "
                         + "FROM attempt_questions aq JOIN exam_questions eq ON eq.id = aq.exam_question_id "
+                        + "LEFT JOIN exam_sections es ON es.id = eq.exam_section_id "
                         + "WHERE aq.attempt_id = ? ORDER BY aq.display_order ASC, aq.id ASC",
                 (rs, n) -> new AqRow(
                         rs.getLong("aq_id"), rs.getLong("exam_question_id"), rs.getString("question_type"),
                         rs.getBigDecimal("default_points"), rs.getInt("display_order"),
                         parseJson(rs.getString("option_order")),
-                        rs.getString("content")),
+                        rs.getString("content"),
+                        rs.getString("section_title"), rs.getString("section_instructions"),
+                        rs.getObject("section_position", Integer.class)),
                 attemptId);
 
         Map<Long, Map<String, String>> contentByEqAndKey = batchOptions(rows);       // 2 options batch
@@ -107,11 +112,16 @@ public class AttemptQueryService {
                 }
             }
             questionViews.add(new QuestionView(r.aqId, r.examQuestionId, r.questionType, r.displayOrder,
-                    r.content, r.defaultPoints, options, savedAnswer));
+                    r.content, r.defaultPoints, r.sectionTitle, r.sectionInstructions, r.sectionPosition,
+                    options, savedAnswer));
         }
+        // Load the exam title for the student-facing navbar (attempt → version → exam).
+        String examTitle = jdbc.queryForObject(
+                "SELECT e.title FROM exams e JOIN exam_versions ev ON ev.exam_id = e.id WHERE ev.id = ?",
+                String.class, attempt.getExamVersionId());
         return new AttemptDetailResponse(attempt.getId(), attempt.getExamSessionId(), attempt.getAttemptNumber(),
                 attempt.getStatus().name(), attempt.getStartedAt(), attempt.getDeadlineAt(),
-                attempt.getSubmittedAt(), serverTime, answeredCount, rows.size(), questionViews);
+                attempt.getSubmittedAt(), serverTime, answeredCount, rows.size(), examTitle, questionViews);
     }
 
     // ============================================================
@@ -232,7 +242,8 @@ public class AttemptQueryService {
     }
 
     private record AqRow(Long aqId, Long examQuestionId, String questionType, BigDecimal defaultPoints,
-                         Integer displayOrder, JsonNode optionOrder, String content) {}
+                         Integer displayOrder, JsonNode optionOrder, String content,
+                         String sectionTitle, String sectionInstructions, Integer sectionPosition) {}
 
     private record AnswerRow(JsonNode payload, Long sequence) {}
 }
