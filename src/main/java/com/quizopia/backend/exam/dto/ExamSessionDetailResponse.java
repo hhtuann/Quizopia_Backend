@@ -1,0 +1,24 @@
+package com.quizopia.backend.exam.dto;
+
+import java.time.Instant;
+
+public record ExamSessionDetailResponse(
+        Long id,
+        Long examId,
+        String examCode,
+        Integer examVersionNumber,
+        String code,
+        String title,
+        String status,
+        Instant startsAt,
+        Instant endsAt,
+        Integer maxAttempts,
+        Integer durationMinutes,
+        Instant openedAt,
+        Instant closedAt,
+        long participantCount,
+        Integer version,
+        Instant createdAt,
+        String visibility
+) {
+}

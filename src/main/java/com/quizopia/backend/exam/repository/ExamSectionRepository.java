@@ -1,0 +1,13 @@
+package com.quizopia.backend.exam.repository;
+
+import com.quizopia.backend.exam.domain.model.ExamSection;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.List;
+
+public interface ExamSectionRepository extends JpaRepository<ExamSection, Long> {
+
+    List<ExamSection> findAllByExamVersionIdOrderByPositionAsc(Long examVersionId);
+
+    void deleteAllByExamVersionId(Long examVersionId);
+}
