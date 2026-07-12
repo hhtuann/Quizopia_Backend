@@ -32,17 +32,18 @@ public abstract class AbstractAuthenticationIntegrationTests {
     protected ObjectMapper objectMapper;
 
     protected String studentRegisterJson(String username, String email, String password,
-                                         String displayName, String phone) {
+            String displayName, String phone) {
         return """
                 {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"STUDENT"}
                 """.formatted(username, email, password, displayName, phone);
     }
 
     protected String teacherRegisterJson(String username, String email, String password,
-                                         String displayName, String phone, String invite) {
+            String displayName, String phone, String invite) {
         return """
                 {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"TEACHER","teacherInviteCode":"%s"}
-                """.formatted(username, email, password, displayName, phone, invite);
+                """
+                .formatted(username, email, password, displayName, phone, invite);
     }
 
     protected String loginJson(String identifier, String password) {
@@ -53,15 +54,15 @@ public abstract class AbstractAuthenticationIntegrationTests {
 
     protected MvcResult register(String json) throws Exception {
         return mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json))
                 .andReturn();
     }
 
     protected MvcResult login(String identifier, String password) throws Exception {
         return mockMvc.perform(post("/api/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(loginJson(identifier, password)))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(loginJson(identifier, password)))
                 .andReturn();
     }
 
