@@ -6,6 +6,7 @@ import com.hhtuann.backend.exam.dto.ExamSessionDetailResponse;
 import com.hhtuann.backend.exam.dto.ExamSessionListItem;
 import com.hhtuann.backend.exam.dto.CreateExamSessionRequest;
 import com.hhtuann.backend.exam.dto.SessionClassesResponse;
+import com.hhtuann.backend.exam.dto.SessionRosterItem;
 import com.hhtuann.backend.exam.dto.UpdateExamSessionRequest;
 import com.hhtuann.backend.question.dto.PageResponse;
 import jakarta.validation.Valid;
@@ -110,5 +111,13 @@ public class ExamSessionController {
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
         return sessionService.listClasses(userId, sessionId);
+    }
+
+    @GetMapping("/{sessionId}/roster")
+    public java.util.List<SessionRosterItem> listRoster(
+            @PathVariable Long sessionId,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return sessionService.listRoster(userId, sessionId);
     }
 }

@@ -480,6 +480,40 @@ public class ExamSessionService {
     }
 
     // ============================================================
+    // GET /api/exam-sessions/{sessionId}/roster
+    // ============================================================
+
+    /**
+     * Effective student roster for a session: class members ∪ direct participants.
+     * Used by the teacher live-monitor to resolve {@code studentProfileId} →
+     * {@code studentCode + displayName}.
+     */
+    @Transactional(readOnly = true)
+    public List<SessionRosterItem> listRoster(Long userId, Long sessionId) {
+        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
+        ExamSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
+        if (!session.getOwnerTeacherId().equals(profile.getId())
+                || !session.getSchoolId().equals(profile.getSchoolId())) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
+        String sql = "SELECT DISTINCT sp.id AS pid, sp.student_code AS code, u.display_name AS name "
+                + "FROM ( "
+                + "  SELECT cm.student_profile_id FROM exam_session_classes esc "
+                + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
+                + "  WHERE esc.exam_session_id = :sid "
+                + "  UNION "
+                + "  SELECT student_profile_id FROM exam_session_participants WHERE exam_session_id = :sid "
+                + ") AS roster "
+                + "JOIN student_profiles sp ON sp.id = roster.student_profile_id "
+                + "JOIN users u ON u.id = sp.user_id "
+                + "ORDER BY sp.student_code";
+        return jdbc.query(sql, new MapSqlParameterSource("sid", sessionId),
+                (rs, n) -> new SessionRosterItem(
+                        rs.getLong("pid"), rs.getString("code"), rs.getString("name")));
+    }
+
+    // ============================================================
     // Class-assignment helpers
     // ============================================================
 
