@@ -13,23 +13,45 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Test-only {@link BeanPostProcessor} (B1R4-B2F1) that wraps the production repository beans in a JDK
- * dynamic proxy. When the armed thread calls {@code findByIdForUpdate} on a wrapped repository, the proxy
- * signals <b>BEFORE delegating to the real method</b> — right before the {@code FOR UPDATE} SQL blocks.
+ * Test-only {@link BeanPostProcessor} (B1R4-B2F1) that wraps the production
+ * repository beans in a JDK
+ * dynamic proxy. When the armed thread calls {@code findByIdForUpdate} on a
+ * wrapped repository, the proxy
+ * signals <b>BEFORE delegating to the real method</b> — right before the
+ * {@code FOR UPDATE} SQL blocks.
  *
- * <p>This is a TRUE repository-level intercept: the signal fires inside the proxy's {@code invoke()},
- * not in the test worker before the service call. Combined with {@code b.isDone()==false} while worker A
- * holds the outer transaction's lock, this proves worker B's thread reached the exact repository lock
+ * <p>
+ * This is a TRUE repository-level intercept: the signal fires inside the
+ * proxy's {@code invoke()},
+ * not in the test worker before the service call. Combined with
+ * {@code b.isDone()==false} while worker A
+ * holds the outer transaction's lock, this proves worker B's thread reached the
+ * exact repository lock
  * method and is blocked there.
  *
- * <p>Lock points (exact production methods):
+ * <p>
+ * Lock points (exact production methods):
  * <table>
- *   <tr><th>Enum</th><th>Repository</th><th>Method</th></tr>
- *   <tr><td>{@link LockPoint#SESSION_FOR_UPDATE}</td><td>{@code ExamSessionRepository}</td><td>{@code findByIdForUpdate}</td></tr>
- *   <tr><td>{@link LockPoint#ATTEMPT_FOR_UPDATE}</td><td>{@code AttemptRepository}</td><td>{@code findByIdForUpdate}</td></tr>
+ * <tr>
+ * <th>Enum</th>
+ * <th>Repository</th>
+ * <th>Method</th>
+ * </tr>
+ * <tr>
+ * <td>{@link LockPoint#SESSION_FOR_UPDATE}</td>
+ * <td>{@code ExamSessionRepository}</td>
+ * <td>{@code findByIdForUpdate}</td>
+ * </tr>
+ * <tr>
+ * <td>{@link LockPoint#ATTEMPT_FOR_UPDATE}</td>
+ * <td>{@code AttemptRepository}</td>
+ * <td>{@code findByIdForUpdate}</td>
+ * </tr>
  * </table>
  *
- * <p>Usage:
+ * <p>
+ * Usage:
+ * 
  * <pre>{@code
  * // Worker B:
  * probe.armCurrentThread(LockPoint.ATTEMPT_FOR_UPDATE);
@@ -44,12 +66,11 @@ import java.util.concurrent.TimeoutException;
 public class RepositoryLockEntryProbe implements BeanPostProcessor {
 
     public enum LockPoint {
-        SESSION_FOR_UPDATE,  // ExamSessionRepository.findByIdForUpdate
-        ATTEMPT_FOR_UPDATE   // AttemptRepository.findByIdForUpdate
+        SESSION_FOR_UPDATE, // ExamSessionRepository.findByIdForUpdate
+        ATTEMPT_FOR_UPDATE // AttemptRepository.findByIdForUpdate
     }
 
     private volatile Thread targetThread;
-    private volatile LockPoint expectedLockPoint;
     private volatile CompletableFuture<LockPoint> enteredSignal = new CompletableFuture<>();
 
     // --- probe API ---
@@ -57,17 +78,18 @@ public class RepositoryLockEntryProbe implements BeanPostProcessor {
     /** Arms the probe for the current thread, expecting the given lock point. */
     public void armCurrentThread(LockPoint expected) {
         this.targetThread = Thread.currentThread();
-        this.expectedLockPoint = expected;
     }
 
     /** Clears the probe (called by @BeforeEach). Creates a fresh signal future. */
     public void reset() {
         this.targetThread = null;
-        this.expectedLockPoint = null;
         this.enteredSignal = new CompletableFuture<>();
     }
 
-    /** Blocks until the armed thread signals entry at the expected lock point; returns false on timeout. */
+    /**
+     * Blocks until the armed thread signals entry at the expected lock point;
+     * returns false on timeout.
+     */
     public boolean awaitEntered(LockPoint expected, long timeoutSeconds) {
         try {
             LockPoint actual = enteredSignal.get(timeoutSeconds, TimeUnit.SECONDS);
@@ -79,7 +101,8 @@ public class RepositoryLockEntryProbe implements BeanPostProcessor {
         }
     }
 
-    // --- internal signal (called from the repository proxy, NOT from the test worker) ---
+    // --- internal signal (called from the repository proxy, NOT from the test
+    // worker) ---
 
     private void signalFromProxy(LockPoint actualLockPoint) {
         if (Thread.currentThread() == targetThread && enteredSignal != null) {
@@ -101,7 +124,8 @@ public class RepositoryLockEntryProbe implements BeanPostProcessor {
     }
 
     private static boolean isAlreadyWrapped(Object bean) {
-        if (!Proxy.isProxyClass(bean.getClass())) return false;
+        if (!Proxy.isProxyClass(bean.getClass()))
+            return false;
         try {
             return Proxy.getInvocationHandler(bean) instanceof LockEntryInvocationHandler;
         } catch (IllegalArgumentException e) {
@@ -117,7 +141,10 @@ public class RepositoryLockEntryProbe implements BeanPostProcessor {
                 new LockEntryInvocationHandler(target, lockMethodName, lockPoint, this));
     }
 
-    /** Invocation handler that signals the probe before the lock method, then delegates. */
+    /**
+     * Invocation handler that signals the probe before the lock method, then
+     * delegates.
+     */
     private static final class LockEntryInvocationHandler implements InvocationHandler {
         private final Object target;
         private final String lockMethodName;
@@ -125,7 +152,7 @@ public class RepositoryLockEntryProbe implements BeanPostProcessor {
         private final RepositoryLockEntryProbe probe;
 
         LockEntryInvocationHandler(Object target, String lockMethodName, LockPoint lockPoint,
-                                   RepositoryLockEntryProbe probe) {
+                RepositoryLockEntryProbe probe) {
             this.target = target;
             this.lockMethodName = lockMethodName;
             this.lockPoint = lockPoint;

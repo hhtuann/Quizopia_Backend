@@ -2,7 +2,6 @@ package com.quizopia.backend.exam;
 
 import com.quizopia.backend.academic.application.DemoDataSeeder;
 import com.quizopia.backend.academic.repository.SchoolRepository;
-import com.quizopia.backend.exam.repository.ExamPurposeRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

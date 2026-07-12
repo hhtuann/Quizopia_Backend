@@ -31,9 +31,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Service-level integration tests for POST /api/exams/{examId}/publish (A3.2-2C). Real
- * PostgreSQL 17 Testcontainers. Covers pinned refresh, 4-type validation, numeric preservation,
- * totals, state transition, publish-twice conflict, rollback, and no per-source SELECT growth.
+ * Service-level integration tests for POST /api/exams/{examId}/publish
+ * (A3.2-2C). Real
+ * PostgreSQL 17 Testcontainers. Covers pinned refresh, 4-type validation,
+ * numeric preservation,
+ * totals, state transition, publish-twice conflict, rollback, and no per-source
+ * SELECT growth.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -41,10 +44,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Transactional
 class ExamPublishServiceIntegrationTests {
 
-    @Autowired private JdbcTemplate jdbc;
-    @Autowired private ExamService examService;
-    @Autowired private ExamVersionRepository versionRepo;
-    @Autowired private EntityManagerFactory entityManagerFactory;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private ExamService examService;
+    @Autowired
+    private ExamVersionRepository versionRepo;
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
 
     private long teacherUserId;
     private long schoolId;
@@ -53,12 +60,16 @@ class ExamPublishServiceIntegrationTests {
 
     @BeforeEach
     void setUp() {
-        teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('pt','pt@t','h','PT')");
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
+        teacherUserId = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('pt','pt@t','h','PT')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
+                teacherUserId);
         schoolId = insert("INSERT INTO schools (code, name) VALUES ('PS','Publish School')");
         long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'PTC')");
+        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
+                + ",'SUB','Sub')");
+        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
+                + teacherUserId + "," + schoolId + ",'PTC')");
     }
 
     // -- Test group: success with 4 types; totals; state --
@@ -84,7 +95,8 @@ class ExamPublishServiceIntegrationTests {
         assertThat(r.durationMinutes()).isEqualTo(60);
         // Exam READY + currentVersionNumber = 1.
         assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId)).isEqualTo("READY");
-        assertThat(jdbc.queryForObject("SELECT current_version_number FROM exams WHERE id=?", Integer.class, examId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT current_version_number FROM exams WHERE id=?", Integer.class, examId))
+                .isEqualTo(1);
     }
 
     @Test
@@ -103,20 +115,23 @@ class ExamPublishServiceIntegrationTests {
     @Test
     void emptyCompositionRejected() {
         Long examId = createExam("E3");
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of()));
+        examService.updateDraftComposition(teacherUserId, examId,
+                new UpdateDraftCompositionRequest(1, null, null, List.of()));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
     }
 
     @Test
     void emptySectionRejected() {
-        long bank = newBank();
         Long examId = createExam("E4");
         // One section with zero questions.
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
-                new CompositionSectionRequest(0, "S", null, List.of()))));
+        examService.updateDraftComposition(teacherUserId, examId,
+                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                        new CompositionSectionRequest(0, "S", null, List.of()))));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
     }
 
     // -- Test group: invalid type shapes rejected --
@@ -146,9 +161,14 @@ class ExamPublishServiceIntegrationTests {
         Long examId = createExam("E5");
         composeDraft(examId, List.of(q1, q2));
         examService.publishExam(teacherUserId, examId, new PublishExamRequest(null));
-        // The published exam_questions keep the answerKey verbatim (no trim/normalize/float).
-        String ak1 = jdbc.queryForObject("SELECT answer_key->>'expectedAnswer' FROM exam_questions WHERE source_question_id=?", String.class, q1);
-        String ak2 = jdbc.queryForObject("SELECT answer_key->>'expectedAnswer' FROM exam_questions WHERE source_question_id=?", String.class, q2);
+        // The published exam_questions keep the answerKey verbatim (no
+        // trim/normalize/float).
+        String ak1 = jdbc.queryForObject(
+                "SELECT answer_key->>'expectedAnswer' FROM exam_questions WHERE source_question_id=?", String.class,
+                q1);
+        String ak2 = jdbc.queryForObject(
+                "SELECT answer_key->>'expectedAnswer' FROM exam_questions WHERE source_question_id=?", String.class,
+                q2);
         assertThat(ak1).isEqualTo("2.50");
         assertThat(ak2).isEqualTo("02.5");
     }
@@ -159,19 +179,24 @@ class ExamPublishServiceIntegrationTests {
     void bankBumpPublishRefreshesFromPinnedVersion() {
         long bank = newBank();
         long q = srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null);
-        long pinnedV = jdbc.queryForObject("SELECT id FROM question_versions WHERE question_id=? ORDER BY version_number DESC LIMIT 1", Long.class, q);
+        long pinnedV = jdbc.queryForObject(
+                "SELECT id FROM question_versions WHERE question_id=? ORDER BY version_number DESC LIMIT 1", Long.class,
+                q);
         Long examId = createExam("E6");
         composeDraft(examId, List.of(q)); // PUT pins v1
         // Bank bumps the question to version 2 (new current) + changes content.
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) "
                 + "VALUES (" + q + ",2,'SINGLE_CHOICE','CHANGED','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         jdbc.update("UPDATE questions SET current_version_number = 2 WHERE id = ?", q);
-        // Publish must refresh from PINNED v1 (not current v2): content stays the original.
+        // Publish must refresh from PINNED v1 (not current v2): content stays the
+        // original.
         examService.publishExam(teacherUserId, examId, new PublishExamRequest(null));
-        String content = jdbc.queryForObject("SELECT content FROM exam_questions WHERE source_question_id=?", String.class, q);
+        String content = jdbc.queryForObject("SELECT content FROM exam_questions WHERE source_question_id=?",
+                String.class, q);
         assertThat(content).isEqualTo("c"); // pinned v1 content, NOT v2 "CHANGED"
         // sourceQuestionVersionId unchanged (still pinned v1).
-        Long sv = jdbc.queryForObject("SELECT source_question_version_id FROM exam_questions WHERE source_question_id=?", Long.class, q);
+        Long sv = jdbc.queryForObject(
+                "SELECT source_question_version_id FROM exam_questions WHERE source_question_id=?", Long.class, q);
         assertThat(sv).isEqualTo(pinnedV);
     }
 
@@ -184,7 +209,8 @@ class ExamPublishServiceIntegrationTests {
         composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
         examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)); // first -> PUBLISHED
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
     }
 
     @Test
@@ -193,7 +219,8 @@ class ExamPublishServiceIntegrationTests {
         Long examId = createExam("E8");
         composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(99)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
     }
 
     // -- Test group: rollback (invalid publish leaves state unchanged) --
@@ -205,10 +232,13 @@ class ExamPublishServiceIntegrationTests {
         composeDraft(examId, List.of(srcQuestion(bank, "s3", "SINGLE_CHOICE", 3, 1, null))); // invalid (3 options)
         String examStatusBefore = jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId);
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
         // Version still DRAFT; exam status/cvn unchanged.
-        assertThat(jdbc.queryForObject("SELECT status FROM exam_versions WHERE exam_id=?", String.class, examId)).isEqualTo("DRAFT");
-        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId)).isEqualTo(examStatusBefore);
+        assertThat(jdbc.queryForObject("SELECT status FROM exam_versions WHERE exam_id=?", String.class, examId))
+                .isEqualTo("DRAFT");
+        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId))
+                .isEqualTo(examStatusBefore);
     }
 
     // -- Test group: query count (no per-source SELECT growth) --
@@ -251,7 +281,8 @@ class ExamPublishServiceIntegrationTests {
         Long examId = createExam("RX" + Math.abs(System.nanoTime() % 1_000_000_000L));
         composeDraft(examId, List.of(qId));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
     }
 
     private void composeDraft(Long examId, List<Long> qIds) {
@@ -259,30 +290,43 @@ class ExamPublishServiceIntegrationTests {
         for (int i = 0; i < qIds.size(); i++) {
             qs.add(new CompositionQuestionRequest(qIds.get(i), i, null));
         }
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
-                new CompositionSectionRequest(0, "S", null, qs.isEmpty() ? List.of() : qs))));
+        examService.updateDraftComposition(teacherUserId, examId,
+                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                        new CompositionSectionRequest(0, "S", null, qs.isEmpty() ? List.of() : qs))));
     }
 
     private long newBank() {
         return insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'PB" + Math.abs(System.nanoTime() % 1_000_000_000L) + "','Bank')");
+                + schoolId + "," + subjectId + "," + teacherProfileId + ",'PB"
+                + Math.abs(System.nanoTime() % 1_000_000_000L) + "','Bank')");
     }
 
-    /** Builds an ACTIVE source question + current version + N options (first numCorrect correct). NUMERIC: 0 options + answerKey. */
-    private long srcQuestion(long bank, String code, String type, int numOptions, int numCorrect, String answerKeyJson) {
-        long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'" + code + "','ACTIVE',1," + teacherUserId + ")");
+    /**
+     * Builds an ACTIVE source question + current version + N options (first
+     * numCorrect correct). NUMERIC: 0 options + answerKey.
+     */
+    private long srcQuestion(long bank, String code, String type, int numOptions, int numCorrect,
+            String answerKeyJson) {
+        long q = insert(
+                "INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES ("
+                        + bank + ",'" + code + "','ACTIVE',1," + teacherUserId + ")");
         String ak = answerKeyJson != null ? "'" + answerKeyJson + "'::jsonb" : "null";
-        long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, answer_key, metadata, created_by) "
-                + "VALUES (" + q + ",1,'" + type + "','c','MEDIUM',1," + ak + ",'{}'::jsonb," + teacherUserId + ")");
+        long v = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, answer_key, metadata, created_by) "
+                        + "VALUES (" + q + ",1,'" + type + "','c','MEDIUM',1," + ak + ",'{}'::jsonb," + teacherUserId
+                        + ")");
         for (int i = 0; i < numOptions; i++) {
             String key = String.valueOf((char) ('A' + i));
-            jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + key + "','opt'," + (i < numCorrect) + "," + i + ")");
+            jdbc.update(
+                    "INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES ("
+                            + v + ",'" + key + "','opt'," + (i < numCorrect) + "," + i + ")");
         }
         return q;
     }
 
     private String numericAk(String expectedAnswer) {
-        return "{\"expectedAnswer\":\"" + expectedAnswer + "\",\"requiredInputLength\":4,\"roundingInstruction\":\"2dp\"}";
+        return "{\"expectedAnswer\":\"" + expectedAnswer
+                + "\",\"requiredInputLength\":4,\"roundingInstruction\":\"2dp\"}";
     }
 
     private Long createExam(String code) {

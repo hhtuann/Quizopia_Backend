@@ -30,25 +30,34 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Service-level integration tests for the 4 exam endpoints (A3.2-1 batch).
- * Uses real PostgreSQL 17 Testcontainers; authorization via DB (not JWT claims).
+ * Uses real PostgreSQL 17 Testcontainers; authorization via DB (not JWT
+ * claims).
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
 @Transactional
-@SuppressWarnings({"null"})
+@SuppressWarnings({ "null" })
 class ExamServiceIntegrationTests {
 
-    @Autowired private JdbcTemplate jdbc;
-    @Autowired private ExamService examService;
-    @Autowired private ExamPurposeRepository purposeRepo;
-    @Autowired private ExamRepository examRepo;
-    @Autowired private ExamVersionRepository versionRepo;
-    @Autowired private ExamSectionRepository sectionRepo;
-    @Autowired private ExamQuestionRepository questionRepo;
-    @Autowired private ExamQuestionOptionRepository optionRepo;
-    @Autowired private EntityManager entityManager;
-    @Autowired private EntityManagerFactory entityManagerFactory;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private ExamService examService;
+    @Autowired
+    private ExamPurposeRepository purposeRepo;
+    @Autowired
+    private ExamVersionRepository versionRepo;
+    @Autowired
+    private ExamSectionRepository sectionRepo;
+    @Autowired
+    private ExamQuestionRepository questionRepo;
+    @Autowired
+    private ExamQuestionOptionRepository optionRepo;
+    @Autowired
+    private EntityManager entityManager;
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
 
     private long teacherUserId;
     private long schoolId;
@@ -57,27 +66,34 @@ class ExamServiceIntegrationTests {
 
     @BeforeEach
     void setUp() {
-        teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('t1','t1@t','h','T1')");
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
+        teacherUserId = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('t1','t1@t','h','T1')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
+                teacherUserId);
         schoolId = insert("INSERT INTO schools (code, name) VALUES ('SVC','SVC')");
         long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'TC1')");
+        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
+                + ",'SUB','Sub')");
+        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
+                + teacherUserId + "," + schoolId + ",'TC1')");
     }
 
     // -- Authorization --
 
     @Test
     void purposeListSystemAdminWithoutTeacherRoleDenied() {
-        long adminId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('a1','a1@t','h','A1')");
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='SYSTEM_ADMIN'", adminId);
+        long adminId = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('a1','a1@t','h','A1')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='SYSTEM_ADMIN'",
+                adminId);
         assertThatThrownBy(() -> examService.listPurposes(adminId))
                 .isInstanceOf(ExamException.class);
     }
 
     @Test
     void teacherWithoutProfileReturns404() {
-        long uid = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t','h','NP')");
+        long uid = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t','h','NP')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", uid);
         assertThatThrownBy(() -> examService.listPurposes(uid))
                 .isInstanceOf(ExamException.class);
@@ -85,7 +101,8 @@ class ExamServiceIntegrationTests {
 
     @Test
     void studentCannotAccessExamEndpoints() {
-        long sid = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s1','s1@t','h','S1')");
+        long sid = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s1','s1@t','h','S1')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='STUDENT'", sid);
         assertThatThrownBy(() -> examService.listPurposes(sid))
                 .isInstanceOf(ExamException.class);
@@ -158,7 +175,8 @@ class ExamServiceIntegrationTests {
     void createExamCrossSchoolSubject403() {
         long s2 = insert("INSERT INTO schools (code, name) VALUES ('CS','CS')");
         long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL','G')");
-        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + s2 + "," + gl2 + ",'XS','X')");
+        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + s2 + "," + gl2
+                + ",'XS','X')");
         assertThatThrownBy(() -> examService.createExam(teacherUserId,
                 new CreateExamRequest(sub2, null, "EX4", "T", null)))
                 .isInstanceOf(ExamException.class);
@@ -190,9 +208,11 @@ class ExamServiceIntegrationTests {
 
     @Test
     void createExamTwoOwnersSameSchoolSameCodeAccepted() {
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2','u2@t','h','U2')");
+        long u2 = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2','u2@t','h','U2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
+        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
+                + ",'TC2')");
         examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "SHARED", "T", null));
         // Same code, different owner — should succeed (owner-scoped unique)
         ExamListItem result = examService.createExam(u2, new CreateExamRequest(subjectId, null, "SHARED", "T2", null));
@@ -232,7 +252,8 @@ class ExamServiceIntegrationTests {
         PageResponse<ExamListItem> result = examService.listMyExams(teacherUserId, null, null, "DRAFT", 0, 20, null);
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).status()).isEqualTo("DRAFT");
-        PageResponse<ExamListItem> readyResult = examService.listMyExams(teacherUserId, null, null, "READY", 0, 20, null);
+        PageResponse<ExamListItem> readyResult = examService.listMyExams(teacherUserId, null, null, "READY", 0, 20,
+                null);
         assertThat(readyResult.items()).isEmpty();
     }
 
@@ -251,9 +272,11 @@ class ExamServiceIntegrationTests {
     @Test
     void listMyExamsNotReturnOtherTeacherExams() {
         examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "MINE", "T", null));
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u3','u3@t','h','U3')");
+        long u2 = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u3','u3@t','h','U3')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC3')");
+        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
+                + ",'TC3')");
         PageResponse<ExamListItem> u2Result = examService.listMyExams(u2, null, null, null, 0, 20, null);
         assertThat(u2Result.items()).isEmpty();
     }
@@ -281,9 +304,11 @@ class ExamServiceIntegrationTests {
     void getExamDetailForeignOwnerReturns404() {
         ExamListItem created = examService.createExam(teacherUserId,
                 new CreateExamRequest(subjectId, null, "D2", "T", null));
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u4','u4@t','h','U4')");
+        long u2 = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u4','u4@t','h','U4')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC4')");
+        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
+                + ",'TC4')");
         // Different teacher accessing — anti-enumeration: 404 (not 403)
         assertThatThrownBy(() -> examService.getExamDetail(u2, created.id()))
                 .isInstanceOf(ExamException.class);
@@ -323,10 +348,16 @@ class ExamServiceIntegrationTests {
         // Add questions (need a source question)
         long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
                 + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Bank')");
-        long qId = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q1'," + teacherUserId + ")");
-        long qvId = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
-        long qId2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q2'," + teacherUserId + ")");
-        long qvId2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qId2 + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
+        long qId = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q1',"
+                + teacherUserId + ")");
+        long qvId = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + qId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
+        long qId2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q2',"
+                + teacherUserId + ")");
+        long qvId2 = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + qId2 + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
         questionRepo.saveAndFlush(new ExamQuestion(draft.getId(), sec1.getId(), qId, qvId,
                 "QC1", com.quizopia.backend.question.domain.model.QuestionType.SINGLE_CHOICE, "c1", BigDecimal.ONE, 1));
@@ -392,10 +423,16 @@ class ExamServiceIntegrationTests {
         ExamSection s2 = sectionRepo.saveAndFlush(new ExamSection(draft.getId(), "S2", 1));
         long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
                 + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB3','B')");
-        long qId = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'RQ'," + teacherUserId + ")");
-        long qvId = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
-        long qId2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'RQ2'," + teacherUserId + ")");
-        long qvId2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qId2 + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
+        long qId = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'RQ',"
+                + teacherUserId + ")");
+        long qvId = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + qId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
+        long qId2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'RQ2',"
+                + teacherUserId + ")");
+        long qvId2 = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + qId2 + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
         questionRepo.saveAndFlush(new ExamQuestion(draft.getId(), s2.getId(), qId2, qvId2,
                 "Q2B", com.quizopia.backend.question.domain.model.QuestionType.SINGLE_CHOICE, "c", BigDecimal.ONE, 0));
@@ -437,10 +474,14 @@ class ExamServiceIntegrationTests {
         long countN20 = stats.getPrepareStatementCount();
 
         // Query count must NOT grow proportionally with page size.
-        // Measured: N=1 → 6 prepared statements, N=20 → 7. Delta = 1 (constant, not 2N).
-        // The +1 is a Hibernate internal (sequence/identifier allocation), not a per-exam query.
+        // Measured: N=1 → 6 prepared statements, N=20 → 7. Delta = 1 (constant, not
+        // 2N).
+        // The +1 is a Hibernate internal (sequence/identifier allocation), not a
+        // per-exam query.
         long delta = Math.abs(countN20 - countN1);
-        assertThat(delta).as("query count delta between N=1 (%d) and N=20 (%d) must be constant, not proportional to N", countN1, countN20)
+        assertThat(delta)
+                .as("query count delta between N=1 (%d) and N=20 (%d) must be constant, not proportional to N", countN1,
+                        countN20)
                 .isLessThanOrEqualTo(2L);
     }
 

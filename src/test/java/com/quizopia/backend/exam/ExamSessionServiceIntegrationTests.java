@@ -7,7 +7,6 @@ import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQu
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest.CompositionSectionRequest;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
-import com.quizopia.backend.exam.repository.ExamSessionRepository;
 import com.quizopia.backend.question.dto.PageResponse;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import jakarta.persistence.EntityManager;

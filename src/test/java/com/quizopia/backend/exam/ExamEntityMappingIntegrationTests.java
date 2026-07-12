@@ -35,14 +35,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Transactional
 class ExamEntityMappingIntegrationTests {
 
-    @Autowired private JdbcTemplate jdbc;
-    @Autowired private EntityManager entityManager;
-    @Autowired private ExamPurposeRepository purposeRepo;
-    @Autowired private ExamRepository examRepo;
-    @Autowired private ExamVersionRepository versionRepo;
-    @Autowired private ExamSectionRepository sectionRepo;
-    @Autowired private ExamQuestionRepository questionRepo;
-    @Autowired private ExamSessionRepository sessionRepo;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private EntityManager entityManager;
+    @Autowired
+    private ExamRepository examRepo;
+    @Autowired
+    private ExamVersionRepository versionRepo;
+    @Autowired
+    private ExamSectionRepository sectionRepo;
+    @Autowired
+    private ExamQuestionRepository questionRepo;
+    @Autowired
+    private ExamSessionRepository sessionRepo;
 
     private long userId;
     private long schoolId;
@@ -56,24 +62,36 @@ class ExamEntityMappingIntegrationTests {
 
     @BeforeEach
     void setUp() {
-        userId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('eu','eu@t','h','EU')");
+        userId = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('eu','eu@t','h','EU')");
         schoolId = insert("INSERT INTO schools (code, name) VALUES ('ES','Exam School')");
         long glId = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + glId + ",'SUB','S')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + userId + "," + schoolId + ",'ETC')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + userId + "," + schoolId + ",'ESC')");
-        long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Bank')");
-        questionIdA = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'qA'," + userId + ")");
-        questionVersionIdA = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + questionIdA + ",1,'SINGLE_CHOICE','ca','MEDIUM',1,'{}'::jsonb," + userId + ")");
-        questionIdB = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'qB'," + userId + ")");
-        questionVersionIdB = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + questionIdB + ",1,'SINGLE_CHOICE','cb','MEDIUM',1,'{}'::jsonb," + userId + ")");
+        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + ","
+                + glId + ",'SUB','S')");
+        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + userId
+                + "," + schoolId + ",'ETC')");
+        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + userId
+                + "," + schoolId + ",'ESC')");
+        long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
+                + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Bank')");
+        questionIdA = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'qA',"
+                + userId + ")");
+        questionVersionIdA = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + questionIdA + ",1,'SINGLE_CHOICE','ca','MEDIUM',1,'{}'::jsonb," + userId + ")");
+        questionIdB = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'qB',"
+                + userId + ")");
+        questionVersionIdB = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
+                        + questionIdB + ",1,'SINGLE_CHOICE','cb','MEDIUM',1,'{}'::jsonb," + userId + ")");
     }
 
     // -- Schema validation (context load = ddl-auto=validate passes) --
 
     @Test
     void contextLoadsAndAllEntitiesValidate() {
-        // If the Spring context loads, Hibernate ddl-auto=validate passed for all 8 entities.
+        // If the Spring context loads, Hibernate ddl-auto=validate passed for all 8
+        // entities.
         assertThat(entityManager).isNotNull();
     }
 
@@ -191,8 +209,11 @@ class ExamEntityMappingIntegrationTests {
         // NUMERIC source question+version
         long nq = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES ("
                 + "(SELECT id FROM question_banks WHERE code='QB'), 'qN'," + userId + ")");
-        long nv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, answer_key, metadata, created_by) VALUES ("
-                + nq + ",1,'NUMERIC_FILL','n',1,'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"r2\"}'::jsonb,'{}'::jsonb," + userId + ")");
+        long nv = insert(
+                "INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, answer_key, metadata, created_by) VALUES ("
+                        + nq
+                        + ",1,'NUMERIC_FILL','n',1,'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"r2\"}'::jsonb,'{}'::jsonb,"
+                        + userId + ")");
         ObjectNode ak = JsonNodeFactory.instance.objectNode();
         ak.put("expectedAnswer", "2.50");
         ak.put("requiredInputLength", 4);
@@ -280,8 +301,10 @@ class ExamEntityMappingIntegrationTests {
 
     @Test
     void examCodeTwoOwnersSameSchoolSameCodeAccepted() {
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2a','u2a@t','h','U2A')");
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'ETC2')");
+        long u2 = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2a','u2a@t','h','U2A')");
+        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + ","
+                + schoolId + ",'ETC2')");
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "SHARED", "T"));
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, tp2, "SHARED", "T"));
     }
@@ -307,8 +330,10 @@ class ExamEntityMappingIntegrationTests {
         ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, exam.getId(), 1, userId));
         v.markPublished(Instant.now(), BigDecimal.TEN);
         versionRepo.saveAndFlush(v);
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2b','u2b@t','h','U2B')");
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'ETC3')");
+        long u2 = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2b','u2b@t','h','U2B')");
+        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + ","
+                + schoolId + ",'ETC3')");
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         sessionRepo.saveAndFlush(new com.quizopia.backend.exam.domain.model.ExamSession(
