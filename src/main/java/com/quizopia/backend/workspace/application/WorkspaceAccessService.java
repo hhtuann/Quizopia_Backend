@@ -1,11 +1,19 @@
 package com.quizopia.backend.workspace.application;
 
+import com.quizopia.backend.workspace.domain.model.Workspace;
 import com.quizopia.backend.workspace.domain.model.WorkspaceMembership;
+import com.quizopia.backend.workspace.domain.model.WorkspaceMembershipStatus;
 import com.quizopia.backend.workspace.domain.model.WorkspaceRole;
+import com.quizopia.backend.workspace.domain.model.WorkspaceType;
 import com.quizopia.backend.workspace.exception.WorkspaceErrorCode;
 import com.quizopia.backend.workspace.exception.WorkspaceException;
+import com.quizopia.backend.workspace.repository.WorkspaceMembershipRepository;
+import com.quizopia.backend.workspace.repository.WorkspaceRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Reusable workspace policy checks for backend services/controllers
@@ -15,14 +23,24 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>Rule: ownership + active membership + object relation are always
  * validated server-side; inactive memberships and revoked roles are denied.
+ *
+ * <p>Resource-boundary policy (issue #4 P0-2): in ORGANIZATION workspaces,
+ * creation-time ownership never overrides a revoked membership — see
+ * {@link #requireResourceRead} / {@link #requireResourceManage}.
  */
 @Service
 public class WorkspaceAccessService {
 
     private final WorkspaceService workspaceService;
+    private final WorkspaceRepository workspaceRepository;
+    private final WorkspaceMembershipRepository membershipRepository;
 
-    public WorkspaceAccessService(WorkspaceService workspaceService) {
+    public WorkspaceAccessService(WorkspaceService workspaceService,
+                                  WorkspaceRepository workspaceRepository,
+                                  WorkspaceMembershipRepository membershipRepository) {
         this.workspaceService = workspaceService;
+        this.workspaceRepository = workspaceRepository;
+        this.membershipRepository = membershipRepository;
     }
 
     /**
@@ -99,5 +117,80 @@ public class WorkspaceAccessService {
                     "workspaceId must not be null");
         }
         return workspaceId;
+    }
+
+    // ============================================================
+    // Resource-boundary policy (issue #4 P0-2)
+    //
+    // A resource (question bank, exam, session, classroom) lives in a
+    // workspace. Creation-time ownership NEVER overrides a revoked
+    // organization membership: in ORGANIZATION workspaces every access —
+    // read included — requires an ACTIVE membership, and management
+    // additionally requires to be the creator or a workspace OWNER/ADMIN.
+    // PERSONAL workspaces keep the authenticated true owner.
+    // ============================================================
+
+    /**
+     * Read access: PERSONAL → the owner only; ORGANIZATION → any ACTIVE
+     * member (creator included; revoked creators are denied).
+     */
+    @Transactional(readOnly = true)
+    public void requireResourceRead(Long userId, Long workspaceId) {
+        Workspace workspace = workspaceService.requireWorkspace(workspaceId);
+        if (workspace.isPersonal()) {
+            if (!userId.equals(workspace.getOwnerUserId())) {
+                throw new WorkspaceException(WorkspaceErrorCode.WORKSPACE_ACCESS_DENIED);
+            }
+            return;
+        }
+        requireActiveMembershipInternal(userId, workspaceId);
+    }
+
+    /**
+     * Management access: PERSONAL → the owner; ORGANIZATION → ACTIVE
+     * membership AND (creator OR workspace OWNER/ADMIN).
+     */
+    @Transactional(readOnly = true)
+    public void requireResourceManage(Long userId, Long workspaceId, Long creatorUserId) {
+        Workspace workspace = workspaceService.requireWorkspace(workspaceId);
+        if (workspace.isPersonal()) {
+            if (!userId.equals(workspace.getOwnerUserId())) {
+                throw new WorkspaceException(WorkspaceErrorCode.WORKSPACE_ACCESS_DENIED);
+            }
+            return;
+        }
+        WorkspaceMembership membership = requireActiveMembershipInternal(userId, workspaceId);
+        if (creatorUserId != null && creatorUserId.equals(userId)) {
+            return;
+        }
+        if (membership.getRole() == WorkspaceRole.OWNER || membership.getRole() == WorkspaceRole.ADMIN) {
+            return;
+        }
+        throw new WorkspaceException(WorkspaceErrorCode.WORKSPACE_ROLE_DENIED);
+    }
+
+    /**
+     * Workspace ids whose resources the user may still see: the personal
+     * workspace (if provisioned) plus every ORGANIZATION workspace with an
+     * ACTIVE membership. Used to scope list queries so revoked members'
+     * creations disappear from their lists.
+     */
+    @Transactional(readOnly = true)
+    public List<Long> accessibleWorkspaceIds(Long userId) {
+        List<Long> ids = new ArrayList<>();
+        workspaceRepository
+                .findByOwnerUserIdAndWorkspaceType(userId, WorkspaceType.PERSONAL)
+                .ifPresent(ws -> ids.add(ws.getId()));
+        for (WorkspaceMembership membership : membershipRepository
+                .findByUserIdAndStatusOrderByCreatedAtAsc(userId, WorkspaceMembershipStatus.ACTIVE)) {
+            ids.add(membership.getWorkspaceId());
+        }
+        return ids;
+    }
+
+    private WorkspaceMembership requireActiveMembershipInternal(Long userId, Long workspaceId) {
+        return membershipRepository.findByWorkspaceIdAndUserId(workspaceId, userId)
+                .filter(WorkspaceMembership::isActive)
+                .orElseThrow(() -> new WorkspaceException(WorkspaceErrorCode.WORKSPACE_ACCESS_DENIED));
     }
 }

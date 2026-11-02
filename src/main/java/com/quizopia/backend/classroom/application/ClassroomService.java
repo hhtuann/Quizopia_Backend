@@ -60,6 +60,7 @@ public class ClassroomService {
     private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
     private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
+    private final com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService;
 
     public ClassroomService(TeacherProfileRepository teacherProfileRepository,
             StudentProfileRepository studentProfileRepository,
@@ -70,7 +71,8 @@ public class ClassroomService {
             EntityManager entityManager,
             Clock clock,
             com.quizopia.backend.notification.application.NotificationService notificationService,
-            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver) {
+            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
+            com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService) {
         this.teacherProfileRepository = teacherProfileRepository;
         this.studentProfileRepository = studentProfileRepository;
         this.classroomRepository = classroomRepository;
@@ -81,6 +83,7 @@ public class ClassroomService {
         this.clock = clock;
         this.notificationService = notificationService;
         this.organizationWorkspaceResolver = organizationWorkspaceResolver;
+        this.workspaceAccessService = workspaceAccessService;
     }
 
     // ============================================================
@@ -97,6 +100,9 @@ public class ClassroomService {
         }
 
         Long workspaceId = requireOrganizationWorkspaceId(profile.getSchoolId());
+        // P0-2 (issue #4): creating in the org workspace requires an ACTIVE
+        // membership (revoked members are denied even with a teacher profile).
+        workspaceAccessService.requireContentEditor(userId, workspaceId);
         Classroom classroom = new Classroom(workspaceId, profile.getSchoolId(), profile.getId(),
                 request.code(), request.name());
         classroom.setDescription(request.description());
@@ -124,9 +130,16 @@ public class ClassroomService {
         // (small N per teacher); reuse the page query at a large size.
         Page<Classroom> page = classroomRepository.findByOwnerTeacherIdOrderByCreatedAtDescIdDesc(
                 profile.getId(), PageRequest.of(0, MAX_PAGE_SIZE));
+        // P0-2 (issue #4): hide classrooms in workspaces the user may no
+        // longer access (revoked organization membership).
+        java.util.Set<Long> accessible = new java.util.HashSet<>(
+                workspaceAccessService.accessibleWorkspaceIds(userId));
+        List<Classroom> visible = page.getContent().stream()
+                .filter(c -> accessible.contains(c.getWorkspaceId()))
+                .toList();
         Map<Long, Long> counts = batchMemberCounts(
-                page.getContent().stream().map(Classroom::getId).toList());
-        List<ClassroomResponse> items = page.getContent().stream()
+                visible.stream().map(Classroom::getId).toList());
+        List<ClassroomResponse> items = visible.stream()
                 .map(c -> toResponse(c, counts.getOrDefault(c.getId(), 0L)))
                 .toList();
         return new MyClassroomsResponse(items);
@@ -354,6 +367,13 @@ public class ClassroomService {
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.CLASSROOM_NOT_FOUND));
         if (!classroom.getOwnerTeacherId().equals(profile.getId())
                 || !classroom.getSchoolId().equals(profile.getSchoolId())) {
+            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+        }
+        // P0-2 (issue #4): owning the classroom is not enough when the
+        // organization membership has been revoked.
+        try {
+            workspaceAccessService.requireResourceRead(profile.getUserId(), classroom.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
         }
         return classroom;

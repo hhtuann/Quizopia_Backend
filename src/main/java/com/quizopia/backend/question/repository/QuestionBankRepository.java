@@ -22,10 +22,12 @@ public interface QuestionBankRepository extends JpaRepository<QuestionBank, Long
             Long workspaceId, Long createdByUserUserId, String code);
 
     /**
-     * Returns a page of banks created by the given user (workspace-era ownership),
-     * optionally filtered by case-insensitive search (code or name) and subject.
+     * Returns a page of banks created by the given user (workspace-era ownership)
+     * within workspaces they may still access, optionally filtered by
+     * case-insensitive search (code or name) and subject.
      */
     @Query("SELECT qb FROM QuestionBank qb WHERE qb.createdByUserUserId = :userId "
+            + "AND qb.workspaceId IN :workspaceIds "
             + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(qb.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(qb.name) LIKE LOWER(CONCAT('%', :search, '%'))) "
@@ -33,6 +35,7 @@ public interface QuestionBankRepository extends JpaRepository<QuestionBank, Long
     Page<QuestionBank> findCreatedByUser(@Param("userId") Long userId,
                                          @Param("search") String search,
                                          @Param("subjectId") Long subjectId,
+                                         @Param("workspaceIds") List<Long> workspaceIds,
                                          Pageable pageable);
 
     /**

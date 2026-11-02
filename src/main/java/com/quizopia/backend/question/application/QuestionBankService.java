@@ -185,10 +185,18 @@ public class QuestionBankService {
         requirePermission(userId, "QUESTION_BANK_READ");
         Pageable pageable = safePageable(page, size, sort);
 
+        // P0-2 (issue #4): only resources in workspaces the user may still
+        // access (personal + ACTIVE-membership organizations) are listed.
+        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
+        if (accessibleWorkspaceIds.isEmpty()) {
+            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
+        }
+
         Page<QuestionBank> banks = questionBankRepository.findCreatedByUser(
                 userId,
                 (search == null || search.isBlank()) ? null : search,
                 subjectId,
+                accessibleWorkspaceIds,
                 pageable);
 
         // Batch question counts + subject summaries (no N+1)
@@ -201,7 +209,7 @@ public class QuestionBankService {
                         b.getCode(),
                         b.getName(),
                         b.getDescription(),
-                        subjects.get(b.getSubjectId()),
+                        b.getSubjectId() != null ? subjects.get(b.getSubjectId()) : null,
                         counts.getOrDefault(b.getId(), 0L),
                         b.getStatus().name(),
                         b.getCreatedAt()))
@@ -227,6 +235,14 @@ public class QuestionBankService {
         QuestionBank bank = questionBankRepository.findById(bankId)
                 .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
 
+        // P0-2 (issue #4): creator status is not enough in ORGANIZATION
+        // workspaces — an ACTIVE membership is required (revoked creators
+        // are denied); personal-workspace owners keep access.
+        try {
+            workspaceAccessService.requireResourceRead(userId, bank.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
+        }
         if (!bank.getCreatedByUserUserId().equals(userId)) {
             throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
         }
@@ -312,6 +328,9 @@ public class QuestionBankService {
         if (profile != null) {
             Long workspaceId = organizationWorkspaceResolver
                     .requireOrganizationWorkspaceId(profile.getSchoolId());
+            // P0-2 (issue #4): defaulting into the org workspace still requires
+            // an ACTIVE membership (revoked members cannot fall back here).
+            workspaceAccessService.requireContentEditor(userId, workspaceId);
             return workspaceRepository.findById(workspaceId)
                     .orElseThrow(() -> new WorkspaceException(WorkspaceErrorCode.WORKSPACE_NOT_FOUND));
         }

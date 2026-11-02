@@ -59,6 +59,8 @@ class QuestionBankApiIntegrationTests {
         private QuestionVersionRepository versionRepo;
         @Autowired
         private org.springframework.jdbc.core.JdbcTemplate jdbc;
+        @Autowired
+        private com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
 
         private Long teacherUserId;
         private Long teacherProfileId;
@@ -100,6 +102,11 @@ class QuestionBankApiIntegrationTests {
                 TeacherProfile tp = teacherRepo.saveAndFlush(
                                 new TeacherProfile(teacherUserId, schoolId, "TC-API"));
                 teacherProfileId = tp.getId();
+
+                // Lazily provision the org workspace via the Java resolver so
+                // the teacher gets an ACTIVE EDITOR membership (mirrors the
+                // V10 backfill; the raw SQL fixture path does not backfill).
+                organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
 
                 // A different school (for cross-school tests)
                 otherSchoolId = schoolRepo.saveAndFlush(new School("API-SCH2", "API School 2")).getId();
