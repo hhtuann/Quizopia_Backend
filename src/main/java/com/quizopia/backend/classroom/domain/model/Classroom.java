@@ -16,8 +16,9 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping the {@code classrooms} table (V10). A classroom is a
- * teacher-owned, school-scoped roster of students that gates CLASS_RESTRICTED
- * exam-session visibility.
+ * roster of users that gates CLASS_RESTRICTED exam-session visibility.
+ * Scoped to a workspace (public platform foundation, ADR-001 §2.2); the
+ * school/owner-teacher columns remain as legacy/academic provenance.
  */
 @Entity
 @Table(name = "classrooms")
@@ -26,6 +27,10 @@ public class Classroom {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /** Owning workspace (NOT NULL, V12). */
+    @Column(name = "workspace_id", nullable = false)
+    private Long workspaceId;
 
     @Column(name = "school_id", nullable = false)
     private Long schoolId;
@@ -57,7 +62,8 @@ public class Classroom {
     protected Classroom() {
     }
 
-    public Classroom(Long schoolId, Long ownerTeacherId, String code, String name) {
+    public Classroom(Long workspaceId, Long schoolId, Long ownerTeacherId, String code, String name) {
+        this.workspaceId = requireNonNullId(workspaceId, "workspaceId");
         this.schoolId = requireNonNullId(schoolId, "schoolId");
         this.ownerTeacherId = requireNonNullId(ownerTeacherId, "ownerTeacherId");
         this.code = requireNonBlank("code", code);
@@ -66,6 +72,10 @@ public class Classroom {
 
     public Long getId() {
         return id;
+    }
+
+    public Long getWorkspaceId() {
+        return workspaceId;
     }
 
     public Long getSchoolId() {

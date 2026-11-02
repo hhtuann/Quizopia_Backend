@@ -12,9 +12,11 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * JPA entity mapping the {@code classroom_members} table (V10). Membership is
- * the sole gatekeeper for CLASS_RESTRICTED exam-session visibility (replaces the
- * legacy exam_session_participants ELIGIBLE/BLOCKED model).
+ * JPA entity mapping the {@code classroom_members} table. User-based
+ * membership (V12, issue #1 A4): {@code userId} is the member identity;
+ * the legacy {@code studentProfileId}/{@code schoolId} columns remain as
+ * nullable provenance for school-era rows. Membership is the sole
+ * gatekeeper for CLASS_RESTRICTED exam-session visibility.
  */
 @Entity
 @Table(name = "classroom_members")
@@ -27,10 +29,16 @@ public class ClassroomMember {
     @Column(name = "classroom_id", nullable = false)
     private Long classroomId;
 
-    @Column(name = "student_profile_id", nullable = false)
+    /** Member user (NOT NULL, V12). */
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    /** Legacy provenance; null for members added after the user-based cutover. */
+    @Column(name = "student_profile_id")
     private Long studentProfileId;
 
-    @Column(name = "school_id", nullable = false)
+    /** Legacy provenance; null for members added after the user-based cutover. */
+    @Column(name = "school_id")
     private Long schoolId;
 
     @CreationTimestamp
@@ -40,10 +48,11 @@ public class ClassroomMember {
     protected ClassroomMember() {
     }
 
-    public ClassroomMember(Long classroomId, Long studentProfileId, Long schoolId) {
+    public ClassroomMember(Long classroomId, Long userId, Long studentProfileId, Long schoolId) {
         this.classroomId = Objects.requireNonNull(classroomId, "classroomId must not be null");
-        this.studentProfileId = Objects.requireNonNull(studentProfileId, "studentProfileId must not be null");
-        this.schoolId = Objects.requireNonNull(schoolId, "schoolId must not be null");
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
+        this.studentProfileId = studentProfileId;
+        this.schoolId = schoolId;
     }
 
     public Long getId() {
@@ -52,6 +61,10 @@ public class ClassroomMember {
 
     public Long getClassroomId() {
         return classroomId;
+    }
+
+    public Long getUserId() {
+        return userId;
     }
 
     public Long getStudentProfileId() {
@@ -80,5 +93,17 @@ public class ClassroomMember {
     @Override
     public int hashCode() {
         return ClassroomMember.class.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "ClassroomMember{" +
+                "id=" + id +
+                ", classroomId=" + classroomId +
+                ", userId=" + userId +
+                ", studentProfileId=" + studentProfileId +
+                ", schoolId=" + schoolId +
+                ", addedAt=" + addedAt +
+                '}';
     }
 }

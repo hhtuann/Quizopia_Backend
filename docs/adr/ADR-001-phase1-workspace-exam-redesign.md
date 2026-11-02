@@ -194,3 +194,27 @@ attributable to Phase 1 work, to be re-checked at the end):
 1. `StudentOnboardingIntegrationTests.assignStudentCreatesProfileWithAutoCode` — expects `STU` code pattern `[A-Z]{1,3}\d{4}`, actual `STU00000001`.
 2. `AttemptDetailAndMyQueryCountIntegrationTests.detailQueryCountIsConstantAcrossN` — expected 7 queries, actual 8.
 3. `QuestionBankApiIntegrationTests.getImportTemplate_teacherWithPermission_returns200AndValidXlsx` — expected 18 rows, actual 9.
+
+## 11. Implementation addendum (decisions taken during Task A)
+
+1. **Transitional ownership fill (V11/V12):** BEFORE INSERT OR UPDATE triggers on `question_banks`,
+   `exams`, `classrooms`, `classroom_members`, `attempts` fill the new workspace/user ownership columns
+   from legacy provenance **only when the writer omits them**. JPA always writes the columns explicitly,
+   so the triggers are dormant in application code; they exist so legacy-style fixtures/writers keep
+   working during the expand→contract transition. `quizopia_org_workspace_for_school()` lazily
+   provisions the organization + workspace pair (mirroring the V10 backfill) for schools created after
+   migration. All triggers are dropped in the Task B contract phase.
+2. **Java-side resolver:** `OrganizationWorkspaceResolver` provides the same lazy provisioning for
+   service paths (ExamService, ClassroomService, QuestionBankService, DemoDataSeeder);
+   `StudentOnboardingService.assignStudentToSchool` additionally grants ACTIVE MEMBER org-workspace
+   membership.
+3. **organizations.legacy_school_id FK is ON DELETE SET NULL** — deleting a legacy school detaches the
+   organization (which survives as a standalone org) instead of blocking the delete.
+4. **Teacher invite is optional at registration** (issue #1 A2): a supplied-but-wrong code still yields
+   `AUTH_TEACHER_INVITE_INVALID`; an absent code now succeeds. A new public user can self-select the
+   teacher/creator capability and author personal question banks without any school or invite.
+5. **Question-bank/exam code uniqueness** moves to `(workspace_id, created_by_user_id, LOWER(code))`,
+   which is exactly the legacy `(owner_teacher_id, LOWER(code))` guarantee re-expressed per workspace.
+6. **First-level-cache caveat:** test fixtures that persist legacy-shape entities and then call services
+   in the same transaction must use explicit ownership (helpers) or clear the persistence context —
+   the DB-level fill is invisible to a cached JPA instance.

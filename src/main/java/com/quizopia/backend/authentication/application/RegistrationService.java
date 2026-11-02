@@ -48,6 +48,7 @@ public class RegistrationService {
     private final SensitiveDataEncryptor encryptor;
     private final SecurityProperties properties;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
 
     public RegistrationService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -59,6 +60,7 @@ public class RegistrationService {
             TeacherProfileRepository teacherProfileRepository,
             StudentProfileRepository studentProfileRepository,
             com.quizopia.backend.notification.application.NotificationService notificationService,
+            com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
             @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
@@ -67,6 +69,7 @@ public class RegistrationService {
         this.encryptor = encryptor;
         this.properties = properties;
         this.notificationService = notificationService;
+        this.workspaceProvisioningService = workspaceProvisioningService;
     }
 
     @Transactional
@@ -93,7 +96,13 @@ public class RegistrationService {
         String roleCode = switch (accountType) {
             case STUDENT -> STUDENT_ROLE_CODE;
             case TEACHER -> {
-                verifyTeacherInvite(request.teacherInviteCode());
+                // Public platform foundation (issue #1 A2): teacher/creator
+                // registration no longer REQUIRES an invite — a public user can
+                // self-select the teacher capability. When an invite code IS
+                // supplied it must be valid (optional invite-based onboarding).
+                if (request.teacherInviteCode() != null && !request.teacherInviteCode().isBlank()) {
+                    verifyTeacherInvite(request.teacherInviteCode());
+                }
                 yield TEACHER_ROLE_CODE;
             }
         };
@@ -110,6 +119,11 @@ public class RegistrationService {
                         "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
 
         userRoleRepository.save(new UserRole(user, role, null, null));
+
+        // Public platform foundation (issue #1 A1/A2): every new user gets a
+        // personal workspace, provisioned transactionally and idempotently in
+        // the same transaction as the user row. No school/invite required.
+        workspaceProvisioningService.ensurePersonalWorkspace(user);
 
         // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
         for (Long adminId : userRoleRepository.findUserIdsByRoleCode("ACADEMIC_ADMIN", java.time.Instant.now())) {

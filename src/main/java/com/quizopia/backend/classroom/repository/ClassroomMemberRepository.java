@@ -10,7 +10,9 @@ import java.util.Optional;
 
 /**
  * Repository for {@link ClassroomMember}. Membership uniqueness is enforced by
- * DB constraint {@code uk_classroom_members_classroom_student}.
+ * DB constraint {@code uk_classroom_members_classroom_user} (user-based, V12);
+ * the legacy {@code uk_classroom_members_classroom_student} remains for
+ * school-era rows.
  */
 public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember, Long> {
 
@@ -19,12 +21,17 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
     /** Full roster (detail view — small N per classroom). */
     List<ClassroomMember> findAllByClassroomIdOrderByIdAsc(Long classroomId);
 
-    /** Batch existing-membership check for bulk add (partial-success classification). */
-    List<ClassroomMember> findAllByClassroomIdAndStudentProfileIdIn(Long classroomId, List<Long> studentProfileIds);
+    /** Batch existing-membership check by user (user-based membership, V12). */
+    List<ClassroomMember> findAllByClassroomIdAndUserIdIn(Long classroomId, List<Long> userIds);
 
+    Optional<ClassroomMember> findByClassroomIdAndUserId(Long classroomId, Long userId);
+
+    boolean existsByClassroomIdAndUserId(Long classroomId, Long userId);
+
+    long deleteByClassroomIdAndUserId(Long classroomId, Long userId);
+
+    /** Legacy lookup kept for school-era rows and API compatibility. */
     Optional<ClassroomMember> findByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
-
-    boolean existsByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
 
     long deleteByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
 

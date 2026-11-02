@@ -79,6 +79,16 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(code.statusCode()).body(body);
     }
 
+    @ExceptionHandler(com.quizopia.backend.workspace.exception.WorkspaceException.class)
+    public ResponseEntity<ApiError> handleWorkspaceException(
+            com.quizopia.backend.workspace.exception.WorkspaceException ex, HttpServletRequest request) {
+        com.quizopia.backend.workspace.exception.WorkspaceErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
     @ExceptionHandler(AcademicException.class)
     public ResponseEntity<ApiError> handleAcademicException(AcademicException ex, HttpServletRequest request) {
         AcademicErrorCode code = ex.getErrorCode();

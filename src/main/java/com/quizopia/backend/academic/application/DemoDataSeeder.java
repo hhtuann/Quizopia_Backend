@@ -116,6 +116,9 @@ public class DemoDataSeeder implements ApplicationRunner {
     private final StudentProfileRepository studentProfileRepository;
     private final ClassroomRepository classroomRepository;
     private final ClassroomMemberRepository classroomMemberRepository;
+    private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
+    private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
+    private final com.quizopia.backend.workspace.repository.WorkspaceMembershipRepository workspaceMembershipRepository;
     private final boolean demoEnabled;
 
     public DemoDataSeeder(SchoolRepository schoolRepository,
@@ -130,6 +133,9 @@ public class DemoDataSeeder implements ApplicationRunner {
             StudentProfileRepository studentProfileRepository,
             ClassroomRepository classroomRepository,
             ClassroomMemberRepository classroomMemberRepository,
+            com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
+            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
+            com.quizopia.backend.workspace.repository.WorkspaceMembershipRepository workspaceMembershipRepository,
             @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.schoolRepository = schoolRepository;
         this.gradeLevelRepository = gradeLevelRepository;
@@ -143,6 +149,9 @@ public class DemoDataSeeder implements ApplicationRunner {
         this.studentProfileRepository = studentProfileRepository;
         this.classroomRepository = classroomRepository;
         this.classroomMemberRepository = classroomMemberRepository;
+        this.workspaceProvisioningService = workspaceProvisioningService;
+        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
+        this.workspaceMembershipRepository = workspaceMembershipRepository;
         this.demoEnabled = demoEnabled;
     }
 
@@ -243,24 +252,30 @@ public class DemoDataSeeder implements ApplicationRunner {
                 .orElseThrow(() -> new IllegalStateException("demo teacher profile not created"));
         Long teacherProfileId = teacherProfile.getId();
 
-        // Demo classroom (owner = teacher) — find-or-create.
+        // Demo classroom (owner = teacher) — find-or-create (workspace-scoped, V12).
+        Long workspaceId = requireOrganizationWorkspaceId(schoolId);
         Classroom classroom = classroomRepository
                 .findByOwnerTeacherIdAndCodeIgnoreCase(teacherProfileId, DEMO_CLASSROOM_CODE)
                 .orElseGet(() -> classroomRepository.saveAndFlush(
-                        new Classroom(schoolId, teacherProfileId, DEMO_CLASSROOM_CODE, "Demo Classroom")));
+                        new Classroom(workspaceId, schoolId, teacherProfileId,
+                                DEMO_CLASSROOM_CODE, "Demo Classroom")));
 
-        // Demo students + memberships.
+        // Demo students + memberships (user-based, V12).
         for (String username : DEMO_STUDENT_USERNAMES) {
             Long studentUserId = ensureDemoUser(username, schoolId, STUDENT_ROLE_CODE,
                     username.replace('-', ' ').replace("student", "Student"));
             StudentProfile studentProfile = studentProfileRepository.findByUserId(studentUserId)
                     .orElseThrow(() -> new IllegalStateException("demo student profile not created: " + username));
-            if (!classroomMemberRepository.existsByClassroomIdAndStudentProfileId(
-                    classroom.getId(), studentProfile.getId())) {
-                classroomMemberRepository.saveAndFlush(
-                        new ClassroomMember(classroom.getId(), studentProfile.getId(), schoolId));
+            if (!classroomMemberRepository.existsByClassroomIdAndUserId(classroom.getId(), studentUserId)) {
+                classroomMemberRepository.saveAndFlush(new ClassroomMember(
+                        classroom.getId(), studentUserId, studentProfile.getId(), schoolId));
             }
         }
+    }
+
+    /** Resolves (or lazily creates) the organization workspace for the demo school. */
+    private Long requireOrganizationWorkspaceId(Long schoolId) {
+        return organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
     }
 
     /** Find-or-create a demo user + role assignment + (academic) profile stub. Returns userId. */
@@ -276,6 +291,12 @@ public class DemoDataSeeder implements ApplicationRunner {
                     "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
             userRoleRepository.saveAndFlush(new UserRole(user, role, null, null));
         }
+        // Public platform foundation: personal workspace + org membership (idempotent).
+        workspaceProvisioningService.ensurePersonalWorkspace(user);
+        ensureOrganizationMembership(user.getId(), schoolId,
+                TEACHER_ROLE_CODE.equals(roleCode)
+                        ? com.quizopia.backend.workspace.domain.model.WorkspaceRole.EDITOR
+                        : com.quizopia.backend.workspace.domain.model.WorkspaceRole.MEMBER);
         // Academic profile (idempotent find-or-create). Codes use the system-wide
         // prefix + 8-digit convention (TCH for teachers, STU for students).
         if (TEACHER_ROLE_CODE.equals(roleCode)) {
@@ -288,6 +309,17 @@ public class DemoDataSeeder implements ApplicationRunner {
                             new StudentProfile(user.getId(), schoolId, nextCounterCode(schoolId, "STU", false))));
         }
         return user.getId();
+    }
+
+    /** Idempotently ensures the demo user's ACTIVE membership in the school's organization workspace. */
+    private void ensureOrganizationMembership(Long userId, Long schoolId,
+            com.quizopia.backend.workspace.domain.model.WorkspaceRole role) {
+        Long workspaceId = requireOrganizationWorkspaceId(schoolId);
+        if (!workspaceMembershipRepository.existsByWorkspaceIdAndUserIdAndStatus(workspaceId, userId,
+                com.quizopia.backend.workspace.domain.model.WorkspaceMembershipStatus.ACTIVE)) {
+            workspaceMembershipRepository.saveAndFlush(
+                    new com.quizopia.backend.workspace.domain.model.WorkspaceMembership(workspaceId, userId, role));
+        }
     }
 
     /**

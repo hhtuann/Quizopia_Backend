@@ -76,6 +76,7 @@ public class ExamService {
     private final QuestionBankRepository sourceBankRepository;
     private final QuestionVersionRepository sourceVersionRepository;
     private final QuestionOptionRepository sourceOptionRepository;
+    private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
 
     public ExamService(ExamAuthorizationService auth,
             SubjectRepository subjectRepository,
@@ -88,7 +89,8 @@ public class ExamService {
             QuestionRepository sourceQuestionRepository,
             QuestionBankRepository sourceBankRepository,
             QuestionVersionRepository sourceVersionRepository,
-            QuestionOptionRepository sourceOptionRepository) {
+            QuestionOptionRepository sourceOptionRepository,
+            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver) {
         this.auth = auth;
         this.subjectRepository = subjectRepository;
         this.purposeRepository = purposeRepository;
@@ -101,6 +103,16 @@ public class ExamService {
         this.sourceBankRepository = sourceBankRepository;
         this.sourceVersionRepository = sourceVersionRepository;
         this.sourceOptionRepository = sourceOptionRepository;
+        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
+    }
+
+    /**
+     * Resolves the organization workspace for a school (workspace provenance
+     * for school-era exam creation; ADR-001 §2.2). Personal-workspace exam
+     * creation arrives with the Task B exam redesign.
+     */
+    private Long requireOrganizationWorkspaceId(Long schoolId) {
+        return organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
     }
 
     // ============================================================
@@ -147,7 +159,8 @@ public class ExamService {
                 ? BusinessCodes.readableCode("EX", 8,
                         c -> examRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
                 : request.code().trim();
-        Exam exam = new Exam(schoolId, subject.getId(), profile.getId(), code, request.title());
+        Long workspaceId = requireOrganizationWorkspaceId(schoolId);
+        Exam exam = new Exam(workspaceId, userId, schoolId, subject.getId(), profile.getId(), code, request.title());
         exam.setDescription(request.description());
         if (purpose != null) {
             exam.setPurposeId(purpose.getId());

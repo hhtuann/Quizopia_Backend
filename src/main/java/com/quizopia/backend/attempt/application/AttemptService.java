@@ -184,15 +184,16 @@ public class AttemptService {
         }
 
         // 6. Create new attempt.
-        return createNewAttempt(profile, session, now, request);
+        return createNewAttempt(userId, profile, session, now, request);
     }
 
     /**
      * Class-based eligibility gate (replaces the participant ELIGIBLE check).
      * <ul>
      *   <li>PUBLIC: any student in the SAME school.</li>
-     *   <li>CLASS_RESTRICTED: student is a member of at least one classroom
-     *       assigned to the session via {@code exam_session_classes}.</li>
+     *   <li>CLASS_RESTRICTED: user is a member of at least one classroom
+     *       assigned to the session via {@code exam_session_classes}
+     *       (user-based membership, V12).</li>
      * </ul>
      */
     private boolean isEligible(StudentProfile profile, ExamSession session) {
@@ -205,8 +206,8 @@ public class AttemptService {
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM exam_session_classes esc "
                         + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                        + "WHERE esc.exam_session_id = ? AND cm.student_profile_id = ?",
-                Integer.class, session.getId(), profile.getId());
+                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ?",
+                Integer.class, session.getId(), profile.getUserId());
         return cnt != null && cnt > 0;
     }
 
@@ -222,7 +223,7 @@ public class AttemptService {
                 true, session.getMaxAttempts(), qv);
     }
 
-    private StartAttemptResponse createNewAttempt(StudentProfile profile, ExamSession session,
+    private StartAttemptResponse createNewAttempt(Long userId, StudentProfile profile, ExamSession session,
             Instant now, StartAttemptRequest request) {
         // MAX+1 under session lock.
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), profile.getId()).orElse(0) + 1;
@@ -249,7 +250,7 @@ public class AttemptService {
         Attempt attempt;
         try {
             attempt = Attempt.start(
-                    session.getSchoolId(), session.getId(), profile.getId(), session.getExamVersionId(),
+                    session.getSchoolId(), session.getId(), userId, profile.getId(), session.getExamVersionId(),
                     nextNumber, now, deadline, request.clientInstanceId());
             em.persist(attempt);
             em.flush();

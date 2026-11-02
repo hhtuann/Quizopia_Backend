@@ -7,13 +7,15 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.Instant;
 
 /**
- * JPA entity mapping the {@code exams} table. An exam is the stable identity of
- * a test; its content lives in {@link ExamVersion} rows. The {@code version}
- * column is a JPA optimistic-lock version (NOT an exam content version — that is
- * {@code currentVersionNumber}).
+ * JPA entity mapping the {@code exams} table. An exam is the stable identity
+ * of a test with a single immutable content set after publish (Phase 1 Task B
+ * redesign, ADR-001 §2.4). The {@code version} column is a JPA optimistic-lock
+ * version (NOT exam content versioning).
  *
- * <p>Composite FKs enforce same-school for subject, owner teacher, and purpose.
- * Code uniqueness is owner-scoped {@code (owner_teacher_id, LOWER(code))}.
+ * <p>Ownership: {@code workspaceId} + {@code createdByUserUserId} (public
+ * platform foundation, ADR-001 §2.2). Legacy {@code schoolId}/{@code subjectId}/
+ * {@code ownerTeacherId} remain as nullable provenance; the DB composite FKs
+ * still enforce same-school for school-era rows.
  */
 @Entity
 @Table(name = "exams")
@@ -23,13 +25,24 @@ public class Exam {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
+    /** Owning workspace (NOT NULL). */
+    @Column(name = "workspace_id", nullable = false)
+    private Long workspaceId;
+
+    /** Creating/owning user (NOT NULL). */
+    @Column(name = "created_by_user_id", nullable = false)
+    private Long createdByUserUserId;
+
+    /** Legacy provenance; null for exams created outside a school context. */
+    @Column(name = "school_id")
     private Long schoolId;
 
-    @Column(name = "subject_id", nullable = false)
+    /** Legacy/academic provenance; optional for personal-workspace exams. */
+    @Column(name = "subject_id")
     private Long subjectId;
 
-    @Column(name = "owner_teacher_id", nullable = false)
+    /** Legacy provenance (teacher_profiles.id); null for personal exams. */
+    @Column(name = "owner_teacher_id")
     private Long ownerTeacherId;
 
     @Column(name = "purpose_id")
@@ -66,16 +79,41 @@ public class Exam {
     protected Exam() {
     }
 
+    public Exam(Long workspaceId, Long createdByUserUserId, Long schoolId, Long subjectId,
+                Long ownerTeacherId, String code, String title) {
+        this.workspaceId = ExamPurpose.requireNonNullId(workspaceId, "workspaceId");
+        this.createdByUserUserId = ExamPurpose.requireNonNullId(createdByUserUserId, "createdByUserUserId");
+        this.schoolId = schoolId;
+        this.subjectId = subjectId;
+        this.ownerTeacherId = ownerTeacherId;
+        this.code = ExamPurpose.requireNonBlank("code", code);
+        this.title = ExamPurpose.requireNonBlank("title", title);
+    }
+
+    /**
+     * Legacy-shape constructor (transitional, ADR-001 §2.2): workspace and
+     * creator are resolved by the V11 BEFORE INSERT trigger from the school /
+     * owner-teacher provenance. Intended for legacy fixtures and transitional
+     * writers; application services must use the explicit constructor.
+     */
     public Exam(Long schoolId, Long subjectId, Long ownerTeacherId, String code, String title) {
-        this.schoolId = ExamPurpose.requireNonNullId(schoolId, "schoolId");
-        this.subjectId = ExamPurpose.requireNonNullId(subjectId, "subjectId");
-        this.ownerTeacherId = ExamPurpose.requireNonNullId(ownerTeacherId, "ownerTeacherId");
+        this.schoolId = schoolId;
+        this.subjectId = subjectId;
+        this.ownerTeacherId = ownerTeacherId;
         this.code = ExamPurpose.requireNonBlank("code", code);
         this.title = ExamPurpose.requireNonBlank("title", title);
     }
 
     public Long getId() {
         return id;
+    }
+
+    public Long getWorkspaceId() {
+        return workspaceId;
+    }
+
+    public Long getCreatedByUserUserId() {
+        return createdByUserUserId;
     }
 
     public Long getSchoolId() {

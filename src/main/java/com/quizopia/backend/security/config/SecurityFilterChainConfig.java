@@ -70,6 +70,10 @@ public class SecurityFilterChainConfig {
                         // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
                         .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        // Workspace API (active-workspace switcher). Membership checks are
+                        // enforced in WorkspaceService (deny-by-default); this rule only lets
+                        // an authenticated JWT reach the controller (default is denyAll).
+                        .requestMatchers("/api/workspaces/**").authenticated()
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers("/api/questions/**").authenticated()
                         .requestMatchers("/api/notifications/**").authenticated()
