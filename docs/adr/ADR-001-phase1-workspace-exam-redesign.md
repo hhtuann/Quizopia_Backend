@@ -307,3 +307,129 @@ Failure-to-pass trail:
 **Follow-ups:** verify checkpoints B/C separately and re-check the remaining baseline failures
 from §10 at the broader verification gate. Migration decisions/history in §§3 and 11–12 remain
 intact; checkpoint A introduces no migration-history change.
+
+## 14. Issue #4 P1 checkpoint B — implementation evidence (2026-11-03)
+
+**Checkpoint B: implemented and targeted verification passed; independent review pending.**
+Starting backend commit: `2aec8ee` (checkpoint A). No B commit or push has been made.
+Checkpoint C (broader backend/baseline and frontend/CI evidence) remains open.
+
+### Metadata contract and root cause
+
+`PUT /api/exams/{examId}` previously accepted no body and called `getExamDetail`, so
+successful responses did not mutate anything. It now requires `EXAM_UPDATE`, the existing
+workspace management policy and a locked Exam row, then validates `expectedExamVersion`
+against the JPA optimistic version. Only `title` (required, nonblank, ≤255) and `description`
+(nullable, ≤2000; omitted/null clears it) are replaced. DRAFT and PUBLISHED permit these
+display fields; ARCHIVED is read-only (409). Unsupported fields are rejected (400), including
+content, grading and ownership fields. Instructions, editor duration, grading policy, points,
+composition, provenance and lifecycle are not part of this request. Identical replacements
+also consume the token; stale tokens return `EXAM_CONCURRENT_MODIFICATION` (409).
+
+Workspace behavior reuses the existing policy: an organization creator must remain ACTIVE;
+another active member needs management authority (OWNER/ADMIN); a personal workspace's
+authenticated true owner remains allowed. Metadata writes do not modify compositionRevision.
+
+### Fresh failing-before / passing-after evidence
+
+Before changing production code, the new metadata suite ran against A with:
+
+```powershell
+.\mvnw.cmd test "-Dtest=P1CheckpointBMetadataIntegrationTests"
+```
+
+Result: **13 tests, 13 failures, 0 errors, 0 skipped**. Full captured output:
+`C:\Users\GIGABYTE\.local\share\opencode\tool-output\tool_19e0e0682001HxLaKCPuqNgrMm`.
+Failures included unchanged title, accepted invalid/unsupported bodies, read instead of write
+authorization and successful archived requests. An intermediate post-fix run was 12/13 passing:
+the admin test changed a membership via JDBC after JPA cached it; clearing the test persistence
+context made the new role visible. No authorization policy was relaxed.
+
+Final command (backend root, Docker available, PostgreSQL 17.11):
+
+```powershell
+.\mvnw.cmd test "-Dtest=P1CheckpointBMetadataIntegrationTests,P1CheckpointBMetadataConcurrencyIntegrationTests,V14ExamSplitMigrationStagedFlywayTest,V17UserBasedParticipantsStagedFlywayTest,P1CheckpointAIntegrationTests,ExamServiceIntegrationTests,ExamCompositionServiceIntegrationTests,ExamPublishServiceIntegrationTests,ExamPublishConcurrencyIntegrationTests,ExamSessionServiceIntegrationTests,ExamSessionListConcurrencyIntegrationTests,RevokedMembershipExamSessionIntegrationTests" "-Dspring.jpa.show-sql=false" "-Dlogging.level.org.hibernate.SQL=INFO"
+```
+
+Fresh Surefire TXT summaries inspected for exactly these suites:
+
+| Suite | Tests | Failures | Errors | Skipped |
+|---|---:|---:|---:|---:|
+| `P1CheckpointBMetadataIntegrationTests` | 15 | 0 | 0 | 0 |
+| `P1CheckpointBMetadataConcurrencyIntegrationTests` | 1 | 0 | 0 | 0 |
+| `V14ExamSplitMigrationStagedFlywayTest` | 1 | 0 | 0 | 0 |
+| `V17UserBasedParticipantsStagedFlywayTest` | 1 | 0 | 0 | 0 |
+| `P1CheckpointAIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamServiceIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamCompositionServiceIntegrationTests` | 18 | 0 | 0 | 0 |
+| `ExamPublishServiceIntegrationTests` | 13 | 0 | 0 | 0 |
+| `ExamPublishConcurrencyIntegrationTests` | 1 | 0 | 0 | 0 |
+| `ExamSessionServiceIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamSessionListConcurrencyIntegrationTests` | 1 | 0 | 0 | 0 |
+| `RevokedMembershipExamSessionIntegrationTests` | 11 | 0 | 0 | 0 |
+| **Total** | **125** | **0** | **0** | **0** |
+
+The metadata concurrency test uses independent committed transactions: exactly one writer with
+the same token succeeds and the other returns the concurrency conflict; persisted version is 1.
+Clean-slate Spring contexts migrated V1→V17 successfully. This is targeted evidence only; the
+three §10 baseline cases were not rerun in B and are explicitly deferred to C.
+
+### Migration verification and operational boundary
+
+Added `docs/runbooks/phase1-migration.md` and four standalone read-only SQL artifacts under
+`docs/runbooks/sql/p1-b-*.sql`. No V1–V17 script was edited. The V14 tautology remains immutable
+history and is superseded as verification evidence by independent before/after captures.
+
+The staged V14 test now runs those actual scripts at V12/V17 and compares each original ID,
+normalized JSONB checksum **and full payload**: original Exam metadata, per-version mapped
+Exam content, retained audit versions, sections/questions/options, Session duration and exact
+version lineage, Attempts, AttemptQuestions, Answers, Grades and GradeItems. Existing canonical
+mapping/duration/count assertions remain. A deliberate score change with unchanged row counts
+is detected, then restored and compared again. Flyway validation passes after cutover.
+The same fixture probes a session on a DRAFT version and a corrupted orphan section; both
+fail the migration and leave the mapping table empty before the valid migration succeeds.
+
+This is deterministic fixture proof, not production-data proof. Production requires a verified
+backup/restore, stopped writers, retained preflight export at V12, exact postflight comparison
+at V17, and recovery by backup restore on any mismatch. Existing upgraded environments without
+a pre-upgrade export must recover the baseline from their backup. No security/migration/data-loss
+blocker was observed in the executed scenarios. Independent review and checkpoint C remain
+required before merge readiness can be assessed.
+
+### B independent-review remediation — fresh verification (2026-11-03)
+
+The first independent review was **NOT READY** with two MEDIUM evidence gaps. The initial
+125-test result above was real, but its migration coverage was narrower than described:
+`exam_metadata` excluded noncanonical split exams, while `exam_content` checked only content
+settings; the options export compared an empty fixture. That first run did not prove split
+metadata/ownership or populated option preservation.
+
+Remediation is limited to verification SQL, the staged fixture and these documents:
+
+- Added `exam_version_metadata` evidence keyed by **each legacy version ID**, comparing the
+  full expected/actual Exam row. Expected metadata is derived from the V12 Exam/version using
+  V14 rules: canonical keeps original metadata; splits inherit workspace, school, subject,
+  teacher, purpose, description and creation time, use the version title (trim/blank fallback)
+  and creator (fallback to original creator), append `-V<number>` to code, and initialize JPA
+  version/composition revision to zero. Content/status fields are compared too. Generated
+  target IDs remain verified through mapping/postflight; only generated split `updated_at`
+  is normalized to null. Canonical `updated_at` is still checked exactly.
+- Added a split-title mutation assertion **before** changing the SQL. Running
+  `.\mvnw.cmd test "-Dtest=V14ExamSplitMigrationStagedFlywayTest"` failed with **1 test,
+  1 failure, 0 errors, 0 skipped** at `split title mutation detected`: the old exports remained
+  equal despite the mutation. After the SQL fix, isolated probes detect split title, creator,
+  description, subject and teacher-provenance mutations, rolling each back to exact equality.
+- Seeded **four real exam_question_options** (A/B, correct/incorrect, positions 0/1), two on
+  the canonical published question and two on the noncanonical published question. The
+  baseline explicitly requires four option evidence entries. Full JSONB comparison preserves
+  ID, question link, option key, content, correctness, position and creation time. Independent
+  content-change, correctness-change and deletion probes are detected; savepoint rollback
+  restores exact payload/checksum equality after the probes.
+
+After these changes, the **same complete 12-suite command recorded above was rerun fresh**.
+All 12 Surefire TXT summaries were inspected: **125 tests, 125 passed, 0 failures, 0 errors,
+0 skipped**; per-suite counts remain exactly as in the table. The strengthened V14 staged
+test passed (1/1), including existing fail-fast, score-drift and lineage assertions. The first
+isolated post-fix staged run also passed 1/1. Mutation probes are assertions within that one
+test, not extra test cases. No V1–V17 migration or checkpoint-A implementation was edited.
+Independent re-review is pending; this is not a new READY verdict or production-data proof.

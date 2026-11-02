@@ -285,6 +285,25 @@ public class ExamService {
     // ============================================================
 
     @Transactional
+    public TeacherExamEditorResponse updateExamMetadata(Long userId, Long examId,
+            com.quizopia.backend.exam.dto.UpdateExamMetadataRequest request) {
+        auth.requireUserWithPermission(userId, "EXAM_UPDATE");
+        Exam exam = examRepository.findByIdForUpdate(examId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
+        requireManageableExam(userId, exam);
+        if (exam.getStatus() == ExamStatus.ARCHIVED) {
+            throw new ExamException(ExamErrorCode.EXAM_NOT_DRAFT,
+                    "Archived exam metadata is read-only");
+        }
+        if (!exam.getVersion().equals(request.expectedExamVersion())) {
+            throw new ExamException(ExamErrorCode.EXAM_CONCURRENT_MODIFICATION);
+        }
+        exam.updateMetadata(request.title(), request.description());
+        examRepository.saveAndFlush(exam);
+        return buildEditorResponse(exam);
+    }
+
+    @Transactional
     public TeacherExamEditorResponse updateDraftComposition(Long userId, Long examId,
             UpdateDraftCompositionRequest request) {
         auth.requireUserWithPermission(userId, "EXAM_UPDATE");

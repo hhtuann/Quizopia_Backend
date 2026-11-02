@@ -190,6 +190,18 @@ public class Exam {
         return description;
     }
 
+    /** Display metadata may change without changing the published content set. */
+    public void updateMetadata(String title, String description) {
+        if (status == ExamStatus.ARCHIVED) {
+            throw new IllegalStateException("archived exam metadata is read-only");
+        }
+        this.title = ExamPurpose.requireNonBlank("title", title);
+        this.description = description;
+        // Even an identical replacement consumes the editor token. Do not
+        // overload compositionRevision: metadata does not change composition.
+        this.updatedAt = Instant.now();
+    }
+
     public void setDescription(String description) {
         this.description = description;
     }

@@ -7,6 +7,7 @@ import com.quizopia.backend.exam.dto.PublishedExamSummary;
 import com.quizopia.backend.exam.dto.PublishExamRequest;
 import com.quizopia.backend.exam.dto.TeacherExamEditorResponse;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest;
+import com.quizopia.backend.exam.dto.UpdateExamMetadataRequest;
 import com.quizopia.backend.question.dto.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -62,11 +63,10 @@ public class ExamController {
     @PutMapping("/{examId}")
     public TeacherExamEditorResponse updateExamMetadata(
             @PathVariable Long examId,
+            @Valid @RequestBody UpdateExamMetadataRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        // Metadata-only updates ride on the composition endpoint's settings;
-        // this alias exists for route completeness.
         Long userId = Long.valueOf(jwt.getSubject());
-        return examService.getExamDetail(userId, examId);
+        return examService.updateExamMetadata(userId, examId, request);
     }
 
     @PutMapping("/{examId}/composition")

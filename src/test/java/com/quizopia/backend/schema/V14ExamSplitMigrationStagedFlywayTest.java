@@ -46,9 +46,12 @@ class V14ExamSplitMigrationStagedFlywayTest {
                     .target("12").load().migrate();
 
             Legacy legacy;
+            Map<String, String> before;
             try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
                 long userId = insert(st, "INSERT INTO users (username, email, password_hash, display_name) "
                         + "VALUES ('split-user','split@t.com','h','Split User')");
+                insert(st, "INSERT INTO users (username, email, password_hash, display_name) "
+                        + "VALUES ('split-other','split-other@t.com','h','Other Owner')");
                 long schoolId = insert(st, "INSERT INTO schools (code, name) VALUES ('SPLIT-SCH','Split School')");
                 long gl = insert(st, "INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
                 long subjectId = insert(st, "INSERT INTO subjects (school_id, grade_level_id, code, name) "
@@ -77,6 +80,7 @@ class V14ExamSplitMigrationStagedFlywayTest {
                 long v1 = insert(st, examVersion(schoolId, examId, 1, "PUBLISHED", 30, userId));
                 long v2 = insert(st, examVersion(schoolId, examId, 2, "PUBLISHED", 45, userId));
                 long v3 = insert(st, examVersion(schoolId, examId, 3, "DRAFT", 60, userId));
+                st.executeUpdate("UPDATE exams SET description='Original exam description' WHERE id=" + examId);
 
                 long s1 = insert(st, "INSERT INTO exam_sections (exam_version_id, code, title, position) "
                         + "VALUES (" + v1 + ",'A','Section A',0)");
@@ -95,7 +99,15 @@ class V14ExamSplitMigrationStagedFlywayTest {
                 insert(st, "INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
                         + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
                         + "VALUES (" + v3 + "," + s3 + "," + q1 + "," + versionOf(st, q1)
-                        + ",'sq1d','SINGLE_CHOICE','split q draft',1,0,'{}'::jsonb)");
+                         + ",'sq1d','SINGLE_CHOICE','split q draft',1,0,'{}'::jsonb)");
+
+                for (long question : new long[]{eq1, eq2}) {
+                    for (int position = 0; position < 2; position++) {
+                        insert(st, "INSERT INTO exam_question_options (exam_question_id,option_key,content,is_correct,position) "
+                                + "VALUES (" + question + ",'" + (position == 0 ? "A" : "B") + "','Question "
+                                + question + " option " + position + "'," + (position == 0) + "," + position + ")");
+                    }
+                }
 
                 // Sessions on v1 (null duration → materialize 30) and v2 (override 15).
                 long sess1 = insert(st, "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
@@ -133,13 +145,50 @@ class V14ExamSplitMigrationStagedFlywayTest {
                 }
 
                 legacy = new Legacy(examId, v1, v2, v3, sess1, sess2, attemptV1, attemptV2);
+                st.execute(script("p1-b-preflight.sql"));
+                before = evidence(st, "p1-b-before.sql");
+                assertThat(before.keySet().stream().filter(k -> k.startsWith("options:")).count()).isEqualTo(4);
             }
 
-            // Stage 2: run the redesign migrations (V13–V15).
+            // Probe fail-fast behavior on this disposable database before the
+            // successful cutover. V14 must roll back without changing history.
+            Flyway.configure().dataSource(url, user, pass)
+                    .locations("classpath:db/migration").target("13").load().migrate();
+            try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
+                st.executeUpdate("UPDATE exam_sessions SET exam_version_id=" + legacy.v3() + " WHERE id=" + legacy.sess1());
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> st.execute(script("p1-b-preflight.sql")))
+                        .hasMessageContaining("non-published");
+            }
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> Flyway.configure().dataSource(url, user, pass)
+                    .locations("classpath:db/migration").load().migrate()).hasStackTraceContaining("non-PUBLISHED");
+            try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
+                assertThat(count(st, "SELECT count(*) FROM legacy_exam_content_map")).isZero();
+                st.executeUpdate("UPDATE exam_sessions SET exam_version_id=" + legacy.v1() + " WHERE id=" + legacy.sess1());
+                // Simulate a historically corrupted dump; only in disposable test DB.
+                st.execute("SET session_replication_role=replica");
+                st.executeUpdate("UPDATE exam_sections SET exam_version_id=999999999 WHERE exam_version_id=" + legacy.v3());
+                st.execute("SET session_replication_role=origin");
+            }
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> Flyway.configure().dataSource(url, user, pass)
+                    .locations("classpath:db/migration").load().migrate()).hasStackTraceContaining("missing exam_version");
+            try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
+                assertThat(count(st, "SELECT count(*) FROM legacy_exam_content_map")).isZero();
+                st.executeUpdate("UPDATE exam_sections SET exam_version_id=" + legacy.v3() + " WHERE exam_version_id=999999999");
+            }
+
+            // Stage 2: run the redesign migrations through latest.
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration").load().migrate();
 
             try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
+                st.execute(script("p1-b-postflight.sql"));
+                assertThat(evidence(st, "p1-b-after.sql")).containsExactlyInAnyOrderEntriesOf(before);
+                Flyway.configure().dataSource(url, user, pass).locations("classpath:db/migration").load().validate();
+                // Prove the evidence detects score drift even when all counts stay equal.
+                st.executeUpdate("UPDATE grades SET final_score=0 WHERE attempt_id=" + legacy.attemptV1());
+                assertThat(evidence(st, "p1-b-after.sql")).isNotEqualTo(before);
+                st.executeUpdate("UPDATE grades SET final_score=1 WHERE attempt_id=" + legacy.attemptV1());
+                assertThat(evidence(st, "p1-b-after.sql")).containsExactlyInAnyOrderEntriesOf(before);
                 // 0. The untargeted migrate ran through V16 (user-based attempts) — the
                 //    staged attempts carry user_id (V12 backfill) so the V16 constraint
                 //    swap + verification pass on the legacy data.
@@ -174,6 +223,33 @@ class V14ExamSplitMigrationStagedFlywayTest {
                 long splitV2 = map.get(legacy.v2())[0];
                 long splitV3 = map.get(legacy.v3())[0];
                 assertThat(splitV2).isNotEqualTo(splitV3);
+
+                // Review regression: split display metadata must be evidenced too.
+                c.setAutoCommit(false);
+                var probe = c.setSavepoint();
+                st.executeUpdate("UPDATE exams SET title='Undetected split title drift' WHERE id=" + splitV2);
+                assertThat(evidence(st, "p1-b-after.sql")).as("split title mutation detected").isNotEqualTo(before);
+                c.rollback(probe);
+                for (String assignment : new String[]{
+                        "created_by_user_id=(SELECT id FROM users WHERE username='split-other')",
+                        "description='Changed split description'", "subject_id=NULL", "owner_teacher_id=NULL"}) {
+                    probe = c.setSavepoint();
+                    st.executeUpdate("UPDATE exams SET " + assignment + " WHERE id=" + splitV2);
+                    assertThat(evidence(st, "p1-b-after.sql")).as("split metadata drift: " + assignment).isNotEqualTo(before);
+                    c.rollback(probe);
+                }
+                // Each probe is rolled back independently, preserving identity/timestamps.
+                for (String mutation : new String[]{
+                        "UPDATE exam_question_options SET content='Changed option' WHERE id=(SELECT min(id) FROM exam_question_options)",
+                        "UPDATE exam_question_options SET is_correct=NOT is_correct WHERE id=(SELECT max(id) FROM exam_question_options)",
+                        "DELETE FROM exam_question_options WHERE id=(SELECT max(id) FROM exam_question_options)"}) {
+                    probe = c.setSavepoint();
+                    assertThat(st.executeUpdate(mutation)).isEqualTo(1);
+                    assertThat(evidence(st, "p1-b-after.sql")).as("option drift: " + mutation).isNotEqualTo(before);
+                    c.rollback(probe);
+                }
+                assertThat(evidence(st, "p1-b-after.sql")).containsExactlyInAnyOrderEntriesOf(before);
+                c.setAutoCommit(true);
 
                 // 3. Sections follow their exact version; none orphaned.
                 assertThat(count(st, "SELECT count(*) FROM exam_sections WHERE exam_id = " + legacy.examId())).isEqualTo(1);
@@ -215,6 +291,21 @@ class V14ExamSplitMigrationStagedFlywayTest {
                         + "WHERE column_name = 'exam_version_id'")).isZero();
             }
         }
+    }
+
+    private static String script(String name) throws Exception {
+        return java.nio.file.Files.readString(java.nio.file.Path.of("docs/runbooks/sql", name));
+    }
+
+    private static Map<String, String> evidence(Statement st, String name) throws Exception {
+        Map<String, String> rows = new java.util.TreeMap<>();
+        try (ResultSet rs = st.executeQuery(script(name))) {
+            while (rs.next()) {
+                assertThat(rows.put(rs.getString(1) + ":" + rs.getLong(2),
+                        rs.getString(3) + ":" + rs.getString(4))).isNull();
+            }
+        }
+        return rows;
     }
 
     private static String examVersion(long schoolId, long examId, int number, String status, int duration, long userId) {
