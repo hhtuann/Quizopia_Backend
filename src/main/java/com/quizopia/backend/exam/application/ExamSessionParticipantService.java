@@ -48,7 +48,11 @@ public class ExamSessionParticipantService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt", "status");
-    private static final String DUPLICATE_CONSTRAINT = "uk_exam_session_participants_session_student";
+    // Both uniqueness keys classify as duplicates: legacy (session, profile)
+    // and V17 (session, user) — see P0-R9.
+    private static final Set<String> DUPLICATE_CONSTRAINTS = Set.of(
+            "uk_exam_session_participants_session_student",
+            "uk_exam_session_participants_session_user");
 
     private final ExamAuthorizationService auth;
     private final ExamSessionService sessionService;
@@ -103,15 +107,26 @@ public class ExamSessionParticipantService {
         }
         List<Long> distinctIds = new ArrayList<>(seen);
 
-        // Batch-check existing participants in DB.
-        Set<Long> existing = participantRepository
-                .findAllByExamSessionIdAndStudentProfileIdIn(sessionId, distinctIds).stream()
-                .map(ExamSessionParticipant::getStudentProfileId)
-                .collect(Collectors.toSet());
-
         // Batch-load student profiles + validate same school.
         Map<Long, StudentProfile> profiles = studentProfileRepository.findAllById(distinctIds).stream()
                 .collect(Collectors.toMap(StudentProfile::getId, p -> p));
+
+        // User-primary duplicate check (P0-R9): a user may already have a
+        // V17 row WITHOUT profile linkage (blocked public learner) — classify
+        // by userId so the legacy API returns a business duplicate instead of
+        // hitting uk_exam_session_participants_session_user (500).
+        List<Long> candidateUserIds = profiles.values().stream()
+                .map(StudentProfile::getUserId).distinct().toList();
+        Set<Long> existingUserIds = candidateUserIds.isEmpty() ? Set.of()
+                : participantRepository.findAllByExamSessionIdAndUserIdIn(sessionId, candidateUserIds).stream()
+                        .map(ExamSessionParticipant::getUserId)
+                        .collect(Collectors.toSet());
+        // Legacy profile linkage check (rows that still carry the profile id).
+        Set<Long> existingProfileIds = participantRepository
+                .findAllByExamSessionIdAndStudentProfileIdIn(sessionId, distinctIds).stream()
+                .map(ExamSessionParticipant::getStudentProfileId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
 
         List<Long> toInsert = new ArrayList<>();
         List<Long> duplicated = new ArrayList<>(duplicatedInRequest);
@@ -123,8 +138,9 @@ public class ExamSessionParticipantService {
                 invalid.add(id); // missing
             } else if (!sp.getSchoolId().equals(session.getSchoolId())) {
                 invalid.add(id); // cross-school
-            } else if (existing.contains(id)) {
-                duplicated.add(id); // already a participant
+            } else if (existingUserIds.contains(sp.getUserId())
+                    || existingProfileIds.contains(id)) {
+                duplicated.add(id); // already a participant (user- or profile-linked)
             } else {
                 toInsert.add(id); // valid
             }
@@ -171,26 +187,35 @@ public class ExamSessionParticipantService {
         Page<ExamSessionParticipant> participants = participantRepository.findParticipants(sessionId, statusFilter,
                 pageable);
 
-        // Batch-load StudentProfiles (no N+1).
+        // Batch-load StudentProfiles for provenance (no N+1); profile-less
+        // rows (V17) contribute no ids — never pass NULL into findAllById.
         List<Long> studentProfileIds = participants.getContent().stream()
-                .map(ExamSessionParticipant::getStudentProfileId).toList();
+                .map(ExamSessionParticipant::getStudentProfileId)
+                .filter(Objects::nonNull)
+                .toList();
         Map<Long, StudentProfile> profiles = studentProfileIds.isEmpty() ? Map.of()
                 : studentProfileRepository.findAllById(studentProfileIds).stream()
                         .collect(Collectors.toMap(StudentProfile::getId, p -> p));
 
-        // F1: batch-load display names in a SINGLE Hibernate-tracked query (no per-user
-        // loop).
-        Set<Long> userIds = profiles.values().stream().map(StudentProfile::getUserId).collect(Collectors.toSet());
+        // F1 (user-based, P0-R9): batch-load display names by participant
+        // USER id in a SINGLE Hibernate-tracked query — profile-less rows
+        // resolve too; legacy rows no longer depend on the profile join.
+        Set<Long> userIds = participants.getContent().stream()
+                .map(ExamSessionParticipant::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
         Map<Long, String> displayNames = batchDisplayNames(userIds);
 
         List<ExamSessionParticipantResponse> items = participants.getContent().stream()
                 .map(p -> {
-                    StudentProfile sp = profiles.get(p.getStudentProfileId());
+                    StudentProfile sp = p.getStudentProfileId() != null
+                            ? profiles.get(p.getStudentProfileId()) : null;
                     return new ExamSessionParticipantResponse(
                             p.getId(),
+                            p.getUserId(),
                             p.getStudentProfileId(),
                             sp != null ? sp.getStudentCode() : null,
-                            sp != null ? displayNames.get(sp.getUserId()) : null,
+                            displayNames.get(p.getUserId()),
                             p.getStatus().name(),
                             p.getAddedAt(),
                             p.getBlockedAt());
@@ -343,11 +368,10 @@ public class ExamSessionParticipantService {
         StudentProfile sp = p.getStudentProfileId() != null
                 ? studentProfileRepository.findById(p.getStudentProfileId()).orElse(null)
                 : null;
-        Long displayUserId = sp != null ? sp.getUserId() : p.getUserId();
-        String displayName = displayUserId != null
-                ? batchDisplayNames(Set.of(displayUserId)).get(displayUserId) : null;
+        String displayName = p.getUserId() != null
+                ? batchDisplayNames(Set.of(p.getUserId())).get(p.getUserId()) : null;
         return new ExamSessionParticipantResponse(
-                p.getId(), p.getStudentProfileId(),
+                p.getId(), p.getUserId(), p.getStudentProfileId(),
                 sp != null ? sp.getStudentCode() : null, displayName,
                 p.getStatus().name(), p.getAddedAt(), p.getBlockedAt());
     }
@@ -406,7 +430,7 @@ public class ExamSessionParticipantService {
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
                 String name = cve.getConstraintName();
-                if (name != null && name.contains(DUPLICATE_CONSTRAINT))
+                if (name != null && DUPLICATE_CONSTRAINTS.contains(name))
                     return true;
             }
             cause = cause.getCause();

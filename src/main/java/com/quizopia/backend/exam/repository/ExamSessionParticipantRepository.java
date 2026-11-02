@@ -35,6 +35,9 @@ public interface ExamSessionParticipantRepository extends JpaRepository<ExamSess
     /** User-based participant lookup (V17, issue #4 P0-R8). */
     Optional<ExamSessionParticipant> findByExamSessionIdAndUserId(Long examSessionId, Long userId);
 
+    /** Batch existing-membership check by user (legacy bulk-add duplicate classification, P0-R9). */
+    List<ExamSessionParticipant> findAllByExamSessionIdAndUserIdIn(Long examSessionId, List<Long> userIds);
+
     /** User-based participant lock for block/unblock (V17). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM ExamSessionParticipant p WHERE p.examSessionId = :sessionId AND p.userId = :userId")
