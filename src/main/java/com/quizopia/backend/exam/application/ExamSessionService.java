@@ -366,8 +366,11 @@ public class ExamSessionService {
      * session must still hold an ACTIVE membership; only the authenticated
      * owner of a PERSONAL workspace bypasses membership. When
      * {@code forUpdate} the row is pessimistically locked.
+     *
+     * <p>Package-private: shared by the participant-management service so all
+     * session-scoped endpoints enforce ONE policy (issue #4 P0-R6).
      */
-    private ExamSession resolveOwnedSession(Long userId, Long pathExamId, Long sessionId, boolean forUpdate) {
+    ExamSession resolveOwnedSession(Long userId, Long pathExamId, Long sessionId, boolean forUpdate) {
         ExamSession session = forUpdate
                 ? sessionRepository.findByIdForUpdate(sessionId)
                         .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND))
@@ -485,6 +488,9 @@ public class ExamSessionService {
     public List<SessionRosterItem> listRoster(Long userId, Long pathExamId, Long sessionId) {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
         resolveOwnedSession(userId, pathExamId, sessionId, false);
+        // Effective roster (issue #4 P0-R5): assigned-class members ∪ direct
+        // participants ∪ DISTINCT actual attempt participants (user-based —
+        // includes PUBLIC profile-less learners who already started).
         String sql = "SELECT DISTINCT u.id AS uid, sp.id AS pid, sp.student_code AS code, u.display_name AS name "
                 + "FROM ( "
                 + "  SELECT cm.user_id FROM exam_session_classes esc "
@@ -494,6 +500,8 @@ public class ExamSessionService {
                 + "  SELECT sp2.user_id FROM exam_session_participants p "
                 + "  JOIN student_profiles sp2 ON sp2.id = p.student_profile_id "
                 + "  WHERE p.exam_session_id = :sid "
+                + "  UNION "
+                + "  SELECT a.user_id FROM attempts a WHERE a.exam_session_id = :sid "
                 + ") AS roster "
                 + "JOIN users u ON u.id = roster.user_id "
                 + "LEFT JOIN student_profiles sp ON sp.user_id = u.id "

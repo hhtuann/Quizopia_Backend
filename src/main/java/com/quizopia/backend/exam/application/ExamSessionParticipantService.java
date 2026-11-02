@@ -1,7 +1,6 @@
 package com.quizopia.backend.exam.application;
 
 import com.quizopia.backend.academic.domain.model.StudentProfile;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.repository.StudentProfileRepository;
 import com.quizopia.backend.exam.domain.model.*;
 import com.quizopia.backend.exam.dto.*;
@@ -22,8 +21,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Application service for the Exam Session Participant API — 4 endpoints
- * (A3.2-3B):
+ * Application service for the Exam Session Participant API — 4 endpoints:
  * <ul>
  * <li>POST /api/exam-sessions/{sessionId}/participants — bulk add (partial
  * classification)</li>
@@ -32,49 +30,41 @@ import java.util.stream.Collectors;
  * <li>POST .../participants/{participantId}/unblock — unblock participant</li>
  * </ul>
  *
- * <p>
- * Query &amp; concurrency safety (A3.2-3B remediation):
- * <ul>
- * <li>F1 — display names fetched in a single Hibernate-tracked JPQL batch
- * ({@code SELECT u.id, u.displayName FROM User u WHERE u.id IN :ids}); no
- * per-user loop.</li>
- * <li>F2 — {@code studentCode} is NOT a property of the participant entity, so
- * it is removed
- * from the sort allowlist; a {@code studentCode} sort request throws
- * EXAM_VALIDATION_ERROR (400).</li>
- * <li>F4/F5 — every mutating operation resolves the session with
- * {@code findByIdForUpdate}
- * and block/unblock additionally lock the participant row, so concurrent
- * toggles serialize
- * and re-read the latest committed state (no {@code @Version}
- * OptimisticLockException).</li>
- * </ul>
+ * <p>Authorization (issue #4 P0-R6): all four endpoints enforce the SAME
+ * workspace/session resource policy as {@link ExamSessionService} via the
+ * shared {@code resolveOwnedSession}: DB-backed action permission + session
+ * creator gated on ACTIVE organization membership (revoked creators denied)
+ * or ACTIVE workspace OWNER/ADMIN. TeacherProfile/school ownership is no
+ * longer an authorization authority. Personal-workspace sessions (no school)
+ * get an explicit business denial for participant ADD and a clean,
+ * policy-based denial for the other operations — never an NPE.
+ *
+ * <p>Query &amp; concurrency safety (A3.2-3B remediation): batched display
+ * names (single JPQL projection), sort allowlist of entity properties only,
+ * and session-then-participant pessimistic locks on block/unblock.
  */
 @Service
 public class ExamSessionParticipantService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    // studentCode is a StudentProfile field, not a participant-entity field;
-    // sorting by it
-    // can't be resolved by the ExamSessionParticipant JPQL and would raise a 500.
-    // Allowlist only
-    // entity properties, so an unsupported sort returns EXAM_VALIDATION_ERROR (400)
-    // instead.
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt", "status");
     private static final String DUPLICATE_CONSTRAINT = "uk_exam_session_participants_session_student";
 
     private final ExamAuthorizationService auth;
+    private final ExamSessionService sessionService;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
     private final StudentProfileRepository studentProfileRepository;
     private final EntityManager entityManager;
 
     public ExamSessionParticipantService(ExamAuthorizationService auth,
+            ExamSessionService sessionService,
             ExamSessionRepository sessionRepository,
             ExamSessionParticipantRepository participantRepository,
             StudentProfileRepository studentProfileRepository,
             EntityManager entityManager) {
         this.auth = auth;
+        this.sessionService = sessionService;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
         this.studentProfileRepository = studentProfileRepository;
@@ -88,11 +78,17 @@ public class ExamSessionParticipantService {
     @SuppressWarnings("null")
     @Transactional
     public AddParticipantsResponse addParticipants(Long userId, Long sessionId, AddParticipantsRequest request) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_PARTICIPANT_ADD");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_PARTICIPANT_ADD");
+        ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
         // Add only in DRAFT or SCHEDULED.
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
+        // Participant assignment is profile-scoped (school concept) in Phase 1;
+        // personal-workspace sessions have no school — explicit denial, not NPE.
+        if (session.getSchoolId() == null) {
+            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
+                    "Participant assignment is only supported for organization (school) sessions in Phase 1");
         }
 
         // Deduplicate the request list (preserve first occurrence as the "valid"
@@ -163,8 +159,8 @@ public class ExamSessionParticipantService {
     @Transactional
     public PageResponse<ExamSessionParticipantResponse> listParticipants(
             Long userId, Long sessionId, String statusStr, int page, int size, String sort) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_PARTICIPANT_READ");
-        resolveOwnedSession(profile, sessionId); // read-only: any session state OK, no pessimistic lock
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_PARTICIPANT_READ");
+        sessionService.resolveOwnedSession(userId, null, sessionId, false); // any state, no lock
 
         ExamSessionParticipantStatus statusFilter = parseStatusFilter(statusStr);
         PageRequest pageable = safePageable(page, size, sort);
@@ -226,12 +222,12 @@ public class ExamSessionParticipantService {
     // ============================================================
 
     private ExamSessionParticipantResponse toggleBlock(Long userId, Long sessionId, Long participantId, boolean block) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId,
+        auth.requireUserWithPermission(userId,
                 block ? "EXAM_SESSION_PARTICIPANT_BLOCK" : "EXAM_SESSION_PARTICIPANT_UNBLOCK");
         // Lock order: session FIRST, then participant. Concurrent toggles serialize
-        // here and
-        // re-read the latest committed state, so @Version never conflicts on flush.
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
+        // here and re-read the latest committed state, so @Version never conflicts
+        // on flush. Shared workspace policy (issue #4 P0-R6).
+        ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
         // Block/unblock allowed in DRAFT, SCHEDULED, OPEN.
         if (session.getStatus() != ExamSessionStatus.DRAFT
                 && session.getStatus() != ExamSessionStatus.SCHEDULED
@@ -267,41 +263,9 @@ public class ExamSessionParticipantService {
     }
 
     /**
-     * Read-only resolution (list): no pessimistic lock, any session state accepted.
-     */
-    private ExamSession resolveOwnedSession(TeacherProfile profile, Long sessionId) {
-        ExamSession session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
-        return session;
-    }
-
-    /**
-     * Mutating resolution (add/block/unblock): pessimistic-write lock the session
-     * row so the
-     * state check is stable for the whole operation — a concurrent lifecycle
-     * transition that
-     * changes the state is observed after this tx acquires the lock (re-read), not
-     * a stale read.
-     */
-    private ExamSession resolveOwnedSessionForUpdate(TeacherProfile profile, Long sessionId) {
-        ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
-        return session;
-    }
-
-    /**
      * F1: fetch display names for a set of users in a SINGLE Hibernate-tracked JPQL
-     * projection
-     * (no per-user loop, no N+1). Tracked so query statistics can prove it runs
-     * once per request.
+     * projection (no per-user loop, no N+1). Tracked so query statistics can prove
+     * it runs once per request.
      */
     private Map<Long, String> batchDisplayNames(Collection<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
