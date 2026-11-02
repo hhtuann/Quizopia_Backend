@@ -91,11 +91,14 @@ class AttemptDetailAndMyHttpIntegrationTests {
     }
 
     @Test
-    void detailReturns403MissingStudentRole() throws Exception {
+    void detailAllowsTeacherRole() throws Exception {
+        // Dual capability (V16): TEACHER carries ATTEMPT_READ + ATTEMPT_ANSWER_READ,
+        // and the attempt owner keeps detail access after switching to the TEACHER role.
         long teacherRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("UPDATE user_roles SET role_id=" + teacherRoleId + " WHERE user_id=" + studentUserId);
         mockMvc.perform(get("/api/attempts/" + attemptId).with(jwt().jwt(j -> j.subject(String.valueOf(studentUserId)))))
-                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attemptId").value(attemptId));
     }
 
     @Test
@@ -113,12 +116,14 @@ class AttemptDetailAndMyHttpIntegrationTests {
     }
 
     @Test
-    void detailReturns404MissingProfile() throws Exception {
+    void detailReturns404NoProfileForeignAttempt() throws Exception {
         long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mp','mp@t.com','h','MP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
+        // Public learner passes the permission gate but does not own the attempt →
+        // 404 anti-enumeration (issue #4 P0-1).
         mockMvc.perform(get("/api/attempts/" + attemptId).with(jwt().jwt(j -> j.subject(String.valueOf(u)))))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ATTEMPT_NOT_FOUND"));
     }
 
     @Test
@@ -189,11 +194,14 @@ class AttemptDetailAndMyHttpIntegrationTests {
     }
 
     @Test
-    void myReturns403MissingStudentRole() throws Exception {
+    void myAllowsTeacherRole() throws Exception {
+        // Dual capability (V16): TEACHER carries ATTEMPT_READ — history is
+        // permission-gated, not role-gated.
         long teacherRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("UPDATE user_roles SET role_id=" + teacherRoleId + " WHERE user_id=" + studentUserId);
         mockMvc.perform(get("/api/attempts/my").with(jwt().jwt(j -> j.subject(String.valueOf(studentUserId)))))
-                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].attemptId").value(attemptId));
     }
 
     @Test
@@ -204,12 +212,15 @@ class AttemptDetailAndMyHttpIntegrationTests {
     }
 
     @Test
-    void myReturns404MissingProfile() throws Exception {
+    void myAllowsUserWithoutProfile() throws Exception {
         long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mp2','mp2@t.com','h','MP2')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
+        // Public learner: no StudentProfile required for user-based history.
         mockMvc.perform(get("/api/attempts/my").with(jwt().jwt(j -> j.subject(String.valueOf(u)))))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0));
     }
 
     @Test

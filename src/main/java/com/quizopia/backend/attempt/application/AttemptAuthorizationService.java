@@ -1,12 +1,8 @@
 package com.quizopia.backend.attempt.application;
 
-import com.quizopia.backend.academic.domain.model.EnrollmentStatus;
-import com.quizopia.backend.academic.domain.model.StudentProfile;
-import com.quizopia.backend.academic.repository.StudentProfileRepository;
 import com.quizopia.backend.attempt.exception.AttemptErrorCode;
 import com.quizopia.backend.attempt.exception.AttemptException;
 import com.quizopia.backend.identity.repository.RolePermissionRepository;
-import com.quizopia.backend.identity.repository.UserRoleRepository;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
@@ -15,49 +11,50 @@ import java.util.List;
 
 /**
  * Shared authorization component for the attempt module. Deny-by-default:
- * active STUDENT role (DB) → effective permission (DB) → StudentProfile (ACTIVE).
- * No JWT claim authority, no role hierarchy, no SYSTEM_ADMIN bypass.
+ * the caller must hold the required EFFECTIVE PERMISSION (resolved from the
+ * DB — no JWT-claim authority, no role hierarchy, no SYSTEM_ADMIN bypass).
+ *
+ * <p>User-based model (issue #4 P0-1): permission possession IS the attempt
+ * capability — a public user (no school, no StudentProfile) with the learner
+ * permissions may discover/start/submit attempts; legacy StudentProfile is
+ * optional provenance only and no longer gates access. The STUDENT role
+ * carries the learner permissions natively; since V16 the TEACHER role also
+ * carries ATTEMPT_START/ATTEMPT_ANSWER_SAVE/ATTEMPT_SUBMIT so one account
+ * can act as creator and learner (dual capability, server-side).
  */
 @Component
 public class AttemptAuthorizationService {
 
-    private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
-    private final StudentProfileRepository studentProfileRepository;
     private final Clock clock;
 
-    public AttemptAuthorizationService(UserRoleRepository userRoleRepository,
-                                        RolePermissionRepository rolePermissionRepository,
-                                        StudentProfileRepository studentProfileRepository,
-                                        Clock clock) {
-        this.userRoleRepository = userRoleRepository;
+    public AttemptAuthorizationService(RolePermissionRepository rolePermissionRepository,
+                                       Clock clock) {
         this.rolePermissionRepository = rolePermissionRepository;
-        this.studentProfileRepository = studentProfileRepository;
         this.clock = clock;
     }
 
     /**
-     * Requires the caller to have an active STUDENT role AND the specified
-     * effective permission (both from the DB), AND an ACTIVE StudentProfile.
-     * Returns the resolved profile.
+     * Requires the caller to hold the specified effective attempt permission.
+     * Any user with the permission can participate (STUDENT-role users and,
+     * since V16, TEACHER-role users on the three learner permissions).
      */
-    public StudentProfile requireStudentWithPermission(Long userId, String permissionCode) {
-        Instant now = Instant.now(clock);
-        requireActiveStudentRole(userId, now);
-        requirePermission(userId, permissionCode, now);
-        return resolveStudentProfile(userId, now);
+    public void requireLearnerWithPermission(Long userId, String permissionCode) {
+        List<String> perms = rolePermissionRepository
+                .findEffectivePermissionCodesByUserId(userId, Instant.now(clock));
+        if (!perms.contains(permissionCode)) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
+        }
     }
 
     /**
-     * Requires an active STUDENT role AND ALL of the given effective permissions (single DB fetch)
-     * AND an ACTIVE StudentProfile. Used by detail (ATTEMPT_READ + ATTEMPT_ANSWER_READ). Deny-by-default,
-     * no role hierarchy, no JWT-authority trust.
+     * Requires ALL of the given effective permissions (single DB fetch).
+     * Used by detail (ATTEMPT_READ + ATTEMPT_ANSWER_READ).
      */
-    public StudentProfile requireStudentWithPermissions(Long userId, String primaryPermission,
-                                                        String... additionalPermissions) {
-        Instant now = Instant.now(clock);
-        requireActiveStudentRole(userId, now);
-        List<String> perms = rolePermissionRepository.findEffectivePermissionCodesByUserId(userId, now);
+    public void requireLearnerWithPermissions(Long userId, String primaryPermission,
+                                              String... additionalPermissions) {
+        List<String> perms = rolePermissionRepository
+                .findEffectivePermissionCodesByUserId(userId, Instant.now(clock));
         if (!perms.contains(primaryPermission)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
         }
@@ -66,35 +63,5 @@ public class AttemptAuthorizationService {
                 throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
             }
         }
-        return resolveStudentProfile(userId, now);
-    }
-
-    private void requireActiveStudentRole(Long userId, Instant now) {
-        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-        if (!roles.contains("STUDENT")) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
-        }
-    }
-
-    private void requirePermission(Long userId, String permission, Instant now) {
-        List<String> perms = rolePermissionRepository.findEffectivePermissionCodesByUserId(userId, now);
-        if (!perms.contains(permission)) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
-        }
-    }
-
-    private StudentProfile resolveStudentProfile(Long userId, Instant now) {
-        StudentProfile profile = studentProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> {
-                    List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-                    if (roles.contains("STUDENT")) {
-                        return new AttemptException(AttemptErrorCode.ATTEMPT_STUDENT_PROFILE_NOT_FOUND);
-                    }
-                    return new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
-                });
-        if (profile.getEnrollmentStatus() != EnrollmentStatus.ACTIVE) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
-        }
-        return profile;
     }
 }

@@ -81,7 +81,7 @@ class AttemptAutosaveQueryCountIntegrationTests {
         return ds.count();
     }
 
-    // A. accepted first insert: N=1 == N=20 == 8.
+    // A. accepted first insert: N=1 == N=20 == 7.
     @Test
     void acceptedInsertQueryCountIsConstant() {
         long u1 = newStudent(1);
@@ -90,10 +90,10 @@ class AttemptAutosaveQueryCountIntegrationTests {
         long a20 = attemptOf(u20);
         int c1 = count(() -> autosaveService.saveAnswer(u1, a1, req(firstAq(a1), "A", 1)));
         int c20 = count(() -> autosaveService.saveAnswer(u20, a20, req(firstAq(a20), "A", 1)));
-        assertThat(c1).as("accepted-insert N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(9);
+        assertThat(c1).as("accepted-insert N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(7);
     }
 
-    // B. accepted higher-sequence update: N=1 == N=20 == 9 (same plan; UPSERT UPDATE instead of INSERT).
+    // B. accepted higher-sequence update: N=1 == N=20 == 7 (same plan; UPSERT UPDATE instead of INSERT).
     @Test
     void acceptedUpdateQueryCountIsConstant() {
         long u1 = newStudent(1);
@@ -105,10 +105,10 @@ class AttemptAutosaveQueryCountIntegrationTests {
         autosaveService.saveAnswer(u20, a20, req(firstAq(a20), "A", 1));
         int c1 = count(() -> autosaveService.saveAnswer(u1, a1, req(firstAq(a1), "B", 5)));
         int c20 = count(() -> autosaveService.saveAnswer(u20, a20, req(firstAq(a20), "B", 5)));
-        assertThat(c1).as("accepted-update N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(9);
+        assertThat(c1).as("accepted-update N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(7);
     }
 
-    // C. stale equal/lower: N=1 == N=20 == 8 (no last_saved_at UPDATE on stale).
+    // C. stale equal/lower: N=1 == N=20 == 6 (no last_saved_at UPDATE on stale).
     @Test
     void staleQueryCountIsConstant() {
         long u1 = newStudent(1);
@@ -119,8 +119,8 @@ class AttemptAutosaveQueryCountIntegrationTests {
         autosaveService.saveAnswer(u20, a20, req(firstAq(a20), "A", 5));
         int c1 = count(() -> autosaveService.saveAnswer(u1, a1, req(firstAq(a1), "B", 3)));
         int c20 = count(() -> autosaveService.saveAnswer(u20, a20, req(firstAq(a20), "B", 3)));
-        assertThat(c1).as("stale N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(8);
-        assertThat(c1).as("stale must be one fewer than accepted (no last_saved_at UPDATE)").isEqualTo(9 - 1);
+        assertThat(c1).as("stale N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(6);
+        assertThat(c1).as("stale must be one fewer than accepted (no last_saved_at UPDATE)").isEqualTo(7 - 1);
     }
 
     // ============================================================

@@ -159,10 +159,14 @@ class AttemptAutosaveHttpIntegrationTests {
                 .andExpect(status().isUnauthorized());
     }
 
-    @Test void returns403MissingRole() throws Exception {
+    @Test void returns200TeacherRole() throws Exception {
+        // Dual capability (V16): TEACHER role now carries ATTEMPT_ANSWER_SAVE, so the
+        // attempt owner keeps autosave access after switching to the TEACHER role.
         long teacherRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("UPDATE user_roles SET role_id=" + teacherRole + " WHERE user_id=" + userId);
-        assertNoInternalLeak(err(raw(body("{\"selectedOptionKey\":\"A\"}", 1)), 403, "ATTEMPT_ACCESS_DENIED"));
+        String content = mockMvc.perform(put(answersPath()).with(jwtWith(userId)).contentType(MediaType.APPLICATION_JSON).content(body("{\"selectedOptionKey\":\"A\"}", 1)))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertNoInternalLeak(content);
     }
 
     @Test void returns403RevokedPermission() throws Exception {
@@ -170,12 +174,14 @@ class AttemptAutosaveHttpIntegrationTests {
         assertNoInternalLeak(err(raw(body("{\"selectedOptionKey\":\"A\"}", 1)), 403, "ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void returns404MissingStudentProfile() throws Exception {
+    @Test void returns403NoProfileForeignUser() throws Exception {
         long noProfile = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
+        // Public learner (no StudentProfile) passes the permission gate but is not
+        // the attempt OWNER — write op on a foreign attempt → 403 (issue #4 P0-1).
         String content = mockMvc.perform(put(answersPath()).with(jwtWith(noProfile)).contentType(MediaType.APPLICATION_JSON).content(body("{\"selectedOptionKey\":\"A\"}", 1)))
-                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"))
                 .andExpect(jsonPath("$.path").value(answersPath())).andReturn().getResponse().getContentAsString();
         assertNoInternalLeak(content);
     }

@@ -109,7 +109,7 @@ class AttemptSubmitQueryCountIntegrationTests {
         markSubmitted(u20, a20, "cached");
         int c1 = count(() -> submitService.submitAttempt(u1, a1, new SubmitRequest("cached")));
         int c20 = count(() -> submitService.submitAttempt(u20, a20, new SubmitRequest("cached")));
-        assertThat(c1).as("cached-retry N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(5);
+        assertThat(c1).as("cached-retry N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(3);
     }
 
     // C. different-key already-submitted: N=1 == N=20.
@@ -123,7 +123,7 @@ class AttemptSubmitQueryCountIntegrationTests {
         markSubmitted(u20, a20, "original");
         int c1 = count(() -> submitService.submitAttempt(u1, a1, new SubmitRequest("other")));
         int c20 = count(() -> submitService.submitAttempt(u20, a20, new SubmitRequest("other")));
-        assertThat(c1).as("different-key N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(4);
+        assertThat(c1).as("different-key N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(2);
     }
 
     // D. cross-attempt existing-key conflict: bounded constant (no N+1).
@@ -139,7 +139,7 @@ class AttemptSubmitQueryCountIntegrationTests {
         long a20second = secondAttemptOf(u20a);
         int c1 = count(() -> submitService.submitAttempt(u1a, a1second, new SubmitRequest("shared")));
         int c20 = count(() -> submitService.submitAttempt(u20a, a20second, new SubmitRequest("shared")));
-        assertThat(c1).as("cross-attempt conflict N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(5);
+        assertThat(c1).as("cross-attempt conflict N=1").isEqualTo(c20).as("must be N-independent").isEqualTo(3);
     }
 
     // ============================================================

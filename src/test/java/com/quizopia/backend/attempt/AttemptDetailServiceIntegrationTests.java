@@ -165,24 +165,27 @@ class AttemptDetailServiceIntegrationTests {
     }
 
     @Test
-    void detailMissingProfileReturns404() {
+    void detailNoProfileForeignAttemptReturns404() {
         long a = activeAttempt();
         long noProfile = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
+        // Public learner passes the permission gate but does not own the attempt →
+        // 404 anti-enumeration (issue #4 P0-1).
         assertThatThrownBy(() -> queryService.getAttemptDetail(noProfile, a))
                 .isInstanceOf(AttemptException.class)
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_NOT_FOUND"));
     }
 
     @Test
-    void detailInactiveProfileReturns403() {
+    void detailInactiveProfileStillAllowed() {
         long a = activeAttempt();
+        // Profile enrollment status no longer gates access (issue #4 P0-1):
+        // permission + user ownership are the only gates.
         jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE' WHERE id=" + studentProfileId);
-        em.clear(); // setUp's startAttempt auth cached the (ACTIVE) profile in the persistence context
-        assertThatThrownBy(() -> queryService.getAttemptDetail(studentUserId, a))
-                .isInstanceOf(AttemptException.class)
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+        em.clear();
+        AttemptDetailResponse r = queryService.getAttemptDetail(studentUserId, a);
+        assertThat(r.status()).isEqualTo("IN_PROGRESS");
     }
 
     @Test

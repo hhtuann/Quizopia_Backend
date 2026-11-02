@@ -70,6 +70,11 @@ class Day8R1RemediationTests {
         long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC" + tag + "')");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'B','Bank')");
         long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam','PUBLISHED',now(),1)");
+        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
+        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT workspace_id, " + teacherUserId + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
+                + " ON CONFLICT DO NOTHING");
         ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + tag + "'," + teacherUserId + ")");

@@ -99,17 +99,21 @@ class AttemptSubmitServiceIntegrationTests {
         assertThatThrownBy(() -> submit(admin, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void missingProfileRejected404() {
+    @Test void noProfileForeignAttemptRejected403() {
         long np = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + np + "," + roleId + ")");
-        assertThatThrownBy(() -> submit(np, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+        // Public learner passes the permission gate but does not own the attempt →
+        // ownership denial (issue #4 P0-1).
+        assertThatThrownBy(() -> submit(np, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void inactiveProfileRejected403() {
+    @Test void inactiveProfileStillAccepted() {
+        // Profile enrollment status no longer gates submit (issue #4 P0-1);
+        // permission + user ownership are the only gates.
         jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
         em.clear();
-        assertThatThrownBy(() -> submit(studentUserId, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+        assertThat(submit(studentUserId, KEY).status()).isEqualTo("SUBMITTED");
     }
 
     @Test void missingAttemptRejected404() {

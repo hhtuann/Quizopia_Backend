@@ -210,19 +210,23 @@ class MyAttemptsServiceIntegrationTests {
     }
 
     @Test
-    void myMissingProfileReturnsCorrectCode() {
+    void myAllowsUserWithoutProfile() {
         long noProfile = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mp','mp@t.com','h','MP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
-        assertThatThrownBy(() -> queryService.getMyAttempts(noProfile, 0, 20))
-                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code()).isEqualTo("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+        // Public learner: no StudentProfile required for user-based history (issue #4 P0-1).
+        var resp = queryService.getMyAttempts(noProfile, 0, 20);
+        assertThat(resp.items()).isEmpty();
+        assertThat(resp.totalElements()).isZero();
     }
 
     @Test
-    void myInactiveProfileReturns403() {
+    void myInactiveProfileStillAllowed() {
+        // Profile enrollment status no longer gates the history read (issue #4 P0-1).
+        newAttempt("SUBMITTED", "K1", "2026-07-03T10:00:00Z");
         jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE' WHERE id=" + studentProfileId);
-        assertThatThrownBy(() -> queryService.getMyAttempts(studentUserId, 0, 20))
-                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code()).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+        var resp = queryService.getMyAttempts(studentUserId, 0, 20);
+        assertThat(resp.items()).hasSize(1);
     }
 
     // ============================================================

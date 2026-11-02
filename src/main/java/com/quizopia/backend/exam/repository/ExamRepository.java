@@ -29,6 +29,7 @@ public interface ExamRepository extends JpaRepository<Exam, Long> {
     Optional<Exam> findByIdForUpdate(@Param("id") Long id);
 
     @Query("SELECT e FROM Exam e WHERE e.createdByUserUserId = :userId "
+            + "AND e.workspaceId IN :workspaceIds "
             + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(e.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(e.title) LIKE LOWER(CONCAT('%', :search, '%'))) "
@@ -39,5 +40,6 @@ public interface ExamRepository extends JpaRepository<Exam, Long> {
             @Param("search") String search,
             @Param("subjectId") Long subjectId,
             @Param("status") ExamStatus status,
+            @Param("workspaceIds") List<Long> workspaceIds,
             Pageable pageable);
 }

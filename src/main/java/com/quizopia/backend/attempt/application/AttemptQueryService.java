@@ -71,8 +71,8 @@ public class AttemptQueryService {
     // ============================================================
 
     public AttemptDetailResponse getAttemptDetail(Long userId, Long attemptId) {
-        StudentProfile profile = auth.requireStudentWithPermissions(userId, "ATTEMPT_READ", "ATTEMPT_ANSWER_READ");
-        Attempt attempt = loadOwnedAttempt(attemptId, profile); // 404 anti-enumeration
+        auth.requireLearnerWithPermissions(userId, "ATTEMPT_READ", "ATTEMPT_ANSWER_READ");
+        Attempt attempt = loadOwnedAttempt(attemptId, userId); // 404 anti-enumeration
         Instant serverTime = Instant.now(clock);
 
         // 1 joined query: ordered attempt_questions + safe exam_question fields + section info.
@@ -129,11 +129,13 @@ public class AttemptQueryService {
     // ============================================================
 
     public MyAttemptsResponse getMyAttempts(Long userId, int page, int size) {
-        StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_READ");
+        auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
         validatePaging(page, size);
         int safeSize = Math.min(size, MAX_PAGE_SIZE);
         long offset = (long) page * safeSize;
 
+        // User-based history (issue #4 P0-1): one identity across school
+        // attempts (legacy provenance rows) and public attempts.
         List<MyAttemptListItem> items = jdbc.query(
                 "SELECT a.id, a.exam_session_id, a.attempt_number, a.status, a.started_at, a.submitted_at, "
                         + "a.deadline_at, a.created_at, s.code AS session_code, s.title AS session_title, "
@@ -141,7 +143,7 @@ public class AttemptQueryService {
                         + "FROM attempts a "
                         + "JOIN exam_sessions s ON s.id = a.exam_session_id "
                         + "LEFT JOIN grades g ON g.attempt_id = a.id "
-                        + "WHERE a.student_profile_id = ? AND a.school_id = ? "
+                        + "WHERE a.user_id = ? "
                         + "ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?",
                 (rs, n) -> new MyAttemptListItem(
                         rs.getLong("id"), rs.getLong("exam_session_id"), rs.getString("session_code"),
@@ -152,11 +154,11 @@ public class AttemptQueryService {
                         rs.getTimestamp("created_at").toInstant(),
                         rs.getBigDecimal("final_score"),
                         rs.getBigDecimal("max_score")),
-                profile.getId(), profile.getSchoolId(), safeSize, offset);
+                userId, safeSize, offset);
 
         Long total = jdbc.queryForObject(
-                "SELECT count(*) FROM attempts WHERE student_profile_id = ? AND school_id = ?",
-                Long.class, profile.getId(), profile.getSchoolId());
+                "SELECT count(*) FROM attempts WHERE user_id = ?",
+                Long.class, userId);
 
         long totalElements = total == null ? 0 : total;
         int totalPages = (int) Math.ceil((double) totalElements / safeSize);
@@ -167,11 +169,10 @@ public class AttemptQueryService {
     // Helpers
     // ============================================================
 
-    /** Anti-enumeration: 404 for not-exist / foreign student / cross-school (no 403 to leak existence). */
-    private Attempt loadOwnedAttempt(Long attemptId, StudentProfile profile) {
+    /** Anti-enumeration: 404 for not-exist / foreign user (no 403 to leak existence). */
+    private Attempt loadOwnedAttempt(Long attemptId, Long userId) {
         return attemptRepo.findById(attemptId)
-                .filter(a -> Objects.equals(a.getStudentProfileId(), profile.getId()))
-                .filter(a -> Objects.equals(a.getSchoolId(), profile.getSchoolId()))
+                .filter(a -> Objects.equals(a.getUserId(), userId))
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_FOUND));
     }
 

@@ -238,8 +238,16 @@ public class ExamService {
 
         String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
 
+        // P0-2 (issue #4): only exams in workspaces the user may still access
+        // (personal + ACTIVE-membership organizations) are listed — revoked
+        // creators' org exams disappear from their list.
+        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
+        if (accessibleWorkspaceIds.isEmpty()) {
+            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
+        }
+
         Page<Exam> exams = examRepository.findCreatedByUser(userId, trimmedSearch, subjectId, statusFilter,
-                pageable);
+                accessibleWorkspaceIds, pageable);
 
         Map<Long, SubjectSummary> subjectMap = batchSubjects(exams.getContent());
         Map<Long, ExamPurposeSummary> purposeMap = batchPurposes(exams.getContent());
@@ -789,12 +797,15 @@ public class ExamService {
 
     /**
      * Reads allow the creator or any ACTIVE member of the exam's workspace
-     * (404 anti-enumeration for outsiders).
+     * (404 anti-enumeration for outsiders). P0-2 (issue #4): in ORGANIZATION
+     * workspaces the creator is additionally gated on an ACTIVE membership —
+     * a revoked creator is denied.
      */
     private Exam requireViewableExam(Long userId, Long examId) {
         Exam exam = examRepository.findById(examId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
         if (exam.getCreatedByUserUserId().equals(userId)) {
+            requireWorkspaceAccess(userId, exam);
             return exam;
         }
         if (workspaceAccessService.isActiveMember(userId, exam.getWorkspaceId())) {
@@ -805,17 +816,39 @@ public class ExamService {
 
     /**
      * Mutations require the creator or a workspace OWNER/ADMIN (workspace
-     * privilege escalation via manipulated ids is rejected).
+     * privilege escalation via manipulated ids is rejected). P0-2 (issue #4):
+     * the creator of an ORGANIZATION-workspace exam must still hold an ACTIVE
+     * membership; only the authenticated owner of a PERSONAL workspace
+     * bypasses membership.
      */
     private void requireManageableExam(Long userId, Exam exam) {
         if (exam.getCreatedByUserUserId().equals(userId)) {
+            try {
+                workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+                throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
+            }
             return;
         }
         try {
-            workspaceAccessService.requireAnyWorkspaceRole(userId, exam.getWorkspaceId(),
-                    WorkspaceRole.OWNER, WorkspaceRole.ADMIN);
+            workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
+                    exam.getCreatedByUserUserId());
         } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
             throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
+        }
+    }
+
+    /**
+     * Creator access is only honored while the workspace grants it: PERSONAL
+     * workspaces — the authenticated owner always qualifies; ORGANIZATION
+     * workspaces — an ACTIVE membership is required (issue #4 P0-2).
+     * Used by the read path (404 anti-enumeration for revoked creators).
+     */
+    private void requireWorkspaceAccess(Long userId, Exam exam) {
+        try {
+            workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
         }
     }
 

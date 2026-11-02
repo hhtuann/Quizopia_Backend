@@ -180,8 +180,15 @@ public class ExamSessionService {
         sessionRepository.bulkCloseExpiredScheduledSessions(
                 userId, ExamSessionStatus.SCHEDULED, ExamSessionStatus.CLOSED, now);
 
+        // P0-2 (issue #4): only sessions in workspaces the user may still
+        // access (personal + ACTIVE-membership organizations) are listed.
+        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
+        if (accessibleWorkspaceIds.isEmpty()) {
+            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
+        }
+
         Page<ExamSession> sessions = sessionRepository.findCreatedByUser(
-                userId, trimmedSearch, statusFilter, examId, pageable);
+                userId, trimmedSearch, statusFilter, examId, accessibleWorkspaceIds, pageable);
 
         List<Long> sessionIds = sessions.getContent().stream().map(ExamSession::getId).toList();
         Map<Long, Long> participantCounts = batchParticipantCounts(sessionIds);
@@ -355,7 +362,10 @@ public class ExamSessionService {
     /**
      * Loads a session, verifies the optional path examId matches, and enforces
      * ownership: the session creator or a workspace OWNER/ADMIN of the exam's
-     * workspace. When {@code forUpdate} the row is pessimistically locked.
+     * workspace. P0-2 (issue #4): the creator of an ORGANIZATION-workspace
+     * session must still hold an ACTIVE membership; only the authenticated
+     * owner of a PERSONAL workspace bypasses membership. When
+     * {@code forUpdate} the row is pessimistically locked.
      */
     private ExamSession resolveOwnedSession(Long userId, Long pathExamId, Long sessionId, boolean forUpdate) {
         ExamSession session = forUpdate
@@ -368,13 +378,14 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_EXAM_MISMATCH);
         }
         if (session.getCreatedBy().equals(userId)) {
+            requireCreatorWorkspaceAccess(userId, session);
             return session;
         }
         Exam exam = examRepository.findById(session.getExamId()).orElse(null);
         if (exam != null) {
             try {
-                workspaceAccessService.requireAnyWorkspaceRole(userId, exam.getWorkspaceId(),
-                        WorkspaceRole.OWNER, WorkspaceRole.ADMIN);
+                workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
+                        exam.getCreatedByUserUserId());
                 return session;
             } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
                 // fall through to deny
@@ -383,13 +394,31 @@ public class ExamSessionService {
         throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
     }
 
+    /** P0-2: creator access requires an ACTIVE org membership (personal owners pass). */
+    private void requireCreatorWorkspaceAccess(Long userId, ExamSession session) {
+        Exam exam = examRepository.findById(session.getExamId()).orElse(null);
+        if (exam == null) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND);
+        }
+        try {
+            workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
+    }
+
     private void requireSessionManageable(Long userId, Exam exam) {
         if (exam.getCreatedByUserUserId().equals(userId)) {
+            try {
+                workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+                throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+            }
             return;
         }
         try {
-            workspaceAccessService.requireAnyWorkspaceRole(userId, exam.getWorkspaceId(),
-                    WorkspaceRole.OWNER, WorkspaceRole.ADMIN);
+            workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
+                    exam.getCreatedByUserUserId());
         } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }

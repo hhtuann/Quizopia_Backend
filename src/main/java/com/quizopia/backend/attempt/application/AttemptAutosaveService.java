@@ -67,7 +67,7 @@ public class AttemptAutosaveService {
 
     @Transactional
     public SaveAnswerResponse saveAnswer(Long userId, Long attemptId, SaveAnswerRequest request) {
-        StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_ANSWER_SAVE");
+        auth.requireLearnerWithPermission(userId, "ATTEMPT_ANSWER_SAVE");
 
         // Basic request validation (fail fast, before locking). A null request (JSON literal `null`
         // body or a direct service call) must not NPE into a 500.
@@ -85,9 +85,9 @@ public class AttemptAutosaveService {
         Attempt attempt = attemptRepo.findByIdForUpdate(attemptId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_FOUND));
 
-        // 2. Ownership + school (foreign/cross-school → 403, not 404 — the caller is writing to it).
-        if (!Objects.equals(attempt.getStudentProfileId(), profile.getId())
-                || !Objects.equals(attempt.getSchoolId(), profile.getSchoolId())) {
+        // 2. Ownership (user-based, issue #4 P0-1): foreign user → 403, not
+        // 404 — the caller is writing to it.
+        if (!Objects.equals(attempt.getUserId(), userId)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
         }
         // 3. Capture `now` ONCE, AFTER the lock is acquired and ownership verified.

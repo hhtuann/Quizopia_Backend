@@ -80,12 +80,13 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; Phase 1 Task A adds V10–V12 (workspace foundation)
-        // and Task B adds V13–V15 (exam redesign: expand/backfill/contract).
+        // V1–V8 are all applied; Phase 1 Task A adds V10–V12 (workspace foundation),
+        // Task B adds V13–V15 (exam redesign: expand/backfill/contract), and issue #4
+        // P0-1 adds V16 (user-based attempts).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("15");
+        assertThat(current).isEqualTo("16");
     }
 
     @Test

@@ -78,8 +78,10 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
         long a20 = activeAttemptOf(u20);
         int c1 = count(() -> queryService.getAttemptDetail(u1, a1));
         int c20 = count(() -> queryService.getAttemptDetail(u20, a20));
-        // Constant regardless of question count: auth(3) + attempt findById(1) + joined questions(1) + options batch(1) + answers batch(1) = 7.
-        assertThat(c1).isEqualTo(c20).isEqualTo(7);
+        // Constant regardless of question count: auth permission fetch(1) + attempt findById(1)
+        // + joined questions(1) + options batch(1) + answers batch(1) + session(1) = 6
+        // (profile lookup removed by the user-based model, issue #4 P0-1).
+        assertThat(c1).isEqualTo(c20).isEqualTo(6);
     }
 
     // === MY: N=1 vs N=20 (constant; no per-attempt session query) ===
@@ -90,21 +92,23 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
         long u20 = newStudentWithMyAttempts(20);
         int c1 = count(() -> queryService.getMyAttempts(u1, 0, 100));
         int c20 = count(() -> queryService.getMyAttempts(u20, 0, 100));
-        // Constant regardless of attempt count: auth(3) + page(1) + count(1) = 5.
-        assertThat(c1).isEqualTo(c20).isEqualTo(5);
+        // Constant regardless of attempt count: auth permission fetch(1) + page(1) + count(1) = 3
+        // (profile lookup removed by the user-based model, issue #4 P0-1).
+        assertThat(c1).isEqualTo(c20).isEqualTo(3);
     }
 
-    // === AVAILABLE regression: N=1 = N=20 = 4 (tightens the A3.2-1 comment-only assertion) ===
+    // === AVAILABLE regression: N=1 = N=4 = N=20 = 2 (tightens the A3.2-1 comment-only assertion) ===
 
     @Test
-    void availableQueryCountIsConstantFour() {
+    void availableQueryCountIsConstant() {
         long u1 = newStudentWithAvailableSessions(1);
         long u4 = newStudentWithAvailableSessions(4);
         long u20 = newStudentWithAvailableSessions(20);
-        // 3 auth queries (role + permission + profile) + 1 native available query = 4 constant.
-        assertThat(count(() -> attemptService.getAvailableSessions(u1))).isEqualTo(4);
-        assertThat(count(() -> attemptService.getAvailableSessions(u4))).isEqualTo(4);
-        assertThat(count(() -> attemptService.getAvailableSessions(u20))).isEqualTo(4);
+        // 1 auth permission query + 1 native available query = 2 constant
+        // (role + profile lookups removed by the user-based model, issue #4 P0-1).
+        assertThat(count(() -> attemptService.getAvailableSessions(u1))).isEqualTo(2);
+        assertThat(count(() -> attemptService.getAvailableSessions(u4))).isEqualTo(2);
+        assertThat(count(() -> attemptService.getAvailableSessions(u20))).isEqualTo(2);
     }
 
     // ============================================================

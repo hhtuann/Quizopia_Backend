@@ -118,19 +118,23 @@ class AttemptAutosaveServiceIntegrationTests {
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void missingProfileRejected404() {
+    @Test void noProfileForeignAttemptRejected403() {
         long noProfile = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
+        // Public learner passes the permission gate (no profile required) but is not
+        // the attempt owner → ownership denial (issue #4 P0-1).
         assertThatThrownBy(() -> autosaveService.saveAnswer(noProfile, attemptId, req(aqSingleId, single("A"), 1)))
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void inactiveProfileRejected403() {
+    @Test void inactiveProfileStillAccepted() {
+        // Profile enrollment status no longer gates autosave (issue #4 P0-1);
+        // permission + user ownership are the only gates.
         jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
         em.clear();
-        assertThatThrownBy(() -> autosaveService.saveAnswer(studentUserId, attemptId, req(aqSingleId, single("A"), 1)))
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+        SaveAnswerResponse r = autosaveService.saveAnswer(studentUserId, attemptId, req(aqSingleId, single("A"), 1));
+        assertThat(r.accepted()).isTrue();
     }
 
     @Test void missingAttemptRejected404() {

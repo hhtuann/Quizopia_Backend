@@ -121,13 +121,24 @@ class AttemptHttpIntegrationTests {
         }
 
         @Test
-        void availableReturns403MissingStudentRole() throws Exception {
+        void availableAllowsTeacherRole() throws Exception {
+                // Dual capability (V16): a TEACHER-role user holds EXAM_SESSION_READ,
+                // so the available-sessions listing is permission-gated, not role-gated.
                 long teacherRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("UPDATE user_roles SET role_id=" + teacherRoleId + " WHERE user_id=" + studentUserId);
                 mockMvc.perform(get("/api/exam-sessions/available").with(
                                 org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
                                                 .jwt()
                                                 .jwt(j -> j.subject(jwt()))))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
+        }
+
+        @Test
+        void availableReturns403NoRolesAtAll() throws Exception {
+                long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('nr','nr@t.com','h','NR')");
+                // No user_roles row at all → no effective permissions → deny-by-default 403.
+                mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(u)))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
         }
@@ -213,7 +224,9 @@ class AttemptHttpIntegrationTests {
         }
 
         @Test
-        void startReturns403WrongRole() throws Exception {
+        void startAllowsTeacherRole() throws Exception {
+                // Dual capability (V16): TEACHER role now carries ATTEMPT_START — one
+                // account can be creator and learner.
                 long teacherRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("UPDATE user_roles SET role_id=" + teacherRoleId + " WHERE user_id=" + studentUserId);
                 mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(
@@ -222,8 +235,8 @@ class AttemptHttpIntegrationTests {
                                                 .jwt(j -> j.subject(jwt())))
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{}"))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.attemptId").isNumber());
         }
 
         @Test
@@ -282,36 +295,41 @@ class AttemptHttpIntegrationTests {
         // === R4 Missing MockMvc cases ===
 
         @Test
-        void availableReturns403InactiveProfile() throws Exception {
-                jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
-                mockMvc.perform(get("/api/exam-sessions/available").with(
-                                org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
-                                                .jwt()
-                                                .jwt(j -> j.subject(jwt()))))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+        void availableIgnoresProfileEnrollmentStatus() throws Exception {
+                // User-based model (issue #4 P0-1): StudentProfile enrollment status
+                // no longer gates PUBLIC session availability.
+                for (String status : new String[] { "INACTIVE", "GRADUATED", "WITHDRAWN" }) {
+                        jdbc.update("UPDATE student_profiles SET enrollment_status='" + status + "'");
+                        mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
+                                        .andExpect(status().isOk())
+                                        .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
+                }
         }
 
         @Test
-        void availableReturns403GraduatedProfile() throws Exception {
-                jdbc.update("UPDATE student_profiles SET enrollment_status='GRADUATED'");
-                mockMvc.perform(get("/api/exam-sessions/available").with(
-                                org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
-                                                .jwt()
-                                                .jwt(j -> j.subject(jwt()))))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+        void classRestrictedSessionHiddenWithoutClassMembership() throws Exception {
+                jdbc.update("UPDATE exam_sessions SET visibility='CLASS_RESTRICTED' WHERE id=" + sessionId);
+                mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.items").isEmpty());
         }
 
         @Test
-        void availableReturns403WithdrawnProfile() throws Exception {
-                jdbc.update("UPDATE student_profiles SET enrollment_status='WITHDRAWN'");
-                mockMvc.perform(get("/api/exam-sessions/available").with(
-                                org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
-                                                .jwt()
-                                                .jwt(j -> j.subject(jwt()))))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+        void classRestrictedSessionVisibleToClassroomMember() throws Exception {
+                jdbc.update("UPDATE exam_sessions SET visibility='CLASS_RESTRICTED' WHERE id=" + sessionId);
+                long tpId = jdbc.queryForObject("SELECT id FROM teacher_profiles WHERE user_id=" + studentUserId,
+                                Long.class);
+                long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId,
+                                Long.class);
+                long classroom = insert("INSERT INTO classrooms (school_id, owner_teacher_id, code, name) VALUES ("
+                                + school + "," + tpId + ",'C1','Class 1')");
+                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES (" + classroom + ","
+                                + studentUserId + ")");
+                jdbc.update("INSERT INTO exam_session_classes (school_id, exam_session_id, classroom_id) VALUES ("
+                                + school + "," + sessionId + "," + classroom + ")");
+                mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
         }
 
         @Test
@@ -463,14 +481,15 @@ class AttemptHttpIntegrationTests {
         // === R7: missing-profile / SYSTEM_ADMIN / hidden-status HTTP edges ===
 
         @Test
-        void availableReturns404MissingStudentProfile() throws Exception {
+        void availableAllowsUserWithoutStudentProfile() throws Exception {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mp2','mp2@t.com','h','MP2')");
                 long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-                // STUDENT role + EXAM_SESSION_READ permission, but no StudentProfile → 404.
+                // STUDENT role + EXAM_SESSION_READ, no StudentProfile → public learner,
+                // allowed (issue #4 P0-1: profile is optional provenance).
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(u)))
-                                .andExpect(status().isNotFound())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
         }
 
         @Test
@@ -502,15 +521,16 @@ class AttemptHttpIntegrationTests {
         }
 
         @Test
-        void startReturns404MissingStudentProfile() throws Exception {
+        void startAllowsUserWithoutStudentProfile() throws Exception {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sp2','sp2@t.com','h','SP2')");
                 long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
+                // PUBLIC session + STUDENT role: profile-less public learner may start.
                 mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(jwtWithSubject(u))
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{}"))
-                                .andExpect(status().isNotFound())
-                                .andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.attemptId").isNumber());
         }
 
         private org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor jwtWithSubject(

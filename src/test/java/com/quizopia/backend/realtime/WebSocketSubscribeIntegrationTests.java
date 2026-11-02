@@ -93,7 +93,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
             assertThat(received).hasSize(1);
             assertThat(received.get(0)).contains("SERVER_TIME_SYNC").contains("serverTime")
                     .doesNotContain("sessionId").doesNotContain("attemptId")
-                    .doesNotContain("studentProfileId").doesNotContain("activeCount")
+                    .doesNotContain("userId").doesNotContain("studentProfileId").doesNotContain("activeCount")
                     .doesNotContain("answerKey").doesNotContain("score");
         }
     }

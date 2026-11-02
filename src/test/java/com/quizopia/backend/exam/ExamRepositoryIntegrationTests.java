@@ -122,8 +122,10 @@ class ExamRepositoryIntegrationTests {
     void examCreatedByUserPagingAndFilter() {
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "CR1", "Alpha"));
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "CR2", "Beta"));
+        Long workspaceId = jdbc.queryForObject(
+                "SELECT workspace_id FROM exams WHERE code = 'CR1'", Long.class);
         var page = examRepo.findCreatedByUser(userId, "alpha", null, null,
-                org.springframework.data.domain.PageRequest.of(0, 10));
+                List.of(workspaceId), org.springframework.data.domain.PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isEqualTo(1);
         assertThat(page.getContent().get(0).getCode()).isEqualTo("CR1");
     }

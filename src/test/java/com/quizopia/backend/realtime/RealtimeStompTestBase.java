@@ -169,7 +169,15 @@ public abstract class RealtimeStompTestBase {
                 .isInstanceOf(java.util.concurrent.TimeoutException.class);
     }
 
-    /** Creates a teacher with a school + PUBLISHED exam + an OPEN session they own; returns the sessionId. */
+    /**
+     * Creates a teacher with a school + PUBLISHED exam + an OPEN session they own; returns the sessionId.
+     *
+     * <p>Workspace-membership authorization (issue #4 P0-2): the exam lives in the school's
+     * ORGANIZATION workspace (resolved by the V11 trigger from {@code school_id}). The session
+     * creator may subscribe the teacher topic only with a valid ACTIVE workspace membership, so the
+     * fixture inserts one explicitly (the V10 membership backfill ran at migration time, before this
+     * post-migration school/teacher existed).
+     */
     protected long createTeacherOwnedOpenSession(String tag) {
         long teacherId = insertUserWithRole(tag, "TEACHER");
         long school = ins("INSERT INTO schools (code, name) VALUES ('" + tag + "S','Sch')");
@@ -177,6 +185,9 @@ public abstract class RealtimeStompTestBase {
         long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
         ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherId + "," + school + ",'TC" + tag + "')");
         long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'E','E')");
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "VALUES ((SELECT workspace_id FROM exams WHERE id=" + exam + ")," + teacherId + ",'EDITOR','ACTIVE') "
+                + "ON CONFLICT DO NOTHING");
         jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=" + exam);
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'B','B')");

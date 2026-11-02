@@ -55,7 +55,7 @@ public class FailingRealtimePublisher extends RealtimePublisher {
 
     @Override
     public void sendToSessionTopic(Long sessionId, RealtimeEventType type, Long attemptId,
-                                   Long studentProfileId, Instant occurredAt, Long activeCount) {
+                                   Long userId, Long studentProfileId, Instant occurredAt, Long activeCount) {
         boolean shouldFail = false;
         BiPredicate<RealtimeEventType, Long> p = failPredicate;
         if (p != null && p.test(type, sessionId)) {
@@ -68,6 +68,6 @@ public class FailingRealtimePublisher extends RealtimePublisher {
             throw new RuntimeException("test-injected outbound failure for " + type
                     + " :: " + SENSITIVE_MARKER);
         }
-        super.sendToSessionTopic(sessionId, type, attemptId, studentProfileId, occurredAt, activeCount);
+        super.sendToSessionTopic(sessionId, type, attemptId, userId, studentProfileId, occurredAt, activeCount);
     }
 }

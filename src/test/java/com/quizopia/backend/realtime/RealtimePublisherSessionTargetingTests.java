@@ -142,6 +142,7 @@ class RealtimePublisherSessionTargetingTests {
         assertThat(env.serverTime()).isEqualTo(Instant.parse("2026-07-05T00:00:00Z"));
         assertThat(env.sessionId()).isNull();
         assertThat(env.attemptId()).isNull();
+        assertThat(env.userId()).isNull();
         assertThat(env.studentProfileId()).isNull();
         assertThat(env.activeCount()).isNull();
     }

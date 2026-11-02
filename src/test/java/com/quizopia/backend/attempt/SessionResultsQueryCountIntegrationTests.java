@@ -125,6 +125,11 @@ class SessionResultsQueryCountIntegrationTests {
         long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacher + "," + school + ",'TC" + tag + n + "')");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','B')");
         long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),1)");
+        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
+        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT workspace_id, " + teacher + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
+                + " ON CONFLICT DO NOTHING");
         ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacher + ")");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + teacher + ")");

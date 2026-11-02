@@ -110,6 +110,8 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
             assertThat(java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ACTIVE_COUNT_CHANGED.name().equals(e.eventType())).count()).isEqualTo(1L);
             RealtimeEventEnvelope startedEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ATTEMPT_STARTED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(startedEv.attemptId()).isNotNull();
+            assertThat(startedEv.userId()).as("user-based attempt identity (issue #4 P0-1)").isEqualTo(studentId);
+            assertThat(startedEv.studentProfileId()).as("legacy profile provenance still carried").isNotNull();
             RealtimeEventEnvelope countEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ACTIVE_COUNT_CHANGED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(countEv.attemptId()).isNull();
             assertThat(attemptCount()).isEqualTo(attemptsBefore + 1);
@@ -307,9 +309,11 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
     private static void assertNoLeak(List<byte[]> payloads) {
         String joined = payloads.stream().map(p -> new String(p, java.nio.charset.StandardCharsets.UTF_8))
                 .reduce("", String::concat);
+        // userId is the primary attempt-owner identity on ATTEMPT_* events (issue #4 P0-1) and is
+        // therefore allowed; every other identity/answer/grading field remains forbidden.
         assertThat(joined).doesNotContain("answerPayload").doesNotContain("answerKey")
                 .doesNotContain("isCorrect").doesNotContain("score").doesNotContain("grade")
-                .doesNotContain("studentCode").doesNotContain("username").doesNotContain("userId")
+                .doesNotContain("studentCode").doesNotContain("username").doesNotContain("email")
                 .doesNotContain("submissionIdempotencyKey").doesNotContain("clientInstanceId")
                 .doesNotContain("schoolId");
     }

@@ -285,12 +285,14 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsMissingStudentRole() {
+        void startAllowsTeacherRole() {
+                // Dual capability (V16): TEACHER role carries ATTEMPT_START — the same
+                // account can be creator and learner.
                 long teacherRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("UPDATE user_roles SET role_id=" + teacherRole + " WHERE user_id=" + studentUserId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class);
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         // ============================================================
@@ -321,22 +323,20 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void availableRejectsInactiveProfile() {
+        void availableIgnoresInactiveProfile() {
+                // Profile enrollment status no longer gates availability (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.getAvailableSessions(studentUserId))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
+                assertThat(resp.items().stream().anyMatch(i -> i.sessionId().equals(sessionId))).isTrue();
         }
 
         @Test
-        void startRejectsGraduatedProfile() {
+        void startAllowsGraduatedProfile() {
+                // Profile enrollment status no longer gates PUBLIC attempts (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='GRADUATED' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         @Test
@@ -460,13 +460,12 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsWithdrawnProfile() {
+        void startAllowsWithdrawnProfile() {
+                // Profile enrollment status no longer gates PUBLIC attempts (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='WITHDRAWN' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         @Test

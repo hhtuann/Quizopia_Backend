@@ -96,7 +96,7 @@ class ServerTimeSyncLifecycleIntegrationTests extends RealtimeStompTestBase {
             assertThat(received.get(0)).contains("SERVER_TIME_SYNC")
                     .contains("\"eventId\"").contains("\"occurredAt\"").contains("\"serverTime\"")
                     .doesNotContain("\"sessionId\"").doesNotContain("\"attemptId\"")
-                    .doesNotContain("\"studentProfileId\"").doesNotContain("\"activeCount\"")
+                    .doesNotContain("\"userId\"").doesNotContain("\"studentProfileId\"").doesNotContain("\"activeCount\"")
                     .doesNotContain("\"answerKey\"").doesNotContain("\"score\"");
         }
     }

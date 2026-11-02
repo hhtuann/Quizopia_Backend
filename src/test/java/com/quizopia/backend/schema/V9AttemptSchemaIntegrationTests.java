@@ -86,11 +86,12 @@ class V9AttemptSchemaIntegrationTests {
                         + "('1','2','3','4','5','6','7','8','9')", Integer.class);
         assertThat(n).isEqualTo(9);
         // Phase 1 Task A adds V10–V12 (workspace foundation) and Task B adds
-        // V13–V15 (exam redesign); latest applied is 15.
+        // V13–V15 (exam redesign); issue #4 P0-1 adds V16 (user-based
+        // attempts); latest applied is 16.
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("15");
+        assertThat(current).isEqualTo("16");
     }
 
     @Test
@@ -155,11 +156,12 @@ class V9AttemptSchemaIntegrationTests {
     @Test
     void namedConstraintsExist() {
         for (String name : new String[]{
-                // fk_attempts_student_school was DROPPED by V15: PUBLIC sessions are
-                // platform-wide, so an attempt's school may differ from the profile school.
+                // fk_attempts_student_school was DROPPED by V15 (PUBLIC sessions are
+                // platform-wide) and uk_attempts_session_student_number was REPLACED by
+                // uk_attempts_session_user_number in V16 (user-based attempts, issue #4 P0-1).
                 "fk_attempts_session_school", "fk_attempts_user",
                 "chk_attempts_status", "chk_attempts_number", "chk_attempts_deadline",
-                "chk_attempts_submission_invariant", "uk_attempts_session_student_number",
+                "chk_attempts_submission_invariant", "uk_attempts_session_user_number",
                 "fk_attempt_questions_attempt", "fk_attempt_questions_exam",
                 "chk_attempt_questions_type", "uk_attempt_questions_attempt_id",
                 "fk_attempt_answers_attempt", "fk_attempt_answers_question_attempt",
@@ -182,8 +184,12 @@ class V9AttemptSchemaIntegrationTests {
     @Test
     void namedIndexesExist() {
         for (String name : new String[]{
-                "uk_attempts_one_active_per_session_student", "uk_attempts_student_submit_key",
-                "idx_attempts_session_status", "idx_attempts_student", "idx_attempts_session_student",
+                // V16 moved uniqueness from student_profile_id to user_id:
+                // uk_attempts_one_active_per_session_student → uk_attempts_one_active_per_session_user,
+                // uk_attempts_student_submit_key → uk_attempts_user_submit_key.
+                "uk_attempts_one_active_per_session_user", "uk_attempts_user_submit_key",
+                "idx_attempts_session_status", "idx_attempts_user", "idx_attempts_student",
+                "idx_attempts_session_student",
                 "idx_attempt_questions_exam"}) {
             assertThat(indexExists(name))
                     .as("index %s must exist", name).isTrue();
@@ -306,6 +312,72 @@ class V9AttemptSchemaIntegrationTests {
         newAttempt(session, studentProfileId, 1);
         long a2 = newAttempt(session, sp2, 1);
         assertThat(a2).isPositive();
+    }
+
+    // ============================================================
+    // GROUP 3b — V16 user-based attempt identity (issue #4 P0-1)
+    // ============================================================
+
+    @Test
+    void v16ProfilelessUserAttemptAccepted() {
+        // student_profile_id is nullable legacy provenance: a public (profile-less) user
+        // may own an attempt with an explicit user_id and NO profile.
+        long exam = newExam("PU");
+        long session = newOpenSession(exam, "PU");
+        long pub = insert("INSERT INTO users (username, email, password_hash, display_name) "
+                + "VALUES ('pub','pub@t.com','h','PUB')");
+        long id = insert("INSERT INTO attempts (school_id, exam_session_id, user_id, "
+                + "attempt_number, started_at, deadline_at) VALUES (" + schoolId + "," + session
+                + "," + pub + ",1,now(),now()+interval '1 hour')");
+        assertThat(id).isPositive();
+        Integer storedUser = jdbc.queryForObject(
+                "SELECT user_id FROM attempts WHERE id=" + id, Integer.class);
+        assertThat(storedUser).isEqualTo((int) pub);
+    }
+
+    @Test
+    void v16ProfilelessDuplicateSessionUserNumberRejected() {
+        // V16 uniqueness is (exam_session_id, user_id, attempt_number) even for
+        // profile-less users with an explicit user_id.
+        long exam = newExam("UU");
+        long session = newOpenSession(exam, "UU");
+        long pub = insert("INSERT INTO users (username, email, password_hash, display_name) "
+                + "VALUES ('puu','puu@t.com','h','PUU')");
+        insert("INSERT INTO attempts (school_id, exam_session_id, user_id, "
+                + "attempt_number, started_at, deadline_at) VALUES (" + schoolId + "," + session
+                + "," + pub + ",1,now(),now()+interval '1 hour')");
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO attempts (school_id, exam_session_id, user_id, "
+                        + "attempt_number, started_at, deadline_at) VALUES (" + schoolId + "," + session
+                        + "," + pub + ",1,now(),now()+interval '1 hour')"))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void v16UserIdNotNullAndProfileNullable() {
+        // user_id is the primary identity (NOT NULL since V12); student_profile_id is
+        // optional legacy provenance (nullable since V16).
+        assertThat(columnNotNull("attempts", "user_id")).isTrue();
+        assertThat(columnNotNull("attempts", "student_profile_id")).isFalse();
+    }
+
+    @Test
+    void v16TeacherRoleGainsLearnerAttemptPermissions() {
+        // Dual creator+learner capability: TEACHER gains the three learner-scoped
+        // attempt permissions (no admin powers).
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM role_permissions rp "
+                        + "JOIN roles r ON r.id = rp.role_id "
+                        + "JOIN permissions p ON p.id = rp.permission_id "
+                        + "WHERE r.code = 'TEACHER' "
+                        + "AND p.code IN ('ATTEMPT_START','ATTEMPT_ANSWER_SAVE','ATTEMPT_SUBMIT')",
+                Integer.class);
+        assertThat(n).isEqualTo(3);
+    }
+
+    private boolean columnNotNull(String table, String column) {
+        return "NO".equals(jdbc.queryForObject(
+                "SELECT is_nullable FROM information_schema.columns WHERE table_name='" + table
+                        + "' AND column_name='" + column + "'", String.class));
     }
 
     // --- Submission invariant (D25) ---

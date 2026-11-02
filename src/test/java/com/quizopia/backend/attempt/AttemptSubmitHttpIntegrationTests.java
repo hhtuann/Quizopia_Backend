@@ -150,10 +150,14 @@ class AttemptSubmitHttpIntegrationTests {
         mockMvc.perform(post(submitPath()).contentType(MediaType.APPLICATION_JSON).content(keyBody(KEY))).andExpect(status().isUnauthorized());
     }
 
-    @Test void returns403MissingRole() throws Exception {
+    @Test void returns200TeacherRole() throws Exception {
+        // Dual capability (V16): TEACHER role now carries ATTEMPT_SUBMIT, so the
+        // attempt owner can submit after switching to the TEACHER role.
         long teacherRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("UPDATE user_roles SET role_id=" + teacherRole + " WHERE user_id=" + userId);
-        assertNoInternalLeak(err(raw(keyBody(KEY)), 403, "ATTEMPT_ACCESS_DENIED"));
+        String content = mockMvc.perform(raw(keyBody(KEY))).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertNoInternalLeak(content);
     }
 
     @Test void returns403RevokedPermission() throws Exception {
@@ -178,11 +182,13 @@ class AttemptSubmitHttpIntegrationTests {
         assertNoInternalLeak(err(rawWith(other, keyBody(KEY)), 403, "ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void returns404MissingProfile() throws Exception {
+    @Test void returns403NoProfileForeignUser() throws Exception {
         long np = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + np + "," + roleId + ")");
-        mockMvc.perform(rawWith(np, keyBody(KEY))).andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+        // Public learner passes the permission gate but does not own the attempt →
+        // write op on a foreign attempt → 403 (issue #4 P0-1).
+        mockMvc.perform(rawWith(np, keyBody(KEY))).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
     }
 
     @Test void returns404MissingAttempt() throws Exception {

@@ -140,6 +140,12 @@ class V14ExamSplitMigrationStagedFlywayTest {
                     .locations("classpath:db/migration").load().migrate();
 
             try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
+                // 0. The untargeted migrate ran through V16 (user-based attempts) — the
+                //    staged attempts carry user_id (V12 backfill) so the V16 constraint
+                //    swap + verification pass on the legacy data.
+                assertThat(scalar(st, "SELECT version FROM flyway_schema_history WHERE success "
+                        + "ORDER BY installed_rank DESC LIMIT 1")).isEqualTo(16);
+
                 // 1. Exactly 3 exams for the legacy one; canonical keeps the original id.
                 Map<Long, String> examsById = new LinkedHashMap<>();
                 try (ResultSet rs = st.executeQuery(

@@ -40,11 +40,11 @@ public class SessionStatisticsService {
         sessionResultService.authorizeSessionAccess(userId, primaryRole, sessionId);
         List<SessionResultItem> best = sessionResultService.queryBestResults(sessionId);
 
-        // Counts
-        int started = countDistinct("SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ?",
+        // Counts (user-based, issue #4 P0-1)
+        int started = countDistinct("SELECT count(DISTINCT user_id) FROM attempts WHERE exam_session_id = ?",
                 sessionId);
         int submitted = countDistinct(
-                "SELECT count(DISTINCT student_profile_id) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')",
+                "SELECT count(DISTINCT user_id) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')",
                 sessionId);
         int totalAttempt = countDistinct(
                 "SELECT count(*) FROM attempts WHERE exam_session_id = ? AND status IN ('SUBMITTED','GRADED')",

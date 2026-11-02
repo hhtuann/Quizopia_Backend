@@ -64,7 +64,8 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
             // under extreme load, reorder the two sends within a transition — assert presence, not index).
             String joined = String.join("", holder.payloads);
             assertThat(joined).contains("ATTEMPT_STARTED").contains("ACTIVE_COUNT_CHANGED")
-                    .contains("\"attemptId\":" + attemptId).contains("\"studentProfileId\"")
+                    .contains("\"attemptId\":" + attemptId)
+                    .contains("\"userId\":" + studentId).contains("\"studentProfileId\"")
                     .contains("\"sessionId\":" + sessionId).contains("\"activeCount\":1");
             assertNoLeak(joined);
         }
@@ -79,7 +80,8 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
             assertThat(holder.payloads).hasSize(2);
             String joined = String.join("", holder.payloads);
             assertThat(joined).contains("ATTEMPT_SUBMITTED").contains("ACTIVE_COUNT_CHANGED")
-                    .contains("\"attemptId\":" + attemptId).contains("\"activeCount\":0");
+                    .contains("\"attemptId\":" + attemptId)
+                    .contains("\"userId\":" + studentId).contains("\"activeCount\":0");
             assertNoLeak(joined);
         }
     }
@@ -128,7 +130,7 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
             assertThat(eventLatch.await(20, TimeUnit.SECONDS)).isTrue();
             assertThat(payloads).hasSize(1);
             assertThat(payloads.get(0)).contains("SESSION_OPENED").contains("\"sessionId\":" + schedSession)
-                    .doesNotContain("attemptId").doesNotContain("studentProfileId").doesNotContain("activeCount");
+                    .doesNotContain("attemptId").doesNotContain("userId").doesNotContain("studentProfileId").doesNotContain("activeCount");
         }
     }
 
@@ -172,10 +174,13 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
     }
 
     private void assertNoLeak(String joined) {
+        // userId is the primary attempt-owner identity on ATTEMPT_* events (issue #4 P0-1) and is
+        // therefore allowed; every other identity/answer/grading field remains forbidden.
         assertThat(joined).doesNotContain("answerPayload").doesNotContain("answerKey")
                 .doesNotContain("expectedAnswer").doesNotContain("isCorrect").doesNotContain("score")
-                .doesNotContain("grade").doesNotContain("studentCode").doesNotContain("userId")
-                .doesNotContain("username").doesNotContain("submissionIdempotencyKey")
+                .doesNotContain("grade").doesNotContain("studentCode")
+                .doesNotContain("username").doesNotContain("email")
+                .doesNotContain("submissionIdempotencyKey")
                 .doesNotContain("clientInstanceId").doesNotContain("schoolId");
     }
 

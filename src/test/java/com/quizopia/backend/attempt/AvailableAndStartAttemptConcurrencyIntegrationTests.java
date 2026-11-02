@@ -344,6 +344,11 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
             long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
                     + "published_at, total_points) VALUES ("
                     + sch + "," + subj + "," + tp + ",'E" + s + "','t','PUBLISHED',now(),10)");
+            // ORGANIZATION-workspace exam (school-based insert): the session creator needs
+            // an ACTIVE workspace membership to close/block the session (issue #4 P0-2).
+            jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                    + "SELECT workspace_id, " + tu + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + examId
+                    + " ON CONFLICT DO NOTHING");
             insert(
                     "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
                             + sch + "," + examId + ",1,'PUBLISHED',10,now()," + tu + ")");

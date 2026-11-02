@@ -90,25 +90,26 @@ public class AttemptService {
     // ============================================================
 
     public AvailableSessionsResponse getAvailableSessions(Long userId) {
-        StudentProfile profile = auth.requireStudentWithPermission(userId, "EXAM_SESSION_READ");
+        auth.requireLearnerWithPermission(userId, "EXAM_SESSION_READ");
         Instant now = Instant.now(clock);
-        List<AvailableSessionItem> items = queryAvailable(userId, profile.getId(), now);
+        List<AvailableSessionItem> items = queryAvailable(userId, now);
         return new AvailableSessionsResponse(items, now);
     }
 
-    private List<AvailableSessionItem> queryAvailable(Long userId, Long studentProfileId, Instant now) {
+    private List<AvailableSessionItem> queryAvailable(Long userId, Instant now) {
         // Class-based visibility (user-based membership, issue #1 A4): a session
         // is visible if PUBLIC (platform users; Phase 1 rule, ADR-001 §2.3) OR
         // the user is a member of at least one classroom assigned to the session.
+        // Attempt counters are user-based (issue #4 P0-1).
         String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
                 + "s.duration_minutes AS duration_minutes, "
-                + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.student_profile_id = ?) AS used, "
+                + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.user_id = ?) AS used, "
                 + "act.id AS active_id, act.deadline_at AS active_deadline "
                 + "FROM exam_sessions s "
                 + "JOIN exams e ON e.id = s.exam_id "
                 + "LEFT JOIN subjects subj ON subj.id = e.subject_id "
-                + "LEFT JOIN attempts act ON act.exam_session_id = s.id AND act.student_profile_id = ? AND act.status = 'IN_PROGRESS' "
+                + "LEFT JOIN attempts act ON act.exam_session_id = s.id AND act.user_id = ? AND act.status = 'IN_PROGRESS' "
                 + "WHERE s.status IN ('SCHEDULED','OPEN') "
                 + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
                 + "  SELECT 1 FROM exam_session_classes esc "
@@ -137,7 +138,7 @@ public class AttemptService {
                     startsAt, endsAt, rs.getInt("duration_minutes"), maxAttempts,
                     used, remaining, activeId, activeDeadline, canStartNow, canResume,
                     rs.getString("visibility"));
-        }, studentProfileId, studentProfileId, userId);
+        }, userId, userId, userId);
     }
 
     // ============================================================
@@ -146,7 +147,7 @@ public class AttemptService {
 
     @Transactional
     public StartAttemptResponse startAttempt(Long userId, Long sessionId, StartAttemptRequest request) {
-        StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_START");
+        auth.requireLearnerWithPermission(userId, "ATTEMPT_START");
         Instant now = Instant.now(clock);
 
         // 1. Lock session (pessimistic write). Lock order is now session → attempt
@@ -175,15 +176,15 @@ public class AttemptService {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_OUTSIDE_WINDOW);
         }
 
-        // 5. Find active attempt under session lock.
-        Optional<Attempt> active = attemptRepo.findByExamSessionIdAndStudentProfileIdAndStatus(
-                sessionId, profile.getId(), AttemptStatus.IN_PROGRESS);
+        // 5. Find active attempt under session lock (user-based, issue #4 P0-1).
+        Optional<Attempt> active = attemptRepo.findByExamSessionIdAndUserIdAndStatus(
+                sessionId, userId, AttemptStatus.IN_PROGRESS);
         if (active.isPresent()) {
             return resumeOrRejectExpired(active.get(), now, session);
         }
 
         // 6. Create new attempt.
-        return createNewAttempt(userId, profile, session, now, request);
+        return createNewAttempt(userId, session, now, request);
     }
 
     /**
@@ -220,10 +221,10 @@ public class AttemptService {
                 true, session.getMaxAttempts(), qv);
     }
 
-    private StartAttemptResponse createNewAttempt(Long userId, StudentProfile profile, ExamSession session,
+    private StartAttemptResponse createNewAttempt(Long userId, ExamSession session,
             Instant now, StartAttemptRequest request) {
-        // MAX+1 under session lock.
-        int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), profile.getId()).orElse(0) + 1;
+        // MAX+1 under session lock (user-based, issue #4 P0-1).
+        int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), userId).orElse(0) + 1;
         // 0 = unlimited: no max-attempts check.
         if (session.getMaxAttempts() > 0 && nextNumber > session.getMaxAttempts()) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_MAX_REACHED);
@@ -241,11 +242,16 @@ public class AttemptService {
             }
         }
 
+        // Legacy provenance for school-attached attempts only (optional).
+        var profileIds = jdbc.queryForList(
+                "SELECT id FROM student_profiles WHERE user_id = ? LIMIT 1", Long.class, userId);
+        Long studentProfileId = profileIds.isEmpty() ? null : profileIds.get(0);
+
         // Wrap ENTIRE creation+snapshot in error boundary (Fix B).
         Attempt attempt;
         try {
             attempt = Attempt.start(
-                    session.getSchoolId(), session.getId(), userId, profile.getId(),
+                    session.getId(), userId, session.getSchoolId(), studentProfileId,
                     nextNumber, now, deadline, request.clientInstanceId());
             em.persist(attempt);
             em.flush();
@@ -285,7 +291,8 @@ public class AttemptService {
         // Resume / failed starts never reach this point, so no duplicate/rollback
         // event.
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
-                RealtimeEventType.ATTEMPT_STARTED, session.getId(), attempt.getId(), profile.getId(), now));
+                RealtimeEventType.ATTEMPT_STARTED, session.getId(), attempt.getId(),
+                userId, attempt.getStudentProfileId(), now));
         return new StartAttemptResponse(attempt.getId(), session.getId(), nextNumber,
                 AttemptStatus.IN_PROGRESS.name(), now, deadline, now,
                 false, session.getMaxAttempts(), qv);

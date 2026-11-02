@@ -62,6 +62,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
             assertThat(ev.eventType()).isEqualTo(RealtimeEventType.SESSION_OPENED.name());
             assertThat(ev.sessionId()).isEqualTo(sched);
             assertThat(ev.attemptId()).isNull();
+            assertThat(ev.userId()).isNull();
             assertThat(ev.studentProfileId()).isNull();
         }
     }

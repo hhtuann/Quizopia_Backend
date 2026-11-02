@@ -142,7 +142,7 @@ class V9AttemptPersistenceIntegrationTests {
 
     @Test
     void attemptRoundTrip() {
-        Attempt a = Attempt.start(schoolId, sessionId, userId, studentProfileId, 1,
+        Attempt a = Attempt.start(sessionId, userId, schoolId, studentProfileId, 1,
                 Instant.parse("2026-07-03T07:00:00Z"), Instant.parse("2026-07-03T08:00:00Z"));
         em.persist(a);
         em.flush();
@@ -445,8 +445,8 @@ class V9AttemptPersistenceIntegrationTests {
     @Test
     void findActiveAttemptReturnsInProgress() {
         Attempt active = persistAttempt(1);
-        Optional<Attempt> found = attemptRepo.findByExamSessionIdAndStudentProfileIdAndStatus(
-                active.getExamSessionId(), active.getStudentProfileId(), AttemptStatus.IN_PROGRESS);
+        Optional<Attempt> found = attemptRepo.findByExamSessionIdAndUserIdAndStatus(
+                active.getExamSessionId(), active.getUserId(), AttemptStatus.IN_PROGRESS);
         assertThat(found).isPresent();
         assertThat(found.get().getId()).isEqualTo(active.getId());
     }
@@ -454,14 +454,14 @@ class V9AttemptPersistenceIntegrationTests {
     @Test
     void findMaxAttemptNumberEmptyReturnsEmpty() {
         long freshSession = newOpenSession("FR");
-        assertThat(attemptRepo.findMaxAttemptNumber(freshSession, studentProfileId)).isEmpty();
+        assertThat(attemptRepo.findMaxAttemptNumber(freshSession, userId)).isEmpty();
     }
 
     @Test
     void findMaxAttemptNumberReturnsMax() {
         Attempt a1 = persistSubmittedAttempt(1, "MX1");
         persistAttempt(2);
-        assertThat(attemptRepo.findMaxAttemptNumber(a1.getExamSessionId(), a1.getStudentProfileId())).contains(2);
+        assertThat(attemptRepo.findMaxAttemptNumber(a1.getExamSessionId(), a1.getUserId())).contains(2);
     }
 
     @Test
@@ -479,10 +479,10 @@ class V9AttemptPersistenceIntegrationTests {
         persistSubmittedAttempt(2, "H2");
         persistAttempt(3);
         List<Attempt> page = attemptRepo
-                .findByStudentProfileIdOrderByCreatedAtDesc(studentProfileId, PageRequest.of(0, 10))
+                .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 10))
                 .getContent();
         assertThat(page).hasSize(3);
-        assertThat(page).allMatch(a -> a.getStudentProfileId() == studentProfileId);
+        assertThat(page).allMatch(a -> a.getUserId() == userId);
     }
 
     @Test
@@ -687,7 +687,7 @@ class V9AttemptPersistenceIntegrationTests {
     private Attempt persistAttemptForSession(int number, long session, long student) {
         Long ownerUserId = jdbc.queryForObject(
                 "SELECT user_id FROM student_profiles WHERE id = " + student, Long.class);
-        Attempt a = Attempt.start(schoolId, session, ownerUserId, student, number,
+        Attempt a = Attempt.start(session, ownerUserId, schoolId, student, number,
                 Instant.now(), Instant.now().plusSeconds(3600));
         em.persist(a);
         em.flush();

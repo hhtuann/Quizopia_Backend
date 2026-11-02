@@ -70,14 +70,15 @@ class V9AttemptSchemaStagedFlywayTest {
                     .locations("classpath:db/migration")
                     .load().migrate();
 
-            // 5. Latest applied version is 15 (Task A workspace foundation V10–V12 +
-            //    Task B exam redesign V13–V15, which re-points the staged V8 chain onto exams).
+            // 5. Latest applied version is 16 (Task A workspace foundation V10–V12 +
+            //    Task B exam redesign V13–V15, which re-points the staged V8 chain onto
+            //    exams, + V16 user-based attempts).
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("15");
+                assertThat(rs.getString(1)).isEqualTo("16");
             }
 
             // 5b. The staged legacy version row was mapped by the V14 backfill.
