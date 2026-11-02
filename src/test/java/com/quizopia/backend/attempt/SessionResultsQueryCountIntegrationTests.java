@@ -83,13 +83,14 @@ class SessionResultsQueryCountIntegrationTests {
         int c50 = count(() -> sessionResultService.getSessionResults(teacherB, "TEACHER",
                 sessionOf(teacherB), 0, 100, null, null, null, null, null));
 
-        // 3 statements constant: (1) TEACHER ownership authorization check,
-        // (2) CTE count query, (3) CTE page query with LIMIT/OFFSET.
+        // 4 statements constant: (1) SYSTEM_ADMIN role check, (2) organizer/workspace
+        // authorization check (P0-R3 split the old single role gate into these two),
+        // (3) CTE count query, (4) CTE page query with LIMIT/OFFSET.
         // COUNT(*) OVER delivers attempt_count inside the page query — NO per-student count query.
         assertThat(c1)
                 .as("N=1 statement count must equal N=50 (no N+1)")
                 .isEqualTo(c50)
-                .isEqualTo(3);
+                .isEqualTo(4);
     }
 
     @Test

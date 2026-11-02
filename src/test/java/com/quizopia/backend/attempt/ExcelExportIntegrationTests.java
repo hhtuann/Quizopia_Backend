@@ -112,7 +112,14 @@ class ExcelExportIntegrationTests {
 
     @Test
     void studentDeniedExport() {
-        assertThatThrownBy(() -> exportService.export(teacherUserId, "STUDENT", sessionId))
+        // A genuine STUDENT (not the session creator, no workspace membership, no
+        // SYSTEM_ADMIN role) must be denied under the P0-R3 resource-based policy.
+        // (The fixture teacher resolves as creator + ACTIVE member, so reusing that
+        // user would now be legitimately authorized regardless of the role string.)
+        long su = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sdx" + tag + "','sdx" + tag + "@t.com','h','Student')");
+        long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + su + "," + sr + ")");
+        assertThatThrownBy(() -> exportService.export(su, "STUDENT", sessionId))
                 .isInstanceOf(AttemptException.class);
     }
 

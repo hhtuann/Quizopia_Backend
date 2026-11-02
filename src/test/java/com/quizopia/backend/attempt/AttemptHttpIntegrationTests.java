@@ -327,6 +327,12 @@ class AttemptHttpIntegrationTests {
                                 + studentUserId + ")");
                 jdbc.update("INSERT INTO exam_session_classes (school_id, exam_session_id, classroom_id) VALUES ("
                                 + school + "," + sessionId + "," + classroom + ")");
+                // P0-R2: ORGANIZATION-workspace exam → the learner also needs an ACTIVE
+                // workspace membership on top of classroom membership.
+                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                                + "SELECT e.workspace_id, " + studentUserId + ", 'MEMBER', 'ACTIVE' FROM exams e "
+                                + "WHERE e.id=(SELECT exam_id FROM exam_sessions WHERE id=" + sessionId
+                                + ") ON CONFLICT DO NOTHING");
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));

@@ -97,6 +97,11 @@ class AvailableSessionQueryCountIntegrationTests {
                 + ",'CLS" + count + "','C')");
         jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id) VALUES ("
                 + cls + "," + userId + "," + school + "," + sp + ")");
+        // P0-R2: the exam lives in an ORGANIZATION workspace, so the class member
+        // additionally needs an ACTIVE workspace membership.
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT e.workspace_id, " + userId + ", 'MEMBER', 'ACTIVE' FROM exams e "
+                + "WHERE e.id=" + exam + " ON CONFLICT DO NOTHING");
         for (int i = 0; i < count; i++) {
             long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
                     + school + "," + exam + "," + tp + ",'S" + i + "_" + count + "','S','OPEN','" + now.minusSeconds(3600) + "','"

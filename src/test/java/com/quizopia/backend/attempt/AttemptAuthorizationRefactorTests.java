@@ -207,6 +207,12 @@ class AttemptAuthorizationRefactorTests {
     private void addMemberToClassroom(long studentProfileId, long classroomId) {
         jdbc.update("INSERT INTO classroom_members (classroom_id, student_profile_id, school_id) VALUES ("
                 + classroomId + "," + studentProfileId + "," + schoolId + ")");
+        // P0-R2: the fixture exam lives in an ORGANIZATION workspace, so a CLASS_RESTRICTED
+        // member additionally needs an ACTIVE workspace membership.
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT e.workspace_id, sp.user_id, 'MEMBER', 'ACTIVE' "
+                + "FROM exams e, student_profiles sp WHERE e.id=" + examId
+                + " AND sp.id=" + studentProfileId + " ON CONFLICT DO NOTHING");
     }
 
     private long insert(String sql) {

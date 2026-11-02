@@ -865,6 +865,12 @@ class AvailableAndStartAttemptIntegrationTests {
                                 + "VALUES (" + cls + "," + memberUserId + "," + schoolId + "," + memberProfileId + ")");
                 jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
                                 + "VALUES (" + session + "," + cls + "," + schoolId + ")");
+                // P0-R2: the exam lives in an ORGANIZATION workspace, so the class member
+                // additionally needs an ACTIVE workspace membership.
+                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                                + "SELECT e.workspace_id, " + memberUserId + ", 'MEMBER', 'ACTIVE' FROM exams e "
+                                + "WHERE e.id=(SELECT exam_id FROM exam_sessions WHERE id=" + session
+                                + ") ON CONFLICT DO NOTHING");
         }
 
         private Long aqIdForQc1(Long attemptId) {
