@@ -121,30 +121,51 @@ class ResultControllerAuthorityIntegrationTests {
                 .isEqualTo(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
     }
 
-    // 5. ROLE_SYSTEM_ADMIN → ALLOWED
+    // 5. SYSTEM_ADMIN (DB-verified) → ALLOWED (explicit break-glass policy)
     @Test
     void systemAdminAllowed() {
+        long sar = jdbc.queryForObject("SELECT id FROM roles WHERE code='SYSTEM_ADMIN'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + otherTeacherUserId + "," + sar + ")");
         Jwt jwt = jwtFor(otherTeacherUserId, List.of());
         Authentication auth = auth(new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN"));
         var stats = resultController.getStatistics(jwt, auth, sessionId);
         assertThat(stats).isNotNull();
     }
 
-    // 6. ROLE_ACADEMIC_ADMIN → ALLOWED (frozen MVP scope)
+    // 6. ACADEMIC_ADMIN is workspace-scoped (issue #4 P0-R3): allowed only
+    // with an ACTIVE OWNER/ADMIN membership in the exam's workspace.
     @Test
-    void academicAdminAllowed() {
+    void academicAdminAllowedWithWorkspaceMembership() {
+        long ar = jdbc.queryForObject("SELECT id FROM roles WHERE code='ACADEMIC_ADMIN'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + otherTeacherUserId + "," + ar + ")");
+        Long wsId = jdbc.queryForObject("SELECT e.workspace_id FROM exams e "
+                + "JOIN exam_sessions s ON s.exam_id = e.id WHERE s.id = " + sessionId, Long.class);
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "VALUES (" + wsId + "," + otherTeacherUserId + ",'ADMIN','ACTIVE')");
         Jwt jwt = jwtFor(otherTeacherUserId, List.of());
         Authentication auth = auth(new SimpleGrantedAuthority("ROLE_ACADEMIC_ADMIN"));
         SessionResultService.SessionResultsPage page = resultController.getSessionResults(jwt, auth, sessionId, 0, 20, null, null, null, null, null);
         assertThat(page).isNotNull();
     }
 
-    // 7. STUDENT own attempt → ALLOWED (via getAttemptResult)
+    // 6b. ACADEMIC_ADMIN without workspace membership → DENIED (no more blanket role bypass)
+    @Test
+    void academicAdminWithoutMembershipDenied() {
+        long ar = jdbc.queryForObject("SELECT id FROM roles WHERE code='ACADEMIC_ADMIN'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + otherTeacherUserId + "," + ar + ")");
+        Jwt jwt = jwtFor(otherTeacherUserId, List.of());
+        Authentication auth = auth(new SimpleGrantedAuthority("ROLE_ACADEMIC_ADMIN"));
+        assertThatThrownBy(() -> resultController.getSessionResults(jwt, auth, sessionId, 0, 20, null, null, null, null, null))
+                .isInstanceOf(AttemptException.class)
+                .extracting(e -> ((AttemptException) e).getErrorCode())
+                .isEqualTo(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
+    }
+
+    // 7. STUDENT own attempt → ALLOWED (resource-based: attempt.user_id + ATTEMPT_READ)
     @Test
     void studentOwnAttemptAllowed() {
         Jwt jwt = jwtFor(studentUserId, List.of("STUDENT"));
-        Authentication auth = auth(new SimpleGrantedAuthority("ROLE_STUDENT"));
-        AttemptResultResponse r = resultController.getAttemptResult(jwt, auth, studentAttemptId);
+        AttemptResultResponse r = resultController.getAttemptResult(jwt, studentAttemptId);
         assertThat(r).isNotNull();
     }
 
@@ -163,8 +184,7 @@ class ResultControllerAuthorityIntegrationTests {
 
         // First student (studentUserId) tries to read other student's attempt → DENIED
         Jwt jwt = jwtFor(studentUserId, List.of("STUDENT"));
-        Authentication auth = auth(new SimpleGrantedAuthority("ROLE_STUDENT"));
-        assertThatThrownBy(() -> resultController.getAttemptResult(jwt, auth, otherAttempt))
+        assertThatThrownBy(() -> resultController.getAttemptResult(jwt, otherAttempt))
                 .isInstanceOf(AttemptException.class)
                 .extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(AttemptErrorCode.RESULT_ACCESS_DENIED);

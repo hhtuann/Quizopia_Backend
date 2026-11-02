@@ -77,7 +77,7 @@ class AttemptResultIntegrationTests {
     void ownResultHasGradingSummaryNoAnswerKey() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest(KEY));
         em.flush(); em.clear();
-        AttemptResultResponse r = resultService.getAttemptResult(studentUserId, "STUDENT", attemptId);
+        AttemptResultResponse r = resultService.getAttemptResult(studentUserId, attemptId);
         assertThat(r.attemptId()).isEqualTo(attemptId);
         assertThat(r.examSessionId()).isEqualTo(sessionId);
         assertThat(r.status()).isEqualTo("SUBMITTED");
@@ -114,7 +114,7 @@ class AttemptResultIntegrationTests {
     void unsubmittedAttemptReturnsNotSubmittedError() {
         // attempt is IN_PROGRESS (not submitted)
         try {
-            resultService.getAttemptResult(studentUserId, "STUDENT", attemptId);
+            resultService.getAttemptResult(studentUserId, attemptId);
             assertThat(false).as("should throw ATTEMPT_NOT_SUBMITTED").isTrue();
         } catch (com.quizopia.backend.attempt.exception.AttemptException e) {
             assertThat(e.getErrorCode()).isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.ATTEMPT_NOT_SUBMITTED);

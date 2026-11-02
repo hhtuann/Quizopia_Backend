@@ -156,37 +156,45 @@ public class SessionResultService {
     }
 
     /**
-     * Package-private authorization check — fail-closed: unsupported/null roles are
-     * denied.
+     * Resource-based authorization (issue #4 P0-R3) — the resolved role no
+     * longer grants blanket access:
+     * <ol>
+     *   <li>SYSTEM_ADMIN — explicit, DB-verified platform-operator break-glass
+     *       (audited policy; never a caller-supplied role string);</li>
+     *   <li>everyone else (TEACHER, ACADEMIC_ADMIN, STUDENT, unsupported/null)
+     *       — organizer check: session creator with valid workspace access, or
+     *       an ACTIVE OWNER/ADMIN member of the exam's workspace. An
+     *       ACADEMIC_ADMIN of a FOREIGN organization (or with a revoked or
+     *       absent membership) is denied.</li>
+     * </ol>
      */
     void authorizeSessionAccess(Long userId, String primaryRole, Long sessionId) {
-        if (primaryRole == null) {
+        if (isSystemAdmin(userId)) {
+            return;
+        }
+        Integer owns = jdbc.queryForObject(
+                "SELECT count(*) FROM exam_sessions s "
+                        + "JOIN exams e ON e.id = s.exam_id "
+                        + "JOIN workspaces w ON w.id = e.workspace_id "
+                        + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
+                        + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
+                        + "WHERE s.id = ? AND ("
+                        + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
+                        + "  OR wm.role IN ('OWNER','ADMIN'))",
+                Integer.class, userId, sessionId, userId);
+        if (owns == null || owns == 0) {
             throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
         }
-        switch (primaryRole) {
-            case "STUDENT" -> throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
-            case "SYSTEM_ADMIN", "ACADEMIC_ADMIN" -> {
-                /* allowed */ }
-            case "TEACHER" -> {
-                // Session creator OR exam-workspace OWNER/ADMIN — both gated
-                // on an ACTIVE membership for org workspaces (issue #4 P0-2);
-                // personal-workspace owners qualify via the workspace shape.
-                Integer owns = jdbc.queryForObject(
-                        "SELECT count(*) FROM exam_sessions s "
-                                + "JOIN exams e ON e.id = s.exam_id "
-                                + "JOIN workspaces w ON w.id = e.workspace_id "
-                                + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
-                                + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
-                                + "WHERE s.id = ? AND ("
-                                + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
-                                + "  OR wm.role IN ('OWNER','ADMIN'))",
-                        Integer.class, userId, sessionId, userId);
-                if (owns == null || owns == 0) {
-                    throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
-                }
-            }
-            default -> throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
-        }
+    }
+
+    /** DB-verified active SYSTEM_ADMIN role (not caller-supplied). */
+    private boolean isSystemAdmin(Long userId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+                        + "WHERE ur.user_id = ? AND r.code = 'SYSTEM_ADMIN' "
+                        + "AND (ur.expires_at IS NULL OR ur.expires_at > now())",
+                Integer.class, userId);
+        return count != null && count > 0;
     }
 
     /**

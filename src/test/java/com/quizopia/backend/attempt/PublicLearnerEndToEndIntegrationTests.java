@@ -168,7 +168,7 @@ class PublicLearnerEndToEndIntegrationTests {
                 assertThat(submit.status()).isEqualTo("SUBMITTED");
 
                 // Result readable by the same (profile-less) user.
-                var result = resultService.getAttemptResult(userId, "STUDENT", attemptId);
+                var result = resultService.getAttemptResult(userId, attemptId);
                 assertThat(result.attemptId()).isEqualTo(attemptId);
 
                 // History lists the attempt.

@@ -65,53 +65,66 @@ public class AttemptResultService {
                 this.jdbc = jdbc;
         }
 
-        /**
-         * Role-aware attempt result (reads persisted snapshot; no re-grading; no answer
-         * key).
-         */
-         public AttemptResultResponse getAttemptResult(Long userId, String primaryRole, Long attemptId) {
-                Attempt attempt = attemptRepo.findById(attemptId)
-                                .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
-                // Role-aware authorization
-                if ("STUDENT".equals(primaryRole)) {
-                        auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
-                        // User-based ownership (issue #4 P0-1).
-                        if (!Objects.equals(attempt.getUserId(), userId)) {
-                                throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                        }
-                } else if ("TEACHER".equals(primaryRole)) {
-                        authorizeTeacherOwnsSession(userId, attempt.getExamSessionId());
-                } else if ("SYSTEM_ADMIN".equals(primaryRole) || "ACADEMIC_ADMIN".equals(primaryRole)) {
-                        // allowed
-                } else {
-                        throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                }
-                if (attempt.getStatus() != AttemptStatus.SUBMITTED && attempt.getStatus() != AttemptStatus.GRADED) {
-                        throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_SUBMITTED);
-                }
-                Grade grade = gradeRepo.findByAttemptId(attemptId)
-                                .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
-                return buildResponse(attempt, grade, attempt.getUserId());
-        }
+         /**
+          * Resource-based attempt result (reads persisted snapshot; no re-grading;
+          * no answer key). Policy (issue #4 P0-R1/R3) — the decision does NOT
+          * branch on the caller's resolved role:
+          * <ol>
+          *   <li>OWN attempt — any authorized learner holding ATTEMPT_READ may
+          *       read their own submitted/graded attempt ({@code attempt.userId}),
+          *       regardless of TEACHER/STUDENT capability mix;</li>
+          *   <li>SYSTEM_ADMIN — explicit, audited platform-operator access
+          *       (DB-verified active role, not a caller-supplied string);</li>
+          *   <li>organizer — the session creator (with valid workspace access)
+          *       or an ACTIVE OWNER/ADMIN member of the exam's workspace.</li>
+          * </ol>
+          */
+          public AttemptResultResponse getAttemptResult(Long userId, Long attemptId) {
+                 Attempt attempt = attemptRepo.findById(attemptId)
+                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
+                 if (attempt.getUserId().equals(userId)) {
+                         auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
+                 } else if (isSystemAdmin(userId)) {
+                         // Explicit break-glass: platform operator, DB-verified.
+                 } else {
+                         authorizeOrganizerOwnsSession(userId, attempt.getExamSessionId());
+                 }
+                 if (attempt.getStatus() != AttemptStatus.SUBMITTED && attempt.getStatus() != AttemptStatus.GRADED) {
+                         throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_SUBMITTED);
+                 }
+                 Grade grade = gradeRepo.findByAttemptId(attemptId)
+                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
+                 return buildResponse(attempt, grade, attempt.getUserId());
+         }
 
-         private void authorizeTeacherOwnsSession(Long userId, Long sessionId) {
-                // Session creator OR exam-workspace OWNER/ADMIN — both gated on
-                // an ACTIVE membership for org workspaces (issue #4 P0-2);
-                // personal-workspace owners qualify via the workspace shape.
-                Integer owns = jdbc.queryForObject(
-                                "SELECT count(*) FROM exam_sessions s "
-                                                + "JOIN exams e ON e.id = s.exam_id "
-                                                + "JOIN workspaces w ON w.id = e.workspace_id "
-                                                + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
-                                                + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
-                                                + "WHERE s.id = ? AND ("
-                                                + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
-                                                + "  OR wm.role IN ('OWNER','ADMIN'))",
-                                Integer.class, userId, sessionId, userId);
-                if (owns == null || owns == 0) {
-                        throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                }
-        }
+         /** DB-verified active SYSTEM_ADMIN role (not caller-supplied). */
+         private boolean isSystemAdmin(Long userId) {
+                 Integer count = jdbc.queryForObject(
+                                 "SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+                                                 + "WHERE ur.user_id = ? AND r.code = 'SYSTEM_ADMIN' "
+                                                 + "AND (ur.expires_at IS NULL OR ur.expires_at > now())",
+                                 Integer.class, userId);
+                 return count != null && count > 0;
+         }
+
+         private void authorizeOrganizerOwnsSession(Long userId, Long sessionId) {
+                 // Session creator OR exam-workspace OWNER/ADMIN — both gated on
+                 // an ACTIVE membership for org workspaces (issue #4 P0-2/R3);
+                 // personal-workspace owners qualify via the workspace shape.
+                 Integer owns = jdbc.queryForObject(
+                                 "SELECT count(*) FROM exam_sessions s "
+                                                 + "JOIN exams e ON e.id = s.exam_id "
+                                                 + "JOIN workspaces w ON w.id = e.workspace_id "
+                                                 + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
+                                                 + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
+                                                 + "WHERE s.id = ? AND ("
+                                                 + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
+                                                 + "  OR wm.role IN ('OWNER','ADMIN'))",
+                                 Integer.class, userId, sessionId, userId);
+                 if (owns == null || owns == 0) {
+                         throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
+                 }
+         }
 
         /**
          * Student own BEST result for a session (RESULT_NOT_FOUND if no

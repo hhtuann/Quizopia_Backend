@@ -97,9 +97,11 @@ public class AttemptService {
     }
 
     private List<AvailableSessionItem> queryAvailable(Long userId, Instant now) {
-        // Class-based visibility (user-based membership, issue #1 A4): a session
-        // is visible if PUBLIC (platform users; Phase 1 rule, ADR-001 §2.3) OR
-        // the user is a member of at least one classroom assigned to the session.
+        // Visibility (issue #1 A4 + #4 P0-R2): PUBLIC = platform users;
+        // CLASS_RESTRICTED = user is a member of an assigned classroom AND —
+        // when the exam lives in an ORGANIZATION workspace — still holds an
+        // ACTIVE membership there (a lingering classroom row does not survive
+        // org revocation). Personal-workspace exams need no membership.
         // Attempt counters are user-based (issue #4 P0-1).
         String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
@@ -114,7 +116,11 @@ public class AttemptService {
                 + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
                 + "  SELECT 1 FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                + "  WHERE esc.exam_session_id = s.id AND cm.user_id = ?)) "
+                + "  WHERE esc.exam_session_id = s.id AND cm.user_id = ? "
+                + "  AND ("
+                + "    EXISTS (SELECT 1 FROM workspaces wp WHERE wp.id = e.workspace_id AND wp.workspace_type = 'PERSONAL')"
+                + "    OR EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = e.workspace_id"
+                + "               AND m.user_id = ? AND m.status = 'ACTIVE')))) "
                 + "ORDER BY s.starts_at ASC, s.id ASC";
         return jdbc.query(sql, (rs, n) -> {
             int maxAttempts = rs.getInt("max_attempts");
@@ -138,7 +144,7 @@ public class AttemptService {
                     startsAt, endsAt, rs.getInt("duration_minutes"), maxAttempts,
                     used, remaining, activeId, activeDeadline, canStartNow, canResume,
                     rs.getString("visibility"));
-        }, userId, userId, userId);
+        }, userId, userId, userId, userId);
     }
 
     // ============================================================
@@ -188,13 +194,15 @@ public class AttemptService {
     }
 
     /**
-     * Visibility-based eligibility (issue #1 A2/A4 + issue #2):
+     * Visibility-based eligibility (issue #1 A2/A4 + #4 P0-R2):
      * <ul>
      *   <li>PUBLIC: any ACTIVE platform user with attempt capability — the
      *       same-school assumption is retired (ADR-001 §2.3 Phase 1 rule).</li>
      *   <li>CLASS_RESTRICTED: user is a member of at least one classroom
      *       assigned to the session via {@code exam_session_classes}
-     *       (user-based membership).</li>
+     *       (user-based membership) AND, for ORGANIZATION-workspace exams,
+     *       still holds an ACTIVE workspace membership — a lingering
+     *       classroom row does not survive org SUSPENDED/REMOVED.</li>
      * </ul>
      */
     private boolean isEligible(Long userId, ExamSession session) {
@@ -204,8 +212,13 @@ public class AttemptService {
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM exam_session_classes esc "
                         + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ?",
-                Integer.class, session.getId(), userId);
+                        + "JOIN exams e ON e.id = ? "
+                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ? "
+                        + "AND ("
+                        + "  EXISTS (SELECT 1 FROM workspaces wp WHERE wp.id = e.workspace_id AND wp.workspace_type = 'PERSONAL')"
+                        + "  OR EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = e.workspace_id"
+                        + "             AND m.user_id = ? AND m.status = 'ACTIVE'))",
+                Integer.class, session.getExamId(), session.getId(), userId, userId);
         return cnt != null && cnt > 0;
     }
 

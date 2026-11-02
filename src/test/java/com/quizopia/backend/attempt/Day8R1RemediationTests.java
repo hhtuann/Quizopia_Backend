@@ -92,7 +92,7 @@ class Day8R1RemediationTests {
     void teacherOwnerCanViewAttemptResult() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1-key-" + tag));
         em.flush(); em.clear();
-        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, "TEACHER", attemptId);
+        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, attemptId);
         assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
@@ -103,7 +103,7 @@ class Day8R1RemediationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + otherTeacher + "," + tr + ")");
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1b-key-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(otherTeacher, "TEACHER", attemptId))
+        assertThatThrownBy(() -> resultService.getAttemptResult(otherTeacher, attemptId))
                 .isInstanceOf(AttemptException.class);
     }
 
@@ -114,7 +114,7 @@ class Day8R1RemediationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + admin + "," + ar + ")");
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1c-key-" + tag));
         em.flush(); em.clear();
-        AttemptResultResponse r = resultService.getAttemptResult(admin, "SYSTEM_ADMIN", attemptId);
+        AttemptResultResponse r = resultService.getAttemptResult(admin, attemptId);
         assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
@@ -174,35 +174,42 @@ class Day8R1RemediationTests {
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.INVALID_RESULT_QUERY);
     }
 
-    // R2: Fail-closed — unsupported/null roles denied
+    // R2: Fail-closed — unrelated callers denied (resource-based policy; the
+    // resolved role string no longer participates in the decision)
     @Test
-    void unsupportedRoleDeniedAttemptResult() {
+    void unrelatedCallerDeniedAttemptResult() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r2unsup-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(teacherUserId, "GHOST_ROLE", attemptId))
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('str" + tag + "','str" + tag + "@t.com','h','Stranger')");
+        assertThatThrownBy(() -> resultService.getAttemptResult(stranger, attemptId))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.RESULT_ACCESS_DENIED);
     }
 
     @Test
-    void nullRoleDeniedAttemptResult() {
+    void organizerAllowedWithoutRoleString() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r2null-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(teacherUserId, null, attemptId))
-                .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
-                .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.RESULT_ACCESS_DENIED);
+        // The session organizer may read the attempt result regardless of any
+        // role resolution (resource-based path).
+        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, attemptId);
+        assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
     @Test
-    void nullRoleDeniedSessionResults() {
-        assertThatThrownBy(() -> sessionResultService.getSessionResults(teacherUserId, null, sessionId, 0, 20, null, null, null, null, null))
+    void strangerDeniedSessionResults() {
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sr2" + tag + "','sr2" + tag + "@t.com','h','Stranger2')");
+        assertThatThrownBy(() -> sessionResultService.getSessionResults(stranger, null, sessionId, 0, 20, null, null, null, null, null))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
     }
 
     @Test
-    void unsupportedRoleDeniedSessionResults() {
-        assertThatThrownBy(() -> sessionResultService.getSessionResults(teacherUserId, "GHOST", sessionId, 0, 20, null, null, null, null, null))
+    void unsupportedRoleStillDeniedForNonOrganizer() {
+        // Resource-based policy (issue #4 P0-R3): the role string is ignored;
+        // a caller with no organizer relationship is denied regardless.
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('gh" + tag + "','gh" + tag + "@t.com','h','Ghost')");
+        assertThatThrownBy(() -> sessionResultService.getSessionResults(stranger, "GHOST", sessionId, 0, 20, null, null, null, null, null))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
     }

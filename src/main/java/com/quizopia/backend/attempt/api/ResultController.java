@@ -43,13 +43,16 @@ public class ResultController {
         this.exportService = exportService;
     }
 
-    /** Role-aware attempt result detail (service enforces ownership per role). */
+    /**
+     * Resource-based attempt result detail (issue #4 P0-R1): own attempt by
+     * user ownership + ATTEMPT_READ permission; organizer path via workspace
+     * policy; SYSTEM_ADMIN explicit (DB-verified). The resolved role no
+     * longer participates in the decision.
+     */
     @GetMapping("/api/attempts/{attemptId}/result")
     public AttemptResultResponse getAttemptResult(@AuthenticationPrincipal Jwt jwt,
-            Authentication authentication,
             @PathVariable Long attemptId) {
-        return resultService.getAttemptResult(Long.valueOf(jwt.getSubject()),
-                EffectiveRoleResolver.resolve(authentication.getAuthorities()), attemptId);
+        return resultService.getAttemptResult(Long.valueOf(jwt.getSubject()), attemptId);
     }
 
     /** Student own BEST result for a session. */
