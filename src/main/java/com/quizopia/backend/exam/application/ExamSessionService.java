@@ -173,12 +173,7 @@ public class ExamSessionService {
         String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
 
         Instant now = Instant.now();
-        sessionRepository.bulkLazyCloseExpiredOpenSessions(
-                userId, ExamSessionStatus.OPEN, ExamSessionStatus.CLOSED, now);
-        sessionRepository.bulkLazyOpenScheduledSessions(
-                userId, ExamSessionStatus.SCHEDULED, ExamSessionStatus.OPEN, now);
-        sessionRepository.bulkCloseExpiredScheduledSessions(
-                userId, ExamSessionStatus.SCHEDULED, ExamSessionStatus.CLOSED, now);
+        sessionRepository.refreshLifecycleForCreator(userId, now);
 
         // P0-2 (issue #4): only sessions in workspaces the user may still
         // access (personal + ACTIVE-membership organizations) are listed.
@@ -190,6 +185,30 @@ public class ExamSessionService {
         Page<ExamSession> sessions = sessionRepository.findCreatedByUser(
                 userId, trimmedSearch, statusFilter, examId, accessibleWorkspaceIds, pageable);
 
+        return sessionListResponse(sessions, pageable);
+    }
+
+    @Transactional // not readOnly — lazy lifecycle writes
+    public PageResponse<ExamSessionListItem> listSessionsForExam(
+            Long userId, String search, String statusStr, Long examId,
+            int page, int size, String sort) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
+        Exam parent = examRepository.findById(examId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
+        try {
+            workspaceAccessService.requireResourceRead(userId, parent.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
+        }
+        ExamSessionStatus statusFilter = parseSessionStatusFilter(statusStr);
+        PageRequest pageable = safeSessionPageable(page, size, sort);
+        String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
+        sessionRepository.refreshLifecycleForExam(examId, Instant.now());
+        return sessionListResponse(sessionRepository.findForExam(examId, trimmedSearch, statusFilter, pageable),
+                pageable);
+    }
+
+    private PageResponse<ExamSessionListItem> sessionListResponse(Page<ExamSession> sessions, PageRequest pageable) {
         List<Long> sessionIds = sessions.getContent().stream().map(ExamSession::getId).toList();
         Map<Long, Long> participantCounts = batchParticipantCounts(sessionIds);
 

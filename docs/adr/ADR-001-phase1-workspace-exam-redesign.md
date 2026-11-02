@@ -244,3 +244,66 @@ attributable to Phase 1 work, to be re-checked at the end):
 4. **Baseline note:** the third pre-existing baseline failure (detail query count 7-vs-8) passes
    under the user-based model — the profile lookup is gone (stable count 6). The other two
    baseline failures remain unchanged (see §10).
+
+## 13. Issue #4 P1 checkpoint A — completion evidence (2026-11-03)
+
+**Checkpoint A: complete.** Independent review outcome supplied in the checkpoint handoff:
+**READY**, after the shared ordered-CTE lifecycle refresh fix. This records checkpoint A only;
+checkpoints **B/C remain open and unverified**. No backend plan document exists to synchronize.
+
+### Decisions verified
+
+- **Duplicate grading policy:** duplication previously reset nondefault `tfMatrixScoring` to the
+  draft default. `ExamService.duplicateExam` now copies the source policy through
+  `Exam.copyGradingPolicyFrom`, using a deep JSON copy. Regression coverage checks independent
+  policy/content JSON, preserved snapshots/provenance, an untouched source, no copied sessions or
+  attempts, and draft totals recomputed at publish.
+- **Nested session-list scope:** the nested list previously reused the creator-only list and hid
+  other creators' sessions. `listSessionsForExam` now enforces permission and parent-exam workspace
+  read access, then lists that exam's sessions across creators with search/status filters,
+  pagination and sorting. Outsiders and revoked members remain denied; legacy
+  `GET /api/exam-sessions/my` remains creator-only, including with an `examId` filter.
+- **Shared lifecycle lock protocol:** both creator-scoped and exam-scoped lists refresh effective
+  lifecycle state through the same materialized eligible-row CTE, locking rows in ascending ID
+  order before updating them. Neither path uses `SKIP LOCKED`. The concurrency regression covers
+  overlapping entry points, contention on the lowest ID, lifecycle timestamps and repeat-refresh
+  idempotence.
+
+### Verification record
+
+Reproduction command (run from `backend`):
+
+```powershell
+.\mvnw.cmd test "-Dtest=P1CheckpointAIntegrationTests,ExamServiceIntegrationTests,ExamSessionServiceIntegrationTests,ExamSessionListConcurrencyIntegrationTests,RevokedMembershipExamSessionIntegrationTests"
+```
+
+Existing `target/surefire-reports/com.quizopia.backend.exam.<suite>.txt` and matching
+`TEST-com.quizopia.backend.exam.<suite>.xml` were inspected for all five suites:
+
+| Suite | Tests | Failures | Errors | Skipped |
+|---|---:|---:|---:|---:|
+| `P1CheckpointAIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamServiceIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamSessionServiceIntegrationTests` | 21 | 0 | 0 | 0 |
+| `ExamSessionListConcurrencyIntegrationTests` | 1 | 0 | 0 | 0 |
+| `RevokedMembershipExamSessionIntegrationTests` | 11 | 0 | 0 | 0 |
+| **Total** | **75** | **0** | **0** | **0** |
+
+The XML `test` property confirms the same five-suite selection (in a different order).
+This documentation review inspected existing results; it did not rerun Maven or establish a
+full-suite result.
+
+Failure-to-pass trail:
+
+- Initial regression artifact: temporary `p1-a-before.log` under
+  `C:\Users\GIGABYTE\AppData\Local\Temp\opencode` — inspected summary: **16 tests, 12 failures,
+  0 errors, 0 skipped**, `BUILD FAILURE`.
+- Intermediate runs: the checkpoint handoff reports 70/68-case stages with SQL and then
+  creator-filter failures, subsequently resolved. Those intermediate logs were not available in
+  the reviewed artifacts; they are historical context, not the completion gate.
+- Final completion gate: the five inspected Surefire suites above, **75/75 passing**, plus the
+  handoff's independent **READY** review after the shared ordered-CTE fix.
+
+**Follow-ups:** verify checkpoints B/C separately and re-check the remaining baseline failures
+from §10 at the broader verification gate. Migration decisions/history in §§3 and 11–12 remain
+intact; checkpoint A introduces no migration-history change.

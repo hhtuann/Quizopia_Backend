@@ -454,6 +454,7 @@ public class ExamService {
         copy.setDescription(source.getDescription());
         copy.setPurposeId(source.getPurposeId());
         copy.updateDraftSettings(source.getDurationMinutes(), source.getInstructions());
+        copy.copyGradingPolicyFrom(source);
         copy.markAsDuplicateOf(source.getId());
         try {
             copy = examRepository.saveAndFlush(copy);

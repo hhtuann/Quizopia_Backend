@@ -53,7 +53,7 @@ public class ExamSessionNestedController {
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String status) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.listSessions(userId, search, status, examId, page, size, sort);
+        return sessionService.listSessionsForExam(userId, search, status, examId, page, size, sort);
     }
 
     @GetMapping("/{sessionId}")

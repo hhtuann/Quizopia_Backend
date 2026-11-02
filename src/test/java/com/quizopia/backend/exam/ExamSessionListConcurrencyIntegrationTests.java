@@ -16,6 +16,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -46,6 +48,7 @@ class ExamSessionListConcurrencyIntegrationTests {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private ExamService examService;
     @Autowired private ExamSessionService sessionService;
+    @Autowired private PlatformTransactionManager transactionManager;
 
     private long teacherUserId;
     private long expiredSessionId;
@@ -105,6 +108,74 @@ class ExamSessionListConcurrencyIntegrationTests {
         assertThat(status).isEqualTo("CLOSED");
         Object closedAt = jdbc.queryForObject("SELECT closed_at FROM exam_sessions WHERE id=?", Object.class, expiredSessionId);
         assertThat(closedAt).isNotNull();
+        mixedEntryPointsLockInIdOrder();
+    }
+
+    private void mixedEntryPointsLockInIdOrder() throws Exception {
+        long examId = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=?", Long.class, expiredSessionId);
+        // Lowest ID is SCHEDULED, higher IDs span OPEN and both SCHEDULED phases.
+        for (int i = 0; i < 6; i++) {
+            jdbc.update("INSERT INTO exam_sessions (exam_id, created_by, code, title, status, starts_at, ends_at, "
+                    + "duration_minutes, visibility, opened_at) SELECT exam_id, created_by, ?, title, 'SCHEDULED', "
+                    + "now()-interval '2 hours', now()-interval '1 hour', duration_minutes, visibility, NULL "
+                    + "FROM exam_sessions WHERE id=?", "MIX-" + i, expiredSessionId);
+        }
+        for (int round = 0; round < 2; round++) {
+            jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', opened_at=NULL, closed_at=NULL, "
+                    + "ends_at=now()-interval '1 hour' WHERE exam_id=?", examId);
+            jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now()-interval '2 hours' "
+                    + "WHERE exam_id=? AND id<>? AND mod(id, 2)=0", examId, expiredSessionId);
+            jdbc.update("UPDATE exam_sessions SET ends_at=now()+interval '1 hour' "
+                    + "WHERE exam_id=? AND id<>? AND mod(id, 2)=1", examId, expiredSessionId);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CountDownLatch entered = new CountDownLatch(2);
+            Future<?>[] calls = new Future<?>[2];
+            try {
+                new TransactionTemplate(transactionManager).executeWithoutResult(blocker -> {
+                    jdbc.queryForObject("SELECT id FROM exam_sessions WHERE id=? FOR UPDATE", Long.class, expiredSessionId);
+                    for (int i = 0; i < 2; i++) {
+                        final boolean nested = (i == 0);
+                        calls[i] = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                            jdbc.execute("SET LOCAL application_name = 'p1a-mixed-list'");
+                            jdbc.execute("SET LOCAL lock_timeout = '10s'");
+                            entered.countDown();
+                            if (nested) sessionService.listSessionsForExam(teacherUserId, null, null, examId, 0, 20, null);
+                            else sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
+                        }));
+                    }
+                    try {
+                        assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+                        int waiting;
+                        do {
+                            waiting = jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity "
+                                    + "WHERE application_name='p1a-mixed-list' AND wait_event_type='Lock'", Integer.class);
+                            if (waiting == 2) break;
+                            Thread.sleep(20);
+                        } while (System.nanoTime() < deadline);
+                        assertThat(waiting).as("both independent list transactions must wait for lowest ID").isEqualTo(2);
+                        // If either entry locks a higher row first, NOWAIT fails here.
+                        jdbc.queryForList("SELECT id FROM exam_sessions WHERE exam_id=? AND id<>? "
+                                + "ORDER BY id FOR UPDATE NOWAIT", examId, expiredSessionId);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(ex);
+                    }
+                });
+                for (Future<?> call : calls) call.get(20, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+                assertThat(pool.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
+            }
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM exam_sessions WHERE exam_id=? "
+                    + "AND (status='SCHEDULED' OR opened_at IS NULL OR (status='CLOSED' AND closed_at IS NULL))",
+                    Long.class, examId)).isZero();
+            var refreshed = jdbc.queryForList("SELECT * FROM exam_sessions WHERE exam_id=? ORDER BY id", examId);
+            sessionService.listSessionsForExam(teacherUserId, null, null, examId, 0, 20, null);
+            sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
+            assertThat(jdbc.queryForList("SELECT * FROM exam_sessions WHERE exam_id=? ORDER BY id", examId))
+                    .isEqualTo(refreshed);
+        }
     }
 
     private long insert(String sql) {

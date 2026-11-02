@@ -29,6 +29,37 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
 
     List<ExamSession> findAllByExamId(Long examId);
 
+    @Query("SELECT s FROM ExamSession s WHERE s.examId = :examId "
+            + "AND (COALESCE(:search, '') = '' OR LOWER(s.code) LIKE LOWER(CONCAT('%', :search, '%')) "
+            + "OR LOWER(s.title) LIKE LOWER(CONCAT('%', :search, '%'))) "
+            + "AND (:status IS NULL OR s.status = :status)")
+    Page<ExamSession> findForExam(@Param("examId") Long examId, @Param("search") String search,
+                                @Param("status") ExamSessionStatus status, Pageable pageable);
+
+    /**
+     * Lock the exact update set in ascending primary-key order before changing any state.
+     * Both list scopes MUST use this protocol: UPDATE scan order (even within a lifecycle
+     * phase) is planner-dependent. Materialization also prevents updating unlocked rows
+     * that become eligible while this statement waits. No SKIP LOCKED: filters need the
+     * complete effective lifecycle state. Bulk refresh intentionally leaves @Version alone.
+     */
+    String LIFECYCLE_LOCK_START = "WITH eligible AS MATERIALIZED (SELECT id FROM exam_sessions WHERE ";
+    String LIFECYCLE_LOCK_END = " AND ((status = 'OPEN' AND ends_at < :now) "
+            + "OR (status = 'SCHEDULED' AND starts_at <= :now)) ORDER BY id FOR UPDATE) "
+            + "UPDATE exam_sessions s SET "
+            + "status = CASE WHEN s.ends_at < :now THEN 'CLOSED' ELSE 'OPEN' END, "
+            + "opened_at = COALESCE(s.opened_at, :now), "
+            + "closed_at = CASE WHEN s.ends_at < :now THEN CAST(:now AS timestamptz) ELSE NULL END "
+            + "FROM eligible e WHERE s.id = e.id";
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = LIFECYCLE_LOCK_START + "exam_id = :examId" + LIFECYCLE_LOCK_END, nativeQuery = true)
+    int refreshLifecycleForExam(@Param("examId") Long examId, @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = LIFECYCLE_LOCK_START + "created_by = :userId" + LIFECYCLE_LOCK_END, nativeQuery = true)
+    int refreshLifecycleForCreator(@Param("userId") Long userId, @Param("now") Instant now);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM ExamSession s WHERE s.id = :id")
     Optional<ExamSession> findByIdForUpdate(@Param("id") Long id);

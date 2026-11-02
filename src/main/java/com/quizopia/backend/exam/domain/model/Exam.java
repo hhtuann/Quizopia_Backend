@@ -210,6 +210,14 @@ public class Exam {
         return tfMatrixScoring;
     }
 
+    /** Copy grading policy into a new draft without aliasing the source JSON. */
+    public void copyGradingPolicyFrom(Exam source) {
+        if (!isDraft()) {
+            throw new IllegalStateException("grading policy is immutable after publish");
+        }
+        this.tfMatrixScoring = source.tfMatrixScoring != null ? source.tfMatrixScoring.deepCopy() : null;
+    }
+
     public ExamStatus getStatus() {
         return status;
     }
