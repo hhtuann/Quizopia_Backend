@@ -218,3 +218,29 @@ attributable to Phase 1 work, to be re-checked at the end):
 6. **First-level-cache caveat:** test fixtures that persist legacy-shape entities and then call services
    in the same transaction must use explicit ownership (helpers) or clear the persistence context —
    the DB-level fill is invisible to a cached JPA instance.
+
+## 12. Issue #4 P0 addendum (user-based attempts + membership revocation)
+
+1. **User-based attempts (P0-1, V16):** `attempts.user_id` is the primary identity (mandatory since
+   V12; uniqueness moved to `(exam_session_id, user_id, attempt_number)`, partial
+   one-active-per-`(session,user)`, and per-user submit key). `student_profile_id`/`school_id` are
+   nullable legacy provenance. Attempt capability = holding the effective attempt PERMISSION
+   (no role gate, no StudentProfile requirement); the TEACHER role is granted
+   ATTEMPT_START/ATTEMPT_ANSWER_SAVE/ATTEMPT_SUBMIT so one account can be creator and learner
+   (dual capability, no admin powers). Profile enrollment status no longer gates PUBLIC attempts;
+   CLASS_RESTRICTED still requires user-based assigned-class membership. The realtime envelope
+   carries `userId` (primary) plus nullable `studentProfileId` provenance.
+2. **Resource-boundary policy (P0-2):** centralized in `WorkspaceAccessService.requireResourceRead /
+   requireResourceManage / accessibleWorkspaceIds`. In ORGANIZATION workspaces, creation-time
+   ownership NEVER overrides a revoked membership — the creator needs an ACTIVE membership for
+   reads (404 anti-enumeration where reads used it) and ACTIVE membership for writes (403);
+   PERSONAL workspaces keep the authenticated true owner. Applies uniformly to Question Bank,
+   Classroom, Exam, Session (incl. nested routes, lifecycle, classes, roster), results/statistics/
+   export, and the WebSocket monitor topic.
+3. **Lazy org provisioning backfills memberships (bug fix):** `OrganizationWorkspaceResolver`
+   now inserts the V10-rule memberships (teacher→EDITOR, student→MEMBER, academic-admin→ADMIN)
+   for a school's existing profile holders whenever it lazily provisions an organization
+   workspace; previously post-migration schools had no membership rows.
+4. **Baseline note:** the third pre-existing baseline failure (detail query count 7-vs-8) passes
+   under the user-based model — the profile lookup is gone (stable count 6). The other two
+   baseline failures remain unchanged (see §10).
