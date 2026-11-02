@@ -86,7 +86,7 @@ class V8ExamSchemaIntegrationTests {
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("16");
+        assertThat(current).isEqualTo("17");
     }
 
     @Test
@@ -254,9 +254,15 @@ class V8ExamSchemaIntegrationTests {
         long sessionB = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
                 + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + b.schoolId() + "," + examB + "," + b.teacherProfileId()
                 + ",'SB','t',now(),now()+interval '1 hour',60," + userId + ")");
-        // Participant row claims school A but session is in school B -> composite FK violation.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES (" + schoolId + "," + sessionB + "," + studentProfileId
+        // V17: the legacy same-school composite session FK was replaced by a
+        // simple session FK (user-based rows may be school-less). A row whose
+        // school contradicts the session's school is no longer DB-rejected —
+        // cross-school assignment is enforced at the service layer. The
+        // schema-level guard that REMAINS is session existence: a participant
+        // row pointing at a missing session is still rejected.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
+                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
+                        + studentProfileId + ")," + schoolId + ",99999999," + studentProfileId
                         + "," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -266,9 +272,13 @@ class V8ExamSchemaIntegrationTests {
         SchoolFixture b = secondSchool();
         long exam = newExam("PS1");
         long session = newSession(exam, "SS1");
-        // Student from school B cannot be added to a session in school A.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES (" + schoolId + "," + session + "," + b.studentProfileId()
+        // V17: student-side same-school composite FK replaced by a simple
+        // profile FK (provenance only); cross-school ADD is enforced at the
+        // service layer (addParticipants same-school validation). The
+        // schema-level guard that REMAINS is profile existence.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
+                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
+                        + b.studentProfileId() + ")," + schoolId + "," + session + ",99999999"
                         + "," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -896,8 +906,8 @@ class V8ExamSchemaIntegrationTests {
     void m2BlockedWithNonNullBlockedAtAccepted() {
         long exam = newExam("M2C");
         long session = newSession(exam, "M2C");
-        long p = insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, status, "
-                + "added_by, blocked_at) VALUES (" + schoolId + "," + session + "," + studentProfileId + ",'BLOCKED',"
+        long p = insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, status, "
+                + "added_by, blocked_at) VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentProfileId + ")," + schoolId + "," + session + "," + studentProfileId + ",'BLOCKED',"
                 + userId + ",now())");
         assertThat(p).isPositive();
     }
@@ -968,7 +978,7 @@ class V8ExamSchemaIntegrationTests {
     }
 
     private long newParticipant(long sessionId, long studentId) {
-        return insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
-                + "VALUES (" + schoolId + "," + sessionId + "," + studentId + "," + userId + ")");
+        return insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, added_by) "
+                + "VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentId + ")," + schoolId + "," + sessionId + "," + studentId + "," + userId + ")");
     }
 }

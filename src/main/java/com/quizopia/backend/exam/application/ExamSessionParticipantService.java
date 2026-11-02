@@ -131,12 +131,15 @@ public class ExamSessionParticipantService {
         }
 
         // Insert valid participants (in same tx; concurrent race →
-        // EXAM_PARTICIPANT_DUPLICATE).
+        // EXAM_PARTICIPANT_DUPLICATE). User-based rows (V17): the profile's
+        // user is resolved eagerly so user_id is always present.
         if (!toInsert.isEmpty()) {
             try {
                 for (Long spId : toInsert) {
+                    StudentProfile sp = profiles.get(spId);
                     participantRepository.saveAndFlush(
-                            new ExamSessionParticipant(session.getSchoolId(), sessionId, spId, userId));
+                            new ExamSessionParticipant(sp.getUserId(), sessionId, spId,
+                                    session.getSchoolId(), userId));
                 }
             } catch (DataIntegrityViolationException ex) {
                 if (isParticipantDuplicate(ex)) {
@@ -218,6 +221,30 @@ public class ExamSessionParticipantService {
     }
 
     // ============================================================
+    // POST .../participants/by-user/{uid}/block | unblock (V17, P0-R8)
+    // ============================================================
+
+    /**
+     * User-based block (issue #4 P0-R8): blocks a KNOWN participant of the
+     * session by user id — including PUBLIC profile-less learners who already
+     * started an attempt. If no participant row exists yet but the user has
+     * an attempt in this session, a row is materialized (user-based, profile
+     * provenance filled when known) and then blocked — one authoritative
+     * source of BLOCKED state. Users who never participated and were never
+     * assigned yield 404 (anti-enumeration).
+     */
+    @Transactional
+    public ExamSessionParticipantResponse blockUser(Long userId, Long sessionId, Long targetUserId) {
+        return toggleUserBlock(userId, sessionId, targetUserId, true);
+    }
+
+    /** User-based unblock — mirrors {@link #blockUser}. */
+    @Transactional
+    public ExamSessionParticipantResponse unblockUser(Long userId, Long sessionId, Long targetUserId) {
+        return toggleUserBlock(userId, sessionId, targetUserId, false);
+    }
+
+    // ============================================================
     // Helpers
     // ============================================================
 
@@ -238,24 +265,87 @@ public class ExamSessionParticipantService {
         ExamSessionParticipant p = participantRepository.findByIdAndExamSessionIdForUpdate(participantId, sessionId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_PARTICIPANT_NOT_FOUND));
 
-        if (block) {
-            if (p.getStatus() == ExamSessionParticipantStatus.BLOCKED) {
-                // Idempotent: already blocked.
-            } else {
-                p.block(Instant.now());
-                participantRepository.saveAndFlush(p);
+        applyToggle(p, block);
+        return toResponse(p);
+    }
+
+    /**
+     * User-based toggle (V17, P0-R8). Materializes a participant row for a
+     * known participant (existing row, else a user with an attempt in the
+     * session) under the session + participant locks; races resolve via the
+     * (session, user) unique index.
+     */
+    private ExamSessionParticipantResponse toggleUserBlock(Long userId, Long sessionId, Long targetUserId,
+            boolean block) {
+        auth.requireUserWithPermission(userId,
+                block ? "EXAM_SESSION_PARTICIPANT_BLOCK" : "EXAM_SESSION_PARTICIPANT_UNBLOCK");
+        ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
+        if (session.getStatus() != ExamSessionStatus.DRAFT
+                && session.getStatus() != ExamSessionStatus.SCHEDULED
+                && session.getStatus() != ExamSessionStatus.OPEN) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
+
+        ExamSessionParticipant p = participantRepository
+                .findByExamSessionIdAndUserIdForUpdate(sessionId, targetUserId)
+                .orElse(null);
+        if (p == null) {
+            // Known participant = user with an attempt in this session
+            // (roster P0-R5 semantics). Strangers → 404 anti-enumeration.
+            Long attemptCount = entityManager.createQuery(
+                            "SELECT COUNT(a) FROM Attempt a WHERE a.examSessionId = :sid AND a.userId = :uid",
+                            Long.class)
+                    .setParameter("sid", sessionId)
+                    .setParameter("uid", targetUserId)
+                    .getSingleResult();
+            if (attemptCount == null || attemptCount == 0) {
+                throw new ExamException(ExamErrorCode.EXAM_PARTICIPANT_NOT_FOUND);
             }
-        } else {
-            if (p.getStatus() == ExamSessionParticipantStatus.ELIGIBLE) {
-                // Idempotent: already eligible.
-            } else {
-                p.unblock();
-                participantRepository.saveAndFlush(p);
+            // Fill legacy provenance when the user has a profile (nullable).
+            Object[] provenance = (Object[]) entityManager.createNativeQuery(
+                            "SELECT sp.id, sp.school_id FROM student_profiles sp WHERE sp.user_id = :uid LIMIT 1")
+                    .setParameter("uid", targetUserId)
+                    .getResultList().stream().findFirst().orElse(null);
+            Long profileId = provenance != null ? ((Number) provenance[0]).longValue() : null;
+            Long schoolId = provenance != null ? ((Number) provenance[1]).longValue() : null;
+            p = new ExamSessionParticipant(targetUserId, sessionId, profileId, schoolId, userId);
+            try {
+                p = participantRepository.saveAndFlush(p);
+                // Re-acquire the row lock for the toggle path parity.
+                p = participantRepository.findByExamSessionIdAndUserIdForUpdate(sessionId, targetUserId)
+                        .orElse(p);
+            } catch (DataIntegrityViolationException race) {
+                // Concurrent block materialized the row; adopt it.
+                p = participantRepository.findByExamSessionIdAndUserIdForUpdate(sessionId, targetUserId)
+                        .orElseThrow(() -> race);
             }
         }
 
-        StudentProfile sp = studentProfileRepository.findById(p.getStudentProfileId()).orElse(null);
-        String displayName = sp != null ? batchDisplayNames(Set.of(sp.getUserId())).get(sp.getUserId()) : null;
+        applyToggle(p, block);
+        return toResponse(p);
+    }
+
+    private void applyToggle(ExamSessionParticipant p, boolean block) {
+        if (block) {
+            if (p.getStatus() != ExamSessionParticipantStatus.BLOCKED) {
+                p.block(Instant.now());
+                participantRepository.saveAndFlush(p);
+            } // else idempotent
+        } else {
+            if (p.getStatus() != ExamSessionParticipantStatus.ELIGIBLE) {
+                p.unblock();
+                participantRepository.saveAndFlush(p);
+            } // else idempotent
+        }
+    }
+
+    private ExamSessionParticipantResponse toResponse(ExamSessionParticipant p) {
+        StudentProfile sp = p.getStudentProfileId() != null
+                ? studentProfileRepository.findById(p.getStudentProfileId()).orElse(null)
+                : null;
+        Long displayUserId = sp != null ? sp.getUserId() : p.getUserId();
+        String displayName = displayUserId != null
+                ? batchDisplayNames(Set.of(displayUserId)).get(displayUserId) : null;
         return new ExamSessionParticipantResponse(
                 p.getId(), p.getStudentProfileId(),
                 sp != null ? sp.getStudentCode() : null, displayName,

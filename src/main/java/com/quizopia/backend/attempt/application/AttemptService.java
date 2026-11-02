@@ -113,12 +113,13 @@ public class AttemptService {
                 + "LEFT JOIN subjects subj ON subj.id = e.subject_id "
                 + "LEFT JOIN attempts act ON act.exam_session_id = s.id AND act.user_id = ? AND act.status = 'IN_PROGRESS' "
                 + "WHERE s.status IN ('SCHEDULED','OPEN') "
-                // Blocked participants (issue #4 P0-R7): an explicit BLOCKED row
-                // for this user hides the session from discovery entirely.
+                // Blocked participants (issue #4 P0-R7/R8): an explicit BLOCKED
+                // row for this USER hides the session from discovery — direct
+                // user_id lookup, no profile join needed (profile-less users
+                // included).
                 + "AND NOT EXISTS ("
                 + "  SELECT 1 FROM exam_session_participants bp"
-                + "  JOIN student_profiles bsp ON bsp.id = bp.student_profile_id"
-                + "  WHERE bp.exam_session_id = s.id AND bsp.user_id = ? AND bp.status = 'BLOCKED') "
+                + "  WHERE bp.exam_session_id = s.id AND bp.user_id = ? AND bp.status = 'BLOCKED') "
                 + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
                 + "  SELECT 1 FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
@@ -208,18 +209,18 @@ public class AttemptService {
      *       (user-based membership) AND, for ORGANIZATION-workspace exams,
      *       still holds an ACTIVE workspace membership — a lingering
      *       classroom row does not survive org SUSPENDED/REMOVED.</li>
-     *   <li>BLOCKED participant (P0-R7): an explicit BLOCKED row for this
-     *       user denies NEW starts for both visibilities. An already
-     *       IN_PROGRESS attempt may still complete (autosave/submit are
-     *       ownership-based); its data is never destroyed.</li>
+     *   <li>BLOCKED participant (P0-R7/R8): an explicit BLOCKED row for this
+     *       user (direct user_id key — profile-less included) denies NEW
+     *       starts for both visibilities. An already IN_PROGRESS attempt may
+     *       still complete (autosave/submit are ownership-based); its data
+     *       is never destroyed.</li>
      * </ul>
      */
     private boolean isEligible(Long userId, ExamSession session) {
-        // Blocked participants are denied regardless of visibility (P0-R7).
+        // Blocked participants are denied regardless of visibility (P0-R7/R8).
         Integer blocked = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM exam_session_participants bp "
-                        + "JOIN student_profiles bsp ON bsp.id = bp.student_profile_id "
-                        + "WHERE bp.exam_session_id = ? AND bsp.user_id = ? AND bp.status = 'BLOCKED'",
+                        + "WHERE bp.exam_session_id = ? AND bp.user_id = ? AND bp.status = 'BLOCKED'",
                 Integer.class, session.getId(), userId);
         if (blocked != null && blocked > 0) {
             return false;
