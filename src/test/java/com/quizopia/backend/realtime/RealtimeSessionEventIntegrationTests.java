@@ -35,7 +35,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
     private long teacherId;
     private String teacherToken;
     private long school;
-    private long versionId;
+    private long examId;
     private long ownerTeacherProfileId;
 
     @BeforeEach
@@ -46,7 +46,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
         teacherId = teacherIdForSession(sessionId);
         teacherToken = accessToken(teacherId, "se-tch", List.of("TEACHER"));
         school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        versionId = jdbc.queryForObject("SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
+        examId = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         ownerTeacherProfileId = jdbc.queryForObject("SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
     }
 
@@ -56,7 +56,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
         try (StompTestConnection conn = connect(teacherToken)) {
             Capture cap = subscribe(conn, sched, 1);
             awaitAccepted(acceptedDestination(topic(sched)), 5);
-            examSessionService.openSession(teacherId, sched); // SCHEDULED → OPEN
+            examSessionService.openSession(teacherId, null, sched); // SCHEDULED → OPEN
             assertThat(cap.latch.await(10, TimeUnit.SECONDS)).isTrue();
             RealtimeEventEnvelope ev = parse(cap.payloads.get(0));
             assertThat(ev.eventType()).isEqualTo(RealtimeEventType.SESSION_OPENED.name());
@@ -71,7 +71,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
         try (StompTestConnection conn = connect(teacherToken)) {
             Capture cap = subscribe(conn, sessionId, 1); // sessionId is OPEN
             awaitAccepted(acceptedDestination(topic(sessionId)), 5);
-            examSessionService.closeSession(teacherId, sessionId); // OPEN → CLOSED
+            examSessionService.closeSession(teacherId, null, sessionId); // OPEN → CLOSED
             assertThat(cap.latch.await(10, TimeUnit.SECONDS)).isTrue();
             assertThat(parse(cap.payloads.get(0)).eventType()).isEqualTo(RealtimeEventType.SESSION_CLOSED.name());
         }
@@ -84,7 +84,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
         try (StompTestConnection conn = connect(teacherToken)) {
             Capture cap = subscribe(conn, sessionId, 1);
             awaitAccepted(acceptedDestination(topic(sessionId)), 5);
-            examSessionService.getSessionDetail(teacherId, sessionId); // OPEN + past endsAt → CLOSED
+            examSessionService.getSessionDetail(teacherId, null, sessionId); // OPEN + past endsAt → CLOSED
             assertThat(cap.latch.await(10, TimeUnit.SECONDS)).isTrue();
             assertThat(parse(cap.payloads.get(0)).eventType()).isEqualTo(RealtimeEventType.SESSION_CLOSED.name());
         }
@@ -97,7 +97,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
             subscribe(conn, open, 1);
             awaitAccepted(acceptedDestination(topic(open)), 5);
             outboundProbe.clear();
-            examSessionService.openSession(teacherId, open); // already OPEN → idempotent, no event
+            examSessionService.openSession(teacherId, null, open); // already OPEN → idempotent, no event
             assertNoOutbound(topicMessage(open), 2);
         }
     }
@@ -109,7 +109,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
             subscribe(conn, closed, 1);
             awaitAccepted(acceptedDestination(topic(closed)), 5);
             outboundProbe.clear();
-            examSessionService.closeSession(teacherId, closed); // already CLOSED → idempotent, no event
+            examSessionService.closeSession(teacherId, null, closed); // already CLOSED → idempotent, no event
             assertNoOutbound(topicMessage(closed), 2);
         }
     }
@@ -117,12 +117,12 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
     @Test
     void secondDetailAfterLazyCloseEmitsNoEvent() throws Exception {
         jdbc.update("UPDATE exam_sessions SET ends_at = now() WHERE id=" + sessionId);
-        examSessionService.getSessionDetail(teacherId, sessionId); // first detail → lazy-closes (event fired before subscribe)
+        examSessionService.getSessionDetail(teacherId, null, sessionId); // first detail → lazy-closes (event fired before subscribe)
         try (StompTestConnection conn = connect(teacherToken)) {
             subscribe(conn, sessionId, 1);
             awaitAccepted(acceptedDestination(topic(sessionId)), 5);
             outboundProbe.clear();
-            examSessionService.getSessionDetail(teacherId, sessionId); // second detail → already CLOSED, no transition
+            examSessionService.getSessionDetail(teacherId, null, sessionId); // second detail → already CLOSED, no transition
             assertNoOutbound(topicMessage(sessionId), 2);
         }
     }
@@ -135,7 +135,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
             subscribe(conn, sessionId, 1);
             awaitAccepted(acceptedDestination(topic(sessionId)), 5);
             outboundProbe.clear();
-            examSessionService.listMySessions(teacherId, null, null, null, 0, 20, null); // bulk lazy-close
+            examSessionService.listSessions(teacherId, null, null, null, 0, 20, null); // bulk lazy-close
             assertNoOutbound(topicMessage(sessionId), 2);
             // The session IS closed by the bulk update (DB), but NO realtime event.
             String status = jdbc.queryForObject("SELECT status FROM exam_sessions WHERE id=" + sessionId, String.class);
@@ -146,23 +146,23 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
     // --- fixtures ---
 
     private long newScheduledSession() {
-        return ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by) VALUES ("
-                + school + "," + versionId + "," + ownerTeacherProfileId + ",'SCH','t','SCHEDULED','"
-                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2," + teacherId + ")");
+        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + school + "," + examId + "," + ownerTeacherProfileId + ",'SCH','t','SCHEDULED','"
+                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2,60," + teacherId + ")");
     }
 
     private long newOpenSession() {
         Instant n = Instant.now();
-        return ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + school + "," + versionId + "," + ownerTeacherProfileId + ",'OPN','t','OPEN','"
-                + n.minusSeconds(3600) + "','" + n.plusSeconds(7200) + "',2," + teacherId + ",'" + n.minusSeconds(3600) + "')");
+        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
+                + school + "," + examId + "," + ownerTeacherProfileId + ",'OPN','t','OPEN','"
+                + n.minusSeconds(3600) + "','" + n.plusSeconds(7200) + "',2,60," + teacherId + ",'" + n.minusSeconds(3600) + "')");
     }
 
     private long newClosedSession() {
         Instant n = Instant.now();
-        return ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, closed_at) VALUES ("
-                + school + "," + versionId + "," + ownerTeacherProfileId + ",'CLD','t','CLOSED','"
-                + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "',2," + teacherId + ",'" + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "')");
+        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at, closed_at) VALUES ("
+                + school + "," + examId + "," + ownerTeacherProfileId + ",'CLD','t','CLOSED','"
+                + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "',2,60," + teacherId + ",'" + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "')");
     }
 
     // --- helpers ---

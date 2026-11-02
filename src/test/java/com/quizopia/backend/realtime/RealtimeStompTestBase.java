@@ -169,7 +169,7 @@ public abstract class RealtimeStompTestBase {
                 .isInstanceOf(java.util.concurrent.TimeoutException.class);
     }
 
-    /** Creates a teacher with a school + PUBLISHED exam version + an OPEN session they own; returns the sessionId. */
+    /** Creates a teacher with a school + PUBLISHED exam + an OPEN session they own; returns the sessionId. */
     protected long createTeacherOwnedOpenSession(String tag) {
         long teacherId = insertUserWithRole(tag, "TEACHER");
         long school = ins("INSERT INTO schools (code, name) VALUES ('" + tag + "S','Sch')");
@@ -177,16 +177,16 @@ public abstract class RealtimeStompTestBase {
         long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
         ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherId + "," + school + ",'TC" + tag + "')");
         long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'E','E')");
-        long ver = ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacherId + ")");
-        long sec = ins("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=" + exam);
+        long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'B','B')");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + teacherId + ")");
         long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherId + ")");
-        long eq = ins("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
+        long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
         Instant now = Instant.parse("2026-07-04T08:00:00Z");
-        return ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + school + "," + ver + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherId + ",'" + now.minusSeconds(3600) + "')");
+        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
+                + school + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2,60," + teacherId + ",'" + now.minusSeconds(3600) + "')");
     }
 
     protected long teacherIdForSession(long sessionId) {

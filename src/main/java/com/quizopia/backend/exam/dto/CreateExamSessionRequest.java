@@ -9,25 +9,26 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
 
+/**
+ * Request body for {@code POST /api/exams/{examId}/sessions} (and the legacy
+ * {@code POST /api/exam-sessions}). The exam must be PUBLISHED. There is NO
+ * version selection — one exam has exactly one published content set.
+ */
 public record CreateExamSessionRequest(
         @NotNull @Positive Long examId,
-        @NotNull @Positive Integer examVersionNumber,
         @Size(max = 30) String code,
         @NotBlank @Size(max = 255) String title,
         @NotNull Instant startsAt,
         @NotNull Instant endsAt,
         @NotNull @jakarta.validation.constraints.Min(0) Integer maxAttempts,
-        /** Session-level duration override (minutes). NULL = use exam version's duration. 0 = unlimited. */
+        /**
+         * Session-owned duration in minutes. NULL = prefill from the exam's
+         * editor-metadata default. 0 = unlimited.
+         */
         Integer durationMinutes,
-        /** PUBLIC = all same-school students; CLASS_RESTRICTED (default) = assigned classes only. */
+        /** PUBLIC = platform users; CLASS_RESTRICTED (default) = assigned classes only. */
         SessionVisibility visibility,
-        /** Assigned classrooms (required-meaningful only when visibility = CLASS_RESTRICTED). Ignored when PUBLIC. */
+        /** Assigned classrooms (meaningful only when visibility = CLASS_RESTRICTED). */
         List<Long> classroomIds
 ) {
-    /** Convenience: create without explicit visibility (defaults to CLASS_RESTRICTED, no classes). */
-    public CreateExamSessionRequest(Long examId, Integer examVersionNumber, String code, String title,
-            Instant startsAt, Instant endsAt, Integer maxAttempts) {
-        this(examId, examVersionNumber, code, title, startsAt, endsAt, maxAttempts, null, null, null);
-    }
 }
-

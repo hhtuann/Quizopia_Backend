@@ -2,20 +2,29 @@ package com.quizopia.backend.exam.domain.model;
 
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Objects;
 
 /**
- * JPA entity mapping the {@code exams} table. An exam is the stable identity
- * of a test with a single immutable content set after publish (Phase 1 Task B
- * redesign, ADR-001 §2.4). The {@code version} column is a JPA optimistic-lock
- * version (NOT exam content versioning).
+ * JPA entity mapping the {@code exams} table. One Exam = one independently
+ * identified set of exam content (Task B redesign, issue #2 / ADR-001 §2.4).
  *
- * <p>Ownership: {@code workspaceId} + {@code createdByUserUserId} (public
- * platform foundation, ADR-001 §2.2). Legacy {@code schoolId}/{@code subjectId}/
- * {@code ownerTeacherId} remain as nullable provenance; the DB composite FKs
- * still enforce same-school for school-era rows.
+ * <p>Lifecycle: DRAFT → PUBLISHED → ARCHIVED. Published content and grading
+ * policy are immutable; there is no multi-version content model. The
+ * {@code version} column is a JPA optimistic-lock version (NOT content
+ * versioning) and doubles as the editor concurrency token.
+ *
+ * <p>Ownership: {@code workspaceId} + {@code createdByUserUserId}. Legacy
+ * {@code schoolId}/{@code subjectId}/{@code ownerTeacherId} remain as nullable
+ * provenance.
  */
 @Entity
 @Table(name = "exams")
@@ -57,12 +66,45 @@ public class Exam {
     @Column(name = "description")
     private String description;
 
-    @Column(name = "current_version_number", nullable = false)
-    private Integer currentVersionNumber = 1;
+    /** Exam-level instructions (moved from legacy exam_versions). */
+    @Column(name = "instructions")
+    private String instructions;
+
+    /**
+     * Default duration (minutes) as editor metadata for pre-filling session
+     * forms. Runtime attempt duration uses the SESSION value only.
+     * 0 = unlimited convention; null = no default.
+     */
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
+    /** Total points of the published composition; 0 while DRAFT. */
+    @Column(name = "total_points", nullable = false, precision = 10, scale = 2)
+    private BigDecimal totalPoints = BigDecimal.ZERO;
+
+    /** Fixed TF-matrix scoring ladder (exact-object JSONB, DB-enforced). */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tf_matrix_scoring", columnDefinition = "jsonb")
+    private JsonNode tfMatrixScoring = defaultTfMatrixScoring();
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
     private ExamStatus status = ExamStatus.DRAFT;
+
+    @Column(name = "published_at")
+    private Instant publishedAt;
+
+    /** Duplicate provenance: the exam this one was duplicated from, if any. */
+    @Column(name = "source_exam_id")
+    private Long sourceExamId;
+
+    /**
+     * Monotonic composition revision; bumped on every composition replace so
+     * the JPA {@code @Version} advances even when settings are unchanged
+     * (issue #2: "explicitly increment Exam revision on composition edits").
+     */
+    @Column(name = "composition_revision", nullable = false)
+    private Integer compositionRevision = 0;
 
     @Version
     @Column(name = "version", nullable = false)
@@ -152,12 +194,45 @@ public class Exam {
         this.description = description;
     }
 
-    public Integer getCurrentVersionNumber() {
-        return currentVersionNumber;
+    public String getInstructions() {
+        return instructions;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public BigDecimal getTotalPoints() {
+        return totalPoints;
+    }
+
+    public JsonNode getTfMatrixScoring() {
+        return tfMatrixScoring;
     }
 
     public ExamStatus getStatus() {
         return status;
+    }
+
+    public Instant getPublishedAt() {
+        return publishedAt;
+    }
+
+    public Long getSourceExamId() {
+        return sourceExamId;
+    }
+
+    public Integer getCompositionRevision() {
+        return compositionRevision;
+    }
+
+    /** Forces a version bump on every composition edit (see field javadoc). */
+    public void touchComposition() {
+        this.compositionRevision = this.compositionRevision + 1;
+    }
+
+    void setSourceExamId(Long sourceExamId) {
+        this.sourceExamId = sourceExamId;
     }
 
     public Integer getVersion() {
@@ -172,23 +247,57 @@ public class Exam {
         return updatedAt;
     }
 
-    /**
-     * Marks the exam as READY (at least one version has been published).
-     * One-way transition: never reverts to DRAFT.
-     */
-    public void markReady() {
-        this.status = ExamStatus.READY;
+    public boolean isDraft() {
+        return status == ExamStatus.DRAFT;
     }
 
     /**
-     * Advances {@code currentVersionNumber} to the given value if it is higher
-     * than the current value. {@code currentVersionNumber} tracks the highest
-     * version number ever created (not necessarily the latest published).
+     * Updates DRAFT composition settings. Only meaningful while DRAFT.
      */
-    public void advanceCurrentVersion(int versionNumber) {
-        if (versionNumber > this.currentVersionNumber) {
-            this.currentVersionNumber = versionNumber;
+    public void updateDraftSettings(Integer durationMinutes, String instructions) {
+        if (durationMinutes != null) {
+            if (durationMinutes < 0) {
+                throw new IllegalArgumentException("durationMinutes must be >= 0");
+            }
+            this.durationMinutes = durationMinutes;
         }
+        this.instructions = instructions;
+    }
+
+    /**
+     * One-way DRAFT → PUBLISHED transition with the published instant and the
+     * validated total points (must be > 0; the DB invariant also enforces it).
+     */
+    public void markPublished(Instant publishedAt, BigDecimal totalPoints) {
+        if (this.status != ExamStatus.DRAFT) {
+            throw new IllegalStateException("cannot publish exam in status " + status);
+        }
+        Objects.requireNonNull(publishedAt, "publishedAt must not be null");
+        Objects.requireNonNull(totalPoints, "totalPoints must not be null");
+        if (totalPoints.signum() <= 0) {
+            throw new IllegalArgumentException("totalPoints must be > 0");
+        }
+        this.status = ExamStatus.PUBLISHED;
+        this.publishedAt = publishedAt;
+        this.totalPoints = totalPoints;
+    }
+
+    /**
+     * PUBLISHED → ARCHIVED. Callers must first verify no SCHEDULED/OPEN
+     * sessions remain (the service enforces that guard).
+     */
+    public void markArchived() {
+        if (this.status != ExamStatus.PUBLISHED) {
+            throw new IllegalStateException("cannot archive exam in status " + status);
+        }
+        this.status = ExamStatus.ARCHIVED;
+    }
+
+    /**
+     * Copies duplicate provenance onto a freshly created DRAFT clone.
+     */
+    public void markAsDuplicateOf(Long sourceExamId) {
+        this.sourceExamId = Objects.requireNonNull(sourceExamId, "sourceExamId must not be null");
     }
 
     @Override
@@ -211,14 +320,26 @@ public class Exam {
     public String toString() {
         return "Exam{" +
                 "id=" + id +
+                ", workspaceId=" + workspaceId +
+                ", createdByUserUserId=" + createdByUserUserId +
                 ", schoolId=" + schoolId +
-                ", subjectId=" + subjectId +
-                ", ownerTeacherId=" + ownerTeacherId +
                 ", code='" + code + '\'' +
-                ", currentVersionNumber=" + currentVersionNumber +
                 ", status=" + status +
+                ", totalPoints=" + totalPoints +
                 ", createdAt=" + createdAt +
-                ", updatedAt=" + updatedAt +
                 '}';
+    }
+
+    /**
+     * Fresh, non-shared JsonNode with the exact shared TF-MATRIX scoring ladder.
+     */
+    private static JsonNode defaultTfMatrixScoring() {
+        ObjectNode node = JsonNodeFactory.instance.objectNode();
+        node.put("0", 0);
+        node.put("1", 10);
+        node.put("2", 25);
+        node.put("3", 50);
+        node.put("4", 100);
+        return node;
     }
 }

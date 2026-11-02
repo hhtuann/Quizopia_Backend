@@ -61,14 +61,14 @@ class AttemptDetailAndMyHttpIntegrationTests {
         String numericKey = "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"two decimals\"}'::jsonb";
         long qn = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'QN'," + studentUserId + ")");
         long qnv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, answer_key, created_by) VALUES (" + qn + ",1,'NUMERIC_FILL','N',1,'{}'::jsonb," + numericKey + "," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + "," + tp + ",'E','E')");
-        long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',2,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
-        long eq = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q',1,0,'{}'::jsonb)");
+        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),2)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',2,now()," + studentUserId + ")");
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
+        long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + ver + "," + sec + "," + qn + "," + qnv + ",'QCN','NUMERIC_FILL','N',1,1,'{}'::jsonb," + numericKey + ")");
-        long session = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + school + "," + ver + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "')");
+        insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + exam + "," + sec + "," + qn + "," + qnv + ",'QCN','NUMERIC_FILL','N',1,1,'{}'::jsonb," + numericKey + ")");
+        long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + school + "," + exam + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + studentUserId + ")");
         attemptId = attemptService.startAttempt(studentUserId, session, new StartAttemptRequest(null)).attemptId();
         aqSingleId = jdbc.queryForObject("SELECT id FROM attempt_questions WHERE attempt_id=" + attemptId + " AND question_type='SINGLE_CHOICE'", Long.class);
@@ -229,12 +229,11 @@ class AttemptDetailAndMyHttpIntegrationTests {
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
         long session = jdbc.queryForObject("SELECT exam_session_id FROM attempts WHERE id=" + attemptId, Long.class);
-        long ver = jdbc.queryForObject("SELECT exam_version_id FROM attempts WHERE id=" + attemptId, Long.class);
         long school = jdbc.queryForObject("SELECT school_id FROM attempts WHERE id=" + attemptId, Long.class);
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                 + "VALUES (" + school + "," + session + "," + sp2 + "," + studentUserId + ") ON CONFLICT DO NOTHING");
-        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, exam_version_id, attempt_number, "
-                + "status, started_at, deadline_at) VALUES (" + school + "," + session + "," + sp2 + "," + ver + ",1,'IN_PROGRESS',now(),now()+interval '1 hour')");
+        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, attempt_number, "
+                + "status, started_at, deadline_at) VALUES (" + school + "," + session + "," + sp2 + ",1,'IN_PROGRESS',now(),now()+interval '1 hour')");
         mockMvc.perform(get("/api/attempts/my").with(jwt().jwt(j -> j.subject(String.valueOf(studentUserId)))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(1))

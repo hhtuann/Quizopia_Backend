@@ -83,7 +83,7 @@ class V9AttemptPersistenceIntegrationTests {
     private long schoolId;
     private long bankId;
     private long studentProfileId;
-    private long examVersionId;
+    private long examId;
     private long sessionId;
     private long examQuestionId;
 
@@ -106,19 +106,21 @@ class V9AttemptPersistenceIntegrationTests {
         long qvId = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + questionId + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb,"
                 + userId + ")");
-        long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherId + ",'E','t')");
-        examVersionId = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
+        examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
+                + "published_at, total_points) VALUES (" + schoolId + "," + subjectId + "," + teacherId
+                + ",'E','t','PUBLISHED',now(),10)");
+        // Legacy provenance row (exam_versions is an audit table).
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
                 + "published_at, created_by) VALUES (" + schoolId + "," + examId + ",1,'PUBLISHED',10,now()," + userId + ")");
-        long sectionId = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES ("
-                + examVersionId + ",'Sec',0)");
-        examQuestionId = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long sectionId = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES ("
+                + examId + ",'Sec',0)");
+        examQuestionId = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + examVersionId + "," + sectionId + "," + questionId + "," + qvId + ",'QC','SINGLE_CHOICE','c',1,0,"
+                + "VALUES (" + examId + "," + sectionId + "," + questionId + "," + qvId + ",'QC','SINGLE_CHOICE','c',1,0,"
                 + "'{}'::jsonb)");
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, created_by, opened_at) VALUES (" + schoolId + "," + examVersionId + "," + teacherId
-                + ",'S','t','OPEN',now()-interval '1 hour',now()+interval '2 hours'," + userId + ",now())");
+        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + examId + "," + teacherId
+                + ",'S','t','OPEN',now()-interval '1 hour',now()+interval '2 hours'," + userId + ",now(),60)");
     }
 
     // ============================================================
@@ -140,7 +142,7 @@ class V9AttemptPersistenceIntegrationTests {
 
     @Test
     void attemptRoundTrip() {
-        Attempt a = Attempt.start(schoolId, sessionId, userId, studentProfileId, examVersionId, 1,
+        Attempt a = Attempt.start(schoolId, sessionId, userId, studentProfileId, 1,
                 Instant.parse("2026-07-03T07:00:00Z"), Instant.parse("2026-07-03T08:00:00Z"));
         em.persist(a);
         em.flush();
@@ -150,7 +152,6 @@ class V9AttemptPersistenceIntegrationTests {
         assertThat(reloaded.getExamSessionId()).isEqualTo(sessionId);
         assertThat(reloaded.getUserId()).isEqualTo(userId);
         assertThat(reloaded.getStudentProfileId()).isEqualTo(studentProfileId);
-        assertThat(reloaded.getExamVersionId()).isEqualTo(examVersionId);
         assertThat(reloaded.getAttemptNumber()).isEqualTo(1);
         assertThat(reloaded.getStatus()).isEqualTo(AttemptStatus.IN_PROGRESS);
         assertThat(reloaded.getStartedAt()).isEqualTo(Instant.parse("2026-07-03T07:00:00Z"));
@@ -357,7 +358,7 @@ class V9AttemptPersistenceIntegrationTests {
 
     @Test
     void attemptFactoryProducesInProgressWithNulls() {
-        Attempt a = Attempt.start(schoolId, sessionId, studentProfileId, examVersionId, 1,
+        Attempt a = Attempt.start(schoolId, sessionId, studentProfileId, 1,
                 Instant.now(), Instant.now().plusSeconds(3600));
         assertThat(a.getStatus()).isEqualTo(AttemptStatus.IN_PROGRESS);
         assertThat(a.getSubmittedAt()).isNull();
@@ -466,8 +467,7 @@ class V9AttemptPersistenceIntegrationTests {
     @Test
     void countBySessionAndStatusCountsActive() {
         Attempt active = persistSubmittedAttempt(1, "CNT");
-        persistAttemptForSession(2, active.getExamSessionId(), active.getStudentProfileId(),
-                active.getExamVersionId());
+        persistAttemptForSession(2, active.getExamSessionId(), active.getStudentProfileId());
         long activeCount = attemptRepo.countByExamSessionIdAndStatus(active.getExamSessionId(),
                 AttemptStatus.IN_PROGRESS);
         assertThat(activeCount).isEqualTo(1L);
@@ -573,7 +573,7 @@ class V9AttemptPersistenceIntegrationTests {
     @Test
     void upsertRejectsCrossAttemptQuestion() {
         Attempt a = persistAttempt(1);
-        Attempt other = persistAttemptForSession(1, newOpenSession("XS"), studentProfileId, examVersionId);
+        Attempt other = persistAttemptForSession(1, newOpenSession("XS"), studentProfileId);
         AttemptQuestion otherQ = persistAttemptQuestion(other.getId(), 0);
         assertThatThrownBy(() -> aaRepo.upsertIfNewer(a.getId(), otherQ.getId(), "{\"x\":1}", 1L))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -609,7 +609,7 @@ class V9AttemptPersistenceIntegrationTests {
         Attempt a = persistSubmittedAttempt(1, "DA");
         persistIdempotency(a.getId(), "DA");
         long sessionDb = newOpenSession("DB");
-        Attempt b = persistSubmittedAttemptForSession(1, "DB-K", sessionDb, studentProfileId, examVersionId);
+        Attempt b = persistSubmittedAttemptForSession(1, "DB-K", sessionDb, studentProfileId);
         persistIdempotency(b.getId(), "DB-K");
         Optional<IdempotencyRecord> byKeyDA = idemRepo.findByUserIdAndOperationAndIdempotencyKey(
                 userId, IdempotencyOperation.ATTEMPT_SUBMIT, "DA");
@@ -660,34 +660,34 @@ class V9AttemptPersistenceIntegrationTests {
     }
 
     private long newOpenSession(String code) {
-        return insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, created_by, opened_at) VALUES (" + schoolId + "," + examVersionId + "," + userId
-                + ",'" + code + "','t','OPEN',now()-interval '1 hour',now()+interval '2 hours'," + userId + ",now())");
+        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + examId + "," + userId
+                + ",'" + code + "','t','OPEN',now()-interval '1 hour',now()+interval '2 hours'," + userId + ",now(),60)");
     }
 
-    /** Creates a fresh, distinct source question+version+section+exam_question (avoids uk_exam_questions_version_source). */
+    /** Creates a fresh, distinct source question+version+section+exam_question (avoids uk_exam_questions_exam_source). */
     private long newExamQuestion(int position) {
         long srcQ = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'X"
                 + position + "'," + userId + ")");
         long srcV = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + srcQ + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb,"
                 + userId + ")");
-        long section = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES ("
-                + examVersionId + ",'Sec" + position + "'," + position + ")");
-        return insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long section = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES ("
+                + examId + ",'Sec" + position + "'," + position + ")");
+        return insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + examVersionId + "," + section + "," + srcQ + "," + srcV + ",'QC" + position
+                + "VALUES (" + examId + "," + section + "," + srcQ + "," + srcV + ",'QC" + position
                 + "','SINGLE_CHOICE','c',1," + position + ",'{}'::jsonb)");
     }
 
     private Attempt persistAttempt(int number) {
-        return persistAttemptForSession(number, sessionId, studentProfileId, examVersionId);
+        return persistAttemptForSession(number, sessionId, studentProfileId);
     }
 
-    private Attempt persistAttemptForSession(int number, long session, long student, long version) {
+    private Attempt persistAttemptForSession(int number, long session, long student) {
         Long ownerUserId = jdbc.queryForObject(
                 "SELECT user_id FROM student_profiles WHERE id = " + student, Long.class);
-        Attempt a = Attempt.start(schoolId, session, ownerUserId, student, version, number,
+        Attempt a = Attempt.start(schoolId, session, ownerUserId, student, number,
                 Instant.now(), Instant.now().plusSeconds(3600));
         em.persist(a);
         em.flush();
@@ -701,8 +701,8 @@ class V9AttemptPersistenceIntegrationTests {
         return a;
     }
 
-    private Attempt persistSubmittedAttemptForSession(int number, String key, long session, long student, long version) {
-        Attempt a = persistAttemptForSession(number, session, student, version);
+    private Attempt persistSubmittedAttemptForSession(int number, String key, long session, long student) {
+        Attempt a = persistAttemptForSession(number, session, student);
         a.submit(Instant.now(), key);
         em.flush();
         return a;

@@ -64,17 +64,15 @@ class ExamSessionListConcurrencyIntegrationTests {
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "LCE", "T", null)).id();
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
+        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "LCE", "T", null)).id();
+        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
-        long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
         // Create expired OPEN session (past window)
         Instant pastStarts = Instant.now().minusSeconds(7200);
         Instant pastEnds = Instant.now().minusSeconds(3600);
-        expiredSessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, "EXP", "Expired", pastStarts, pastEnds, 1)).id();
+        expiredSessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, "EXP", "Expired", pastStarts, pastEnds, 1, null, null, null)).id();
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", expiredSessionId);
     }
 
@@ -85,7 +83,7 @@ class ExamSessionListConcurrencyIntegrationTests {
         Callable<String> task = () -> {
             start.await();
             try {
-                sessionService.listMySessions(teacherUserId, null, null, null, 0, 20, null);
+                sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
                 return "OK";
             } catch (Exception e) {
                 return e.getClass().getSimpleName();

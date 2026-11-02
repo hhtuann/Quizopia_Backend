@@ -143,7 +143,7 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
         try {
             // Thread A (teacher): production close in an outer tx, hold before commit.
             Future<?> aFuture = pool.submit(() -> tx().executeWithoutResult(status -> {
-                examSessionService.closeSession(c.teacherUserId, c.sessionId);
+                examSessionService.closeSession(c.teacherUserId, null, c.sessionId);
                 closeReturned.countDown();
                 awaitUninterruptibly(releaseClose);
             }));
@@ -206,7 +206,7 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
             // blocking call.
             Future<?> bFuture = pool.submit(() -> tx().executeWithoutResult(status -> {
                 closeReady.countDown();
-                examSessionService.closeSession(c.teacherUserId, c.sessionId);
+                examSessionService.closeSession(c.teacherUserId, null, c.sessionId);
             }));
             closeReady.await(10, TimeUnit.SECONDS);
             assertThat(bFuture.isDone()).as("close must be blocked while start tx is uncommitted").isFalse();
@@ -341,9 +341,10 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
             long bank = insert(
                     "INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + sch
                             + "," + subj + "," + tp + ",'B" + s + "','Bank')");
-            long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                    + sch + "," + subj + "," + tp + ",'E" + s + "','t')");
-            long ver = insert(
+            long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
+                    + "published_at, total_points) VALUES ("
+                    + sch + "," + subj + "," + tp + ",'E" + s + "','t','PUBLISHED',now(),10)");
+            insert(
                     "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
                             + sch + "," + examId + ",1,'PUBLISHED',10,now()," + tu + ")");
             for (int i = 0; i < questionCount; i++) {
@@ -352,11 +353,11 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
                 long qv = insert(
                         "INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES ("
                                 + q + ",1,'SINGLE_CHOICE','c" + i + "',1,'{}'::jsonb," + tu + ")");
-                long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S"
+                long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId + ",'S"
                         + i + "'," + i + ")");
                 long eq = insert(
-                        "INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES ("
-                                + ver + "," + sec + "," + q + "," + qv + ",'QC" + i + "','SINGLE_CHOICE','c" + i
+                        "INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES ("
+                                + examId + "," + sec + "," + q + "," + qv + ",'QC" + i + "','SINGLE_CHOICE','c" + i
                                 + "',1," + i + ",'{}'::jsonb)");
                 jdbc.update(
                         "INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES ("
@@ -364,9 +365,9 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
                                 + eq + ",'D','d',false,3)");
             }
             long session = insert(
-                    "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                            + sch + "," + ver + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600)
-                            + "','" + now.plusSeconds(7200) + "',2," + tu + ",'" + now.minusSeconds(3600) + "')");
+                    "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                            + sch + "," + examId + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600)
+                            + "','" + now.plusSeconds(7200) + "',2," + tu + ",'" + now.minusSeconds(3600) + "',60)");
             long participantId = insert(
                     "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
                             + sch + "," + session + "," + sp + "," + tu + ")");

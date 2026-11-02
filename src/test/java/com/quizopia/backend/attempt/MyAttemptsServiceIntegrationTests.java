@@ -40,7 +40,6 @@ class MyAttemptsServiceIntegrationTests {
     private long studentProfileId;
     private long schoolId;
     private long sessionId;
-    private long examVersionId;
 
     @BeforeEach
     void setUp() {
@@ -56,15 +55,15 @@ class MyAttemptsServiceIntegrationTests {
         long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subj + "," + teacher + ",'B','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam')");
-        examVersionId = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + examVersionId + ",'S',0)");
-        long eq = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + examVersionId + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
+        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam','PUBLISHED',now(),1)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
+        long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + schoolId + "," + examVersionId + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','"
-                + now.plusSeconds(7200) + "',5," + studentUserId + ",'" + now.minusSeconds(3600) + "')");
+        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + schoolId + "," + exam + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','"
+                + now.plusSeconds(7200) + "',5," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + schoolId + "," + sessionId + "," + studentProfileId + "," + studentUserId + ")");
     }
 
@@ -240,11 +239,11 @@ class MyAttemptsServiceIntegrationTests {
     /** Inserts an own attempt with a controlled created_at; returns its id. */
     private long newAttempt(String status, String key, String createdAtIso) {
         boolean submitted = "SUBMITTED".equals(status) || "GRADED".equals(status);
-        String cols = "school_id, exam_session_id, student_profile_id, exam_version_id, attempt_number, "
+        String cols = "school_id, exam_session_id, student_profile_id, attempt_number, "
                 + "status, started_at, deadline_at, created_at"
                 + (submitted ? ", submitted_at, submission_idempotency_key" : "");
         String submitKey = (key == null) ? "K" + nextAttemptNumber() : key;
-        String vals = schoolId + "," + sessionId + "," + studentProfileId + "," + examVersionId + ","
+        String vals = schoolId + "," + sessionId + "," + studentProfileId + ","
                 + nextAttemptNumber() + ",'" + status + "','" + createdAtIso + "'::timestamptz,'"
                 + createdAtIso + "'::timestamptz + interval '1 hour','" + createdAtIso + "'::timestamptz"
                 + (submitted ? ",'" + createdAtIso + "'::timestamptz,'" + submitKey + "'" : "");
@@ -256,9 +255,9 @@ class MyAttemptsServiceIntegrationTests {
         long sp2 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + "," + schoolId + ",'OS')");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                 + "VALUES (" + schoolId + "," + sessionId + "," + sp2 + "," + studentUserId + ") ON CONFLICT DO NOTHING");
-        // Different student → IN_PROGRESS is fine (no 1-active conflict with the caller). 8 columns, 8 values.
-        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, exam_version_id, attempt_number, "
-                + "status, started_at, deadline_at) VALUES (" + schoolId + "," + sessionId + "," + sp2 + "," + examVersionId
+        // Different student → IN_PROGRESS is fine (no 1-active conflict with the caller). 7 columns, 7 values.
+        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, attempt_number, "
+                + "status, started_at, deadline_at) VALUES (" + schoolId + "," + sessionId + "," + sp2
                 + ",1,'IN_PROGRESS', now(), now()+interval '1 hour')");
     }
 
@@ -272,11 +271,11 @@ class MyAttemptsServiceIntegrationTests {
         long bank2 = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + s2 + "," + subj2 + "," + tp2 + ",'B2','B2')");
         long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank2 + ",'Q2'," + u2 + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + u2 + ")");
-        long exam2 = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + s2 + "," + subj2 + "," + tp2 + ",'E2','E2')");
-        long ver2 = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + s2 + "," + exam2 + ",1,'PUBLISHED',1,now()," + u2 + ")");
-        long sess2 = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, created_by, opened_at) VALUES (" + s2 + "," + ver2 + "," + tp2 + ",'S2','S2','OPEN',now(),now()+interval '1 hour'," + u2 + ",now())");
-        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, exam_version_id, attempt_number, "
-                + "status, started_at, deadline_at) VALUES (" + s2 + "," + sess2 + "," + sp2 + "," + ver2 + ",1,'IN_PROGRESS',now(),now()+interval '1 hour')");
+        long exam2 = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + s2 + "," + subj2 + "," + tp2 + ",'E2','E2','PUBLISHED',now(),1)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + s2 + "," + exam2 + ",1,'PUBLISHED',1,now()," + u2 + ")");
+        long sess2 = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, created_by, opened_at, duration_minutes) VALUES (" + s2 + "," + exam2 + "," + tp2 + ",'S2','S2','OPEN',now(),now()+interval '1 hour'," + u2 + ",now(),60)");
+        jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, attempt_number, "
+                + "status, started_at, deadline_at) VALUES (" + s2 + "," + sess2 + "," + sp2 + ",1,'IN_PROGRESS',now(),now()+interval '1 hour')");
     }
 
     private long insert(String sql) {

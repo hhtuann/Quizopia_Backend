@@ -1,7 +1,6 @@
 package com.quizopia.backend.exam;
 
 import com.quizopia.backend.exam.application.ExamService;
-import com.quizopia.backend.exam.domain.model.ExamVersionStatus;
 import com.quizopia.backend.exam.dto.TeacherExamEditorResponse;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQuestionRequest;
@@ -10,7 +9,6 @@ import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
 import com.quizopia.backend.exam.repository.ExamQuestionRepository;
 import com.quizopia.backend.exam.repository.ExamSectionRepository;
-import com.quizopia.backend.exam.repository.ExamVersionRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.stat.Statistics;
@@ -45,10 +43,10 @@ class ExamCompositionServiceIntegrationTests {
 
     @Autowired private JdbcTemplate jdbc;
     @Autowired private ExamService examService;
-    @Autowired private ExamVersionRepository versionRepo;
     @Autowired private ExamSectionRepository sectionRepo;
     @Autowired private ExamQuestionRepository questionRepo;
     @Autowired private EntityManagerFactory entityManagerFactory;
+    @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager em;
 
     private long teacherUserId;
     private long schoolId;
@@ -73,7 +71,7 @@ class ExamCompositionServiceIntegrationTests {
         Long examId = createExam("E1");
 
         TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, 75, "Read carefully", List.of(
+                new UpdateDraftCompositionRequest(0, 75, "Read carefully", List.of(
                         new CompositionSectionRequest(0, "Section A", "sec instructions", List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, null),
                                 new CompositionQuestionRequest(b.multiQ, 1, new java.math.BigDecimal("2.50")),
@@ -81,11 +79,11 @@ class ExamCompositionServiceIntegrationTests {
                                 new CompositionQuestionRequest(b.numQ, 3, null))))));
 
         // Draft settings updated.
-        assertThat(r.currentDraftVersion().durationMinutes()).isEqualTo(75);
-        assertThat(r.currentDraftVersion().instructions()).isEqualTo("Read carefully");
+        assertThat(r.durationMinutes()).isEqualTo(75);
+        assertThat(r.instructions()).isEqualTo("Read carefully");
         // One section, four questions.
-        assertThat(r.currentDraftVersion().sections()).hasSize(1);
-        var qs = r.currentDraftVersion().sections().get(0).questions();
+        assertThat(r.composition()).hasSize(1);
+        var qs = r.composition().get(0).questions();
         assertThat(qs).hasSize(4);
         assertThat(qs).extracting(q -> q.questionType())
                 .containsExactly("SINGLE_CHOICE", "MULTIPLE_CHOICE", "TRUE_FALSE_MATRIX", "NUMERIC_FILL");
@@ -109,11 +107,11 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B2");
         Long examId = createExam("E2");
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, new java.math.BigDecimal("5.00")),
                                 new CompositionQuestionRequest(b.multiQ, 1, null))))));
-        var qs = questionRepo.findAllByExamVersionId(draftId(examId));
+        var qs = questionRepo.findAllByExamId(examId);
         var single = qs.stream().filter(q -> q.getSourceQuestionId() == b.singleQ).findFirst().orElseThrow();
         var multi = qs.stream().filter(q -> q.getSourceQuestionId() == b.multiQ).findFirst().orElseThrow();
         assertThat(single.getDefaultPoints()).isEqualByComparingTo("5.00"); // override
@@ -126,24 +124,24 @@ class ExamCompositionServiceIntegrationTests {
     void replaceClearsOldGraph() {
         Bank b = bank4("B3");
         Long examId = createExam("E3");
-        // First composition: two sections, three questions.
+        // First composition: two sections, three questions (fresh exam: JPA version 0).
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S0", null, List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, null),
                                 new CompositionQuestionRequest(b.multiQ, 1, null))),
                         new CompositionSectionRequest(1, "S1", null, List.of(
                                 new CompositionQuestionRequest(b.tfQ, 0, null))))));
-        long draftId = draftId(examId);
-        assertThat(sectionRepo.findAllByExamVersionIdOrderByPositionAsc(draftId)).hasSize(2);
-        assertThat(questionRepo.findAllByExamVersionId(draftId)).hasSize(3);
-        // Second composition: one section, one question -> old graph fully replaced.
+        assertThat(sectionRepo.findAllByExamIdOrderByPositionAsc(examId)).hasSize(2);
+        assertThat(questionRepo.findAllByExamId(examId)).hasSize(3);
+        // Second composition: one section, one question -> old graph fully replaced
+        // (the exam row's optimistic version advanced to 1).
         examService.updateDraftComposition(teacherUserId, examId,
                 new UpdateDraftCompositionRequest(1, null, null, List.of(
                         new CompositionSectionRequest(0, "Only", null, List.of(
                                 new CompositionQuestionRequest(b.numQ, 0, null))))));
-        assertThat(sectionRepo.findAllByExamVersionIdOrderByPositionAsc(draftId)).hasSize(1);
-        assertThat(questionRepo.findAllByExamVersionId(draftId)).hasSize(1);
+        assertThat(sectionRepo.findAllByExamIdOrderByPositionAsc(examId)).hasSize(1);
+        assertThat(questionRepo.findAllByExamId(examId)).hasSize(1);
     }
 
     // -- Test group: EMPTY sections clears draft --
@@ -153,17 +151,16 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B4");
         Long examId = createExam("E4");
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, null))))));
-        long draftId = draftId(examId);
-        assertThat(questionRepo.findAllByExamVersionId(draftId)).hasSize(1);
-        // Clear.
+        assertThat(questionRepo.findAllByExamId(examId)).hasSize(1);
+        // Clear (exam row optimistic version advanced to 1).
         TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
                 new UpdateDraftCompositionRequest(1, null, null, List.of()));
-        assertThat(r.currentDraftVersion().sections()).isEmpty();
-        assertThat(questionRepo.findAllByExamVersionId(draftId)).isEmpty();
-        assertThat(sectionRepo.findAllByExamVersionIdOrderByPositionAsc(draftId)).isEmpty();
+        assertThat(r.composition()).isEmpty();
+        assertThat(questionRepo.findAllByExamId(examId)).isEmpty();
+        assertThat(sectionRepo.findAllByExamIdOrderByPositionAsc(examId)).isEmpty();
     }
 
     // -- Test group: ROLLBACK (invalid source keeps old graph) --
@@ -173,21 +170,21 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B5");
         Long examId = createExam("E5");
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, null))))));
-        long draftId = draftId(examId);
-        int beforeSections = sectionRepo.findAllByExamVersionIdOrderByPositionAsc(draftId).size();
-        int beforeQuestions = questionRepo.findAllByExamVersionId(draftId).size();
-        // Attempt a replace that references a missing source -> must throw and leave old graph intact.
+        int beforeSections = sectionRepo.findAllByExamIdOrderByPositionAsc(examId).size();
+        int beforeQuestions = questionRepo.findAllByExamId(examId).size();
+        // Attempt a replace that references a missing source -> must throw and
+        // leave old graph intact. Token = 1 (first PUT bumped the revision).
         assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
                 new UpdateDraftCompositionRequest(1, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(
                                 new CompositionQuestionRequest(999999L, 0, null)))))))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
-        assertThat(sectionRepo.findAllByExamVersionIdOrderByPositionAsc(draftId)).hasSize(beforeSections);
-        assertThat(questionRepo.findAllByExamVersionId(draftId)).hasSize(beforeQuestions);
+        assertThat(sectionRepo.findAllByExamIdOrderByPositionAsc(examId)).hasSize(beforeSections);
+        assertThat(questionRepo.findAllByExamId(examId)).hasSize(beforeQuestions);
     }
 
     // -- Test group: duplicate position / source rejected --
@@ -197,7 +194,7 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B6");
         Long examId = createExam("E6");
         assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "A", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null))),
                         new CompositionSectionRequest(0, "B", null, List.of(new CompositionQuestionRequest(b.multiQ, 0, null)))))))
                 .isInstanceOfSatisfying(ExamException.class,
@@ -209,7 +206,7 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B7");
         Long examId = createExam("E7");
         assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "A", null, List.of(
                                 new CompositionQuestionRequest(b.singleQ, 0, null),
                                 new CompositionQuestionRequest(b.multiQ, 0, null)))))))
@@ -222,7 +219,7 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B8");
         Long examId = createExam("E8");
         assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "A", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null))),
                         new CompositionSectionRequest(1, "B", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null)))))))
                 .isInstanceOfSatisfying(ExamException.class,
@@ -234,17 +231,19 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("B9");
         Long examId = createExam("E9");
         TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "A", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null))),
                         new CompositionSectionRequest(1, "B", null, List.of(new CompositionQuestionRequest(b.multiQ, 0, null))))));
-        assertThat(r.currentDraftVersion().sections()).hasSize(2);
+        assertThat(r.composition()).hasSize(2);
     }
 
     // -- Test group: SOURCE POLICY rejects --
 
     @Test
-    void foreignOwnerBankSameSchoolRejected403() {
-        // Second teacher in the SAME school owns a bank+question -> not allowed (strict owner match).
+    void sameWorkspaceForeignOwnerBankAccepted() {
+        // Public platform foundation (issue #1): the org workspace is the sharing
+        // boundary. A second teacher in the SAME school (same org workspace)
+        // contributes questions; cross-workspace banks stay rejected (below).
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o2','o2@t','h','O2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
         long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
@@ -252,11 +251,10 @@ class ExamCompositionServiceIntegrationTests {
         long fq = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank2 + ",'fq','ACTIVE',1," + u2 + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + fq + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + u2 + ")");
         Long examId = createExam("E10");
-        assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
-                        new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(fq, 0, null)))))))
-                .isInstanceOfSatisfying(ExamException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
+        TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
+                        new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(fq, 0, null))))));
+        assertThat(r.composition()).hasSize(1);
     }
 
     @Test
@@ -320,17 +318,16 @@ class ExamCompositionServiceIntegrationTests {
         Bank b = bank4("Bpin");
         Long examId = createExam("Epin");
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null))))));
-        long draftId = draftId(examId);
-        long pinnedAtPut = questionRepo.findAllByExamVersionId(draftId).get(0).getSourceQuestionVersionId();
+        long pinnedAtPut = questionRepo.findAllByExamId(examId).get(0).getSourceQuestionVersionId();
         assertThat(pinnedAtPut).isEqualTo(b.singleV);
         // Bank bumps the question to version 2 (new current).
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES ("
                 + b.singleQ + ",2,'SINGLE_CHOICE','c2','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         jdbc.update("UPDATE questions SET current_version_number = 2 WHERE id = ?", b.singleQ);
         // DRAFT still pinned at version 1.
-        long stillPinned = questionRepo.findAllByExamVersionId(draftId).get(0).getSourceQuestionVersionId();
+        long stillPinned = questionRepo.findAllByExamId(examId).get(0).getSourceQuestionVersionId();
         assertThat(stillPinned).isEqualTo(b.singleV).isEqualTo(pinnedAtPut);
     }
 
@@ -348,17 +345,18 @@ class ExamCompositionServiceIntegrationTests {
     }
 
     @Test
-    void noDraftReturnsVersionNotDraft() {
+    void publishedExamRejectsComposition() {
         Bank b = bank4("Bnd");
         Long examId = createExam("End");
-        long draftId = draftId(examId);
-        // Remove the DRAFT version row so there is no DRAFT to update.
-        jdbc.update("DELETE FROM exam_versions WHERE id = ?", draftId);
+        // Publish the exam directly (one-way DRAFT → PUBLISHED; no version rows).
+        jdbc.update("UPDATE exams SET status = 'PUBLISHED', published_at = now(), total_points = 1 WHERE id = ?", examId);
+        // Detach the stale managed instance so the service sees PUBLISHED.
+        em.clear();
         assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null)))))))
                 .isInstanceOfSatisfying(ExamException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VERSION_NOT_DRAFT));
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_NOT_DRAFT));
     }
 
     // -- Test group: foreign owner (mutation) -> 403 --
@@ -371,7 +369,7 @@ class ExamCompositionServiceIntegrationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
         insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'TC3')");
         assertThatThrownBy(() -> examService.updateDraftComposition(other, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null)))))))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
@@ -388,9 +386,9 @@ class ExamCompositionServiceIntegrationTests {
                 + q + ",1,'NUMERIC_FILL','n','MEDIUM',1,'{\"expectedAnswer\":\"02.5\",\"requiredInputLength\":4,\"roundingInstruction\":\"2dp\"}'::jsonb,'{}'::jsonb," + teacherUserId + ")");
         Long examId = createExam("Enum");
         TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
-        var ak = r.currentDraftVersion().sections().get(0).questions().get(0).answerKey();
+        var ak = r.composition().get(0).questions().get(0).answerKey();
         assertThat(ak.path("expectedAnswer").asString()).isEqualTo("02.5"); // unchanged representation
         assertThat(ak.path("requiredInputLength").isNumber()).isTrue();
         assertThat(ak.path("requiredInputLength").asInt()).isEqualTo(4);
@@ -420,7 +418,7 @@ class ExamCompositionServiceIntegrationTests {
         // N=1: one section, one source question. (Fixtures created ABOVE, before stats.clear().)
         stats.clear();
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(qIds.get(0), 0, null))))));
         long executionsN1 = selectExecutionCount(stats);
 
@@ -430,8 +428,9 @@ class ExamCompositionServiceIntegrationTests {
             twenty.add(new CompositionQuestionRequest(qIds.get(i), i, null));
         }
         stats.clear();
+        int examRowVersion = jdbc.queryForObject("SELECT version FROM exams WHERE id = " + examId, Integer.class);
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(examRowVersion, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, twenty))));
         long executionsN20 = selectExecutionCount(stats);
 
@@ -455,17 +454,13 @@ class ExamCompositionServiceIntegrationTests {
 
     private void putOne(Long examId, Long sourceQuestionId) {
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(sourceQuestionId, 0, null))))));
     }
 
     private Long createExam(String code) {
         return examService.createExam(teacherUserId,
-                new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null, code, "T", null)).id();
-    }
-
-    private long draftId(Long examId) {
-        return versionRepo.findFirstByExamIdAndStatus(examId, ExamVersionStatus.DRAFT).orElseThrow().getId();
+                new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null, code, "T", null)).id();
     }
 
     /**

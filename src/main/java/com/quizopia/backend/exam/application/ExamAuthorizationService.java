@@ -47,6 +47,17 @@ public class ExamAuthorizationService {
         return resolveTeacherProfile(userId, now);
     }
 
+    /**
+     * Public-platform variant (issue #1 A2/A3): requires the effective
+     * permission only — a user authoring in their personal workspace has no
+     * TeacherProfile. Resource access is additionally guarded by workspace
+     * membership/ownership checks in the services.
+     */
+    public void requireUserWithPermission(Long userId, String permissionCode) {
+        Instant now = Instant.now(clock);
+        requirePermission(userId, permissionCode, now);
+    }
+
     private void requireActiveTeacherRole(Long userId, Instant now) {
         List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
         if (!roles.contains("TEACHER")) {

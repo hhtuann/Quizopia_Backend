@@ -75,8 +75,8 @@ class ExamControllerIntegrationTests {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code").value("EX1"))
                 .andExpect(jsonPath("$.status").value("DRAFT"))
-                .andExpect(jsonPath("$.currentVersionNumber").value(1))
-                .andExpect(jsonPath("$.hasDraft").value(true));
+                .andExpect(jsonPath("$.totalPoints").value(0))
+                .andExpect(jsonPath("$.questionCount").value(0));
     }
 
     @Test
@@ -106,10 +106,10 @@ class ExamControllerIntegrationTests {
         mockMvc.perform(get("/api/exams/" + examId).with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("EX3"))
-                .andExpect(jsonPath("$.currentDraftVersion.versionNumber").value(1))
-                .andExpect(jsonPath("$.currentDraftVersion.durationMinutes").value(60))
-                .andExpect(jsonPath("$.currentDraftVersion.tfMatrixScoring.['0']").value(0))
-                .andExpect(jsonPath("$.currentDraftVersion.tfMatrixScoring.['4']").value(100));
+                .andExpect(jsonPath("$.status").value("DRAFT"))
+                .andExpect(jsonPath("$.composition").isEmpty())
+                .andExpect(jsonPath("$.totalPoints").value(0))
+                .andExpect(jsonPath("$.examVersion").value(0));
     }
 
     // -- Unauthenticated (4 endpoints → 401) --

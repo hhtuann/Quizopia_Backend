@@ -62,19 +62,19 @@ class AttemptDetailServiceIntegrationTests {
         long teacher = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + schoolId + ",'TC')");
         studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + schoolId + ",'SC')");
         long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subj + "," + teacher + ",'B','Bank')");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam')");
-        long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',4,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam','PUBLISHED',now(),4)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',4,now()," + studentUserId + ")");
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         String numericKey = "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"two decimals\"}'::jsonb";
-        long eqSingle = eq(ver, sec, bank, "SINGLE_CHOICE", 0, studentUserId);
+        long eqSingle = eq(exam, sec, bank, "SINGLE_CHOICE", 0, studentUserId);
         opts(eqSingle, "A", "B", "C", "D");
-        long eqMultiple = eq(ver, sec, bank, "MULTIPLE_CHOICE", 1, studentUserId);
+        long eqMultiple = eq(exam, sec, bank, "MULTIPLE_CHOICE", 1, studentUserId);
         opts(eqMultiple, "A", "B", "C", "D");
-        long eqTf = eq(ver, sec, bank, "TRUE_FALSE_MATRIX", 2, studentUserId);
+        long eqTf = eq(exam, sec, bank, "TRUE_FALSE_MATRIX", 2, studentUserId);
         opts(eqTf, "A", "B", "C", "D");
-        long eqNumeric = eqNumeric(ver, sec, bank, 3, studentUserId, numericKey);
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + schoolId + "," + ver + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "')");
+        long eqNumeric = eqNumeric(exam, sec, bank, 3, studentUserId, numericKey);
+        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + schoolId + "," + exam + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + schoolId + "," + sessionId + "," + studentProfileId + "," + studentUserId + ")");
         // Start an attempt to materialize the snapshot, then capture the attempt_question ids by type.
         long attemptId = attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null)).attemptId();
@@ -369,21 +369,21 @@ class AttemptDetailServiceIntegrationTests {
         return r.questions().stream().filter(q -> q.questionType().equals(type)).findFirst().orElseThrow();
     }
 
-    private long eq(long ver, long sec, long bank, String type, int position, long user) {
+    private long eq(long exam, long sec, long bank, String type, int position, long user) {
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + type + position + "'," + user + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) "
                 + "VALUES (" + q + ",1,'" + type + "','c',1,'{}'::jsonb," + user + ")");
-        return insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, "
-                + "question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv
+        return insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
+                + "question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv
                 + ",'QC','" + type + "','c',1," + position + ",'{}'::jsonb)");
     }
 
-    private long eqNumeric(long ver, long sec, long bank, int position, long user, String numericKey) {
+    private long eqNumeric(long exam, long sec, long bank, int position, long user, String numericKey) {
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'QN" + position + "'," + user + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, answer_key, created_by) "
                 + "VALUES (" + q + ",1,'NUMERIC_FILL','n',1,'{}'::jsonb," + numericKey + "," + user + ")");
-        return insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, "
-                + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + ver + "," + sec + "," + q + "," + qv
+        return insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
+                + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + exam + "," + sec + "," + q + "," + qv
                 + ",'QC','NUMERIC_FILL','n',1," + position + ",'{}'::jsonb," + numericKey + ")");
     }
 

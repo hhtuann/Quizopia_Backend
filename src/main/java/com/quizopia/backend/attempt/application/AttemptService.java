@@ -92,29 +92,28 @@ public class AttemptService {
     public AvailableSessionsResponse getAvailableSessions(Long userId) {
         StudentProfile profile = auth.requireStudentWithPermission(userId, "EXAM_SESSION_READ");
         Instant now = Instant.now(clock);
-        List<AvailableSessionItem> items = queryAvailable(profile.getSchoolId(), profile.getId(), now);
+        List<AvailableSessionItem> items = queryAvailable(userId, profile.getId(), now);
         return new AvailableSessionsResponse(items, now);
     }
 
-    private List<AvailableSessionItem> queryAvailable(Long schoolId, Long studentId, Instant now) {
-        // Class-based visibility (replaces the legacy exam_session_participants JOIN):
-        // a session is visible if PUBLIC (same school) OR the student is a member of at
-        // least one classroom assigned to the session via exam_session_classes.
+    private List<AvailableSessionItem> queryAvailable(Long userId, Long studentProfileId, Instant now) {
+        // Class-based visibility (user-based membership, issue #1 A4): a session
+        // is visible if PUBLIC (platform users; Phase 1 rule, ADR-001 §2.3) OR
+        // the user is a member of at least one classroom assigned to the session.
         String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
-                + "COALESCE(s.duration_minutes, ev.duration_minutes) AS duration_minutes, "
+                + "s.duration_minutes AS duration_minutes, "
                 + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.student_profile_id = ?) AS used, "
                 + "act.id AS active_id, act.deadline_at AS active_deadline "
                 + "FROM exam_sessions s "
-                + "JOIN exam_versions ev ON ev.id = s.exam_version_id "
-                + "JOIN exams e ON e.id = ev.exam_id "
-                + "JOIN subjects subj ON subj.id = e.subject_id "
+                + "JOIN exams e ON e.id = s.exam_id "
+                + "LEFT JOIN subjects subj ON subj.id = e.subject_id "
                 + "LEFT JOIN attempts act ON act.exam_session_id = s.id AND act.student_profile_id = ? AND act.status = 'IN_PROGRESS' "
-                + "WHERE s.school_id = ? AND s.status IN ('SCHEDULED','OPEN') "
+                + "WHERE s.status IN ('SCHEDULED','OPEN') "
                 + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
                 + "  SELECT 1 FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                + "  WHERE esc.exam_session_id = s.id AND cm.student_profile_id = ?)) "
+                + "  WHERE esc.exam_session_id = s.id AND cm.user_id = ?)) "
                 + "ORDER BY s.starts_at ASC, s.id ASC";
         return jdbc.query(sql, (rs, n) -> {
             int maxAttempts = rs.getInt("max_attempts");
@@ -138,7 +137,7 @@ public class AttemptService {
                     startsAt, endsAt, rs.getInt("duration_minutes"), maxAttempts,
                     used, remaining, activeId, activeDeadline, canStartNow, canResume,
                     rs.getString("visibility"));
-        }, studentId, studentId, schoolId, studentId);
+        }, studentProfileId, studentProfileId, userId);
     }
 
     // ============================================================
@@ -155,9 +154,9 @@ public class AttemptService {
         ExamSession session = sessionRepo.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.EXAM_SESSION_NOT_FOUND));
 
-        // 2. Visibility-based eligibility (replaces the legacy participant ELIGIBLE check):
-        // PUBLIC → same school; CLASS_RESTRICTED → member of an assigned class.
-        if (!isEligible(profile, session)) {
+        // 2. Visibility-based eligibility: PUBLIC → platform users;
+        // CLASS_RESTRICTED → member of an assigned class (user-based).
+        if (!isEligible(userId, session)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_ELIGIBLE);
         }
         // 2b. Lazy-open: SCHEDULED within the time window → OPEN (auto-open on
@@ -188,18 +187,16 @@ public class AttemptService {
     }
 
     /**
-     * Class-based eligibility gate (replaces the participant ELIGIBLE check).
+     * Visibility-based eligibility (issue #1 A2/A4 + issue #2):
      * <ul>
-     *   <li>PUBLIC: any student in the SAME school.</li>
+     *   <li>PUBLIC: any ACTIVE platform user with attempt capability — the
+     *       same-school assumption is retired (ADR-001 §2.3 Phase 1 rule).</li>
      *   <li>CLASS_RESTRICTED: user is a member of at least one classroom
      *       assigned to the session via {@code exam_session_classes}
-     *       (user-based membership, V12).</li>
+     *       (user-based membership).</li>
      * </ul>
      */
-    private boolean isEligible(StudentProfile profile, ExamSession session) {
-        if (!java.util.Objects.equals(profile.getSchoolId(), session.getSchoolId())) {
-            return false;
-        }
+    private boolean isEligible(Long userId, ExamSession session) {
         if (session.getVisibility() == com.quizopia.backend.exam.domain.model.SessionVisibility.PUBLIC) {
             return true;
         }
@@ -207,7 +204,7 @@ public class AttemptService {
                 "SELECT COUNT(*) FROM exam_session_classes esc "
                         + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
                         + "WHERE esc.exam_session_id = ? AND cm.user_id = ?",
-                Integer.class, session.getId(), profile.getUserId());
+                Integer.class, session.getId(), userId);
         return cnt != null && cnt > 0;
     }
 
@@ -232,12 +229,10 @@ public class AttemptService {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_MAX_REACHED);
         }
 
-        // Deadline = min(session.endsAt, startedAt + duration). Duration priority:
-        // 1. session.durationMinutes (override) if non-null.
-        // 2. exam version's durationMinutes.
-        // 3. 0 = unlimited (deadline = session.endsAt).
-        Integer sessionDuration = session.getDurationMinutes();
-        int durationMinutes = sessionDuration != null ? sessionDuration : fetchDurationMinutes(session.getExamVersionId());
+        // Deadline = min(session.endsAt, startedAt + duration). Duration is
+        // SESSION-ONLY (materialized at migration; 0 = unlimited) — the legacy
+        // exam-version fallback is gone (issue #2 B5).
+        int durationMinutes = session.getDurationMinutes();
         Instant deadline = session.getEndsAt();
         if (durationMinutes > 0) {
             Instant durationEnd = now.plusSeconds(durationMinutes * 60L);
@@ -250,14 +245,14 @@ public class AttemptService {
         Attempt attempt;
         try {
             attempt = Attempt.start(
-                    session.getSchoolId(), session.getId(), userId, profile.getId(), session.getExamVersionId(),
+                    session.getSchoolId(), session.getId(), userId, profile.getId(),
                     nextNumber, now, deadline, request.clientInstanceId());
             em.persist(attempt);
             em.flush();
 
-            List<QuestionRow> qRows = queryOrderedQuestions(session.getExamVersionId());
+            List<QuestionRow> qRows = queryOrderedQuestions(session.getExamId());
             if (qRows.isEmpty()) {
-                log.warn("exam version has no questions: versionId={}", session.getExamVersionId());
+                log.warn("exam has no questions: examId={}", session.getExamId());
                 throw new AttemptException(AttemptErrorCode.ATTEMPT_VALIDATION_ERROR);
             }
             Map<Long, List<OptionRow>> optionsByQuestion = queryOptions(
@@ -300,30 +295,19 @@ public class AttemptService {
     // Helpers
     // ============================================================
 
-    private int fetchDurationMinutes(Long examVersionId) {
-        List<Integer> results = jdbc.queryForList(
-                "SELECT duration_minutes FROM exam_versions WHERE id = ? AND status = 'PUBLISHED'",
-                Integer.class, examVersionId);
-        if (results.isEmpty()) {
-            log.warn("exam version not found or not PUBLISHED: versionId={}", examVersionId);
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_VALIDATION_ERROR);
-        }
-        return results.get(0);
-    }
-
     /**
-     * Queries ordered exam_questions (section.position, question.position) for a
-     * version.
+     * Queries ordered exam_questions (section.position, question.position)
+     * for an exam (direct relation, no version hop).
      */
-    private List<QuestionRow> queryOrderedQuestions(Long examVersionId) {
+    private List<QuestionRow> queryOrderedQuestions(Long examId) {
         return jdbc.query(
                 "SELECT eq.id, eq.question_type, eq.content, eq.default_points "
                         + "FROM exam_questions eq JOIN exam_sections es ON es.id = eq.exam_section_id "
-                        + "WHERE eq.exam_version_id = ? ORDER BY es.position ASC, eq.position ASC, eq.id ASC",
+                        + "WHERE eq.exam_id = ? ORDER BY es.position ASC, eq.position ASC, eq.id ASC",
                 (rs, n) -> new QuestionRow(
                         rs.getLong("id"), rs.getString("question_type"),
                         rs.getString("content"), rs.getBigDecimal("default_points")),
-                examVersionId);
+                examId);
     }
 
     /** Batch-loads options ordered by position for a set of exam_question_ids. */

@@ -111,20 +111,20 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
     // Fixtures
     // ============================================================
 
-    /** Creates a student + version with N SINGLE_CHOICE questions (4 opts) + an IN_PROGRESS attempt; returns userId. */
+    /** Creates a student + exam with N SINGLE_CHOICE questions (4 opts) + an IN_PROGRESS attempt; returns userId. */
     private long newStudentWithDetailAttempt(int n) {
         long[] chain = baseChain("D" + n);
-        long ver = chain[2];
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = chain[2];
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long bank = chain[3];
         long user = chain[0];
         for (int i = 0; i < n; i++) {
             long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + i + "'," + user + ")");
             long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + user + ")");
-            long eq = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1," + i + ",'{}'::jsonb)");
+            long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1," + i + ",'{}'::jsonb)");
             jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
         }
-        long session = openSession(chain, ver);
+        long session = openSession(chain, exam);
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + chain[1] + "," + session + "," + chain[4] + "," + user + ")");
         attemptService.startAttempt(user, session, new StartAttemptRequest(null));
         return user;
@@ -133,14 +133,14 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
     /** Creates a student with N SUBMITTED attempts; returns userId. */
     private long newStudentWithMyAttempts(int n) {
         long[] chain = baseChain("M" + n);
-        long ver = chain[2];
-        long session = openSession(chain, ver);
+        long exam = chain[2];
+        long session = openSession(chain, exam);
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + chain[1] + "," + session + "," + chain[4] + "," + chain[0] + ")");
         long user = chain[0];
         for (int i = 0; i < n; i++) {
-            jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, exam_version_id, attempt_number, "
+            jdbc.update("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, attempt_number, "
                     + "status, started_at, deadline_at, submitted_at, submission_idempotency_key) VALUES (" + chain[1] + "," + session
-                    + "," + chain[4] + "," + ver + "," + (i + 1) + ",'SUBMITTED', now()-interval '2 hour', now()-interval '1 hour', now()-interval '1 hour','K" + i + "')");
+                    + "," + chain[4] + "," + (i + 1) + ",'SUBMITTED', now()-interval '2 hour', now()-interval '1 hour', now()-interval '1 hour','K" + i + "')");
         }
         return user;
     }
@@ -148,16 +148,16 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
     /** Creates a student who is an ELIGIBLE participant of N OPEN sessions; returns userId. */
     private long newStudentWithAvailableSessions(int n) {
         long[] chain = baseChain("A" + n);
-        long ver = chain[2];
+        long exam = chain[2];
         long user = chain[0];
         for (int i = 0; i < n; i++) {
-            long session = openSession(chain, ver);
+            long session = openSession(chain, exam);
             jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + chain[1] + "," + session + "," + chain[4] + "," + user + ")");
         }
         return user;
     }
 
-    /** baseChain → [userId, schoolId, examVersionId, bankId, studentProfileId, teacherProfileId]. */
+    /** baseChain → [userId, schoolId, examId, bankId, studentProfileId, teacherProfileId]. */
     private long[] baseChain(String tag) {
         Instant now = Instant.parse("2026-07-03T08:00:00Z");
         clock.setInstant(now);
@@ -170,15 +170,15 @@ class AttemptDetailAndMyQueryCountIntegrationTests {
         long teacher = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + user + "," + school + ",'TC" + tag + "')");
         long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + user + "," + school + ",'SC" + tag + "')");
         long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + teacher + ",'B" + tag + "','Bank')");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + "," + teacher + ",'E" + tag + "','E')");
-        long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + user + ")");
-        return new long[]{user, school, ver, bank, sp, teacher};
+        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + teacher + ",'E" + tag + "','E','PUBLISHED',now(),1)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + user + ")");
+        return new long[]{user, school, exam, bank, sp, teacher};
     }
 
-    private long openSession(long[] chain, long ver) {
+    private long openSession(long[] chain, long exam) {
         Instant now = Instant.parse("2026-07-03T08:00:00Z");
-        return insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + chain[1] + "," + ver + "," + chain[5] + ",'S" + System.nanoTime() + "','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + chain[0] + ",'" + now.minusSeconds(3600) + "')");
+        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + chain[1] + "," + exam + "," + chain[5] + ",'S" + System.nanoTime() + "','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + chain[0] + ",'" + now.minusSeconds(3600) + "',60)");
     }
 
     private long activeAttemptOf(long userId) {

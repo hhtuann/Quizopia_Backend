@@ -36,6 +36,7 @@ class AvailableSessionQueryCountIntegrationTests {
     @Autowired private MutableClock clock;
 
     private long studentUserId;
+    private long examId;
 
     @BeforeEach
     void setUp() {
@@ -52,17 +53,20 @@ class AvailableSessionQueryCountIntegrationTests {
         long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam')");
-        long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
-        insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
-        createSessions(ver, school, tp, sp, studentUserId, now, 1);
+        examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),1)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + examId + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId + ",'S',0)");
+        insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + examId + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
+        createSessions(examId, school, tp, sp, studentUserId, now, 1);
     }
 
     @Test
     void queryCountN1() {
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-        assertThat(resp.items()).hasSize(1);
+        // Counted scope: fixture sessions only (CLASS_RESTRICTED + assigned). PUBLIC
+        // sessions committed by other non-transactional test classes in the shared
+        // container are platform-wide visible and must not affect the count.
+        assertThat(resp.items()).filteredOn(i -> i.exam().examId().equals(examId)).hasSize(1);
         // Query structure (constant regardless of N):
         // Auth: findActiveRoleCodesByUserId (1 JPQL) + findEffectivePermissionCodesByUserId (1 JPQL) + findByUserId profile (1 JPQL) = 3
         // Available: 1 native JdbcTemplate query (correlated subqueries for count/active)
@@ -74,23 +78,33 @@ class AvailableSessionQueryCountIntegrationTests {
         long school = jdbc.queryForObject("SELECT id FROM schools WHERE code='QCS'", Long.class);
         long tp = jdbc.queryForObject("SELECT id FROM teacher_profiles WHERE school_id=" + school, Long.class);
         long sp = jdbc.queryForObject("SELECT id FROM student_profiles WHERE school_id=" + school, Long.class);
-        long ver = jdbc.queryForObject("SELECT id FROM exam_versions WHERE school_id=" + school + " AND version_number=1", Long.class);
-        createSessions(ver, school, tp, sp, studentUserId, clock.instant(), 19);
+        long exam = jdbc.queryForObject("SELECT id FROM exams WHERE school_id=" + school + " AND code='E'", Long.class);
+        createSessions(exam, school, tp, sp, studentUserId, clock.instant(), 19);
 
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-        assertThat(resp.items()).hasSize(20);
+        assertThat(resp.items()).filteredOn(i -> i.exam().examId().equals(examId)).hasSize(20);
         // Same 4 queries as N=1. The native available query returns all 20 rows in ONE query
         // (correlated subqueries inline count/active per row). Auth is constant.
         // This proves bounded constant (not linear).
     }
 
-    private void createSessions(long ver, long school, long tp, long sp, long userId, Instant now, int count) {
+    private void createSessions(long exam, long school, long tp, long sp, long userId, Instant now, int count) {
+        // All fixture sessions are CLASS_RESTRICTED + assigned to one classroom the
+        // student belongs to, so the eligible set is deterministic (no reliance on
+        // PUBLIC platform-wide visibility).
+        long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, code, name) "
+                + "VALUES (quizopia_org_workspace_for_school(" + school + ")," + school + "," + tp
+                + ",'CLS" + count + "','C')");
+        jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id) VALUES ("
+                + cls + "," + userId + "," + school + "," + sp + ")");
         for (int i = 0; i < count; i++) {
-            long session = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                    + school + "," + ver + "," + tp + ",'S" + i + "_" + count + "','S','OPEN','" + now.minusSeconds(3600) + "','"
-                    + now.plusSeconds(7200) + "',1," + userId + ",'" + now.minusSeconds(3600) + "')");
+            long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
+                    + school + "," + exam + "," + tp + ",'S" + i + "_" + count + "','S','OPEN','" + now.minusSeconds(3600) + "','"
+                    + now.plusSeconds(7200) + "',1," + userId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
             jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
                     + school + "," + session + "," + sp + "," + userId + ")");
+            jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) VALUES ("
+                    + session + "," + cls + "," + school + ")");
         }
     }
 

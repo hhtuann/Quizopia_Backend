@@ -21,49 +21,57 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
 
     boolean existsByOwnerTeacherIdAndCodeIgnoreCase(Long ownerTeacherId, String code);
 
+    boolean existsByCreatedByAndCodeIgnoreCase(Long createdBy, String code);
+
     List<ExamSession> findAllByOwnerTeacherId(Long ownerTeacherId);
+
+    Page<ExamSession> findAllByExamIdOrderByIdDesc(Long examId, Pageable pageable);
+
+    List<ExamSession> findAllByExamId(Long examId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM ExamSession s WHERE s.id = :id")
     Optional<ExamSession> findByIdForUpdate(@Param("id") Long id);
 
-    @Query("SELECT s FROM ExamSession s WHERE s.ownerTeacherId = :ownerId "
+    @Query("SELECT s FROM ExamSession s WHERE s.createdBy = :userId "
             + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(s.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(s.title) LIKE LOWER(CONCAT('%', :search, '%'))) "
             + "AND (:status IS NULL OR s.status = :status) "
-            + "AND (:examId IS NULL OR s.examVersionId IN "
-            + "  (SELECT ev.id FROM ExamVersion ev WHERE ev.examId = :examId))")
-    Page<ExamSession> findOwnedByTeacher(@Param("ownerId") Long ownerId,
-                                          @Param("search") String search,
-                                          @Param("status") ExamSessionStatus status,
-                                          @Param("examId") Long examId,
-                                          Pageable pageable);
+            + "AND (:examId IS NULL OR s.examId = :examId)")
+    Page<ExamSession> findCreatedByUser(@Param("userId") Long userId,
+                                        @Param("search") String search,
+                                        @Param("status") ExamSessionStatus status,
+                                        @Param("examId") Long examId,
+                                        Pageable pageable);
+
+    /** Active sessions of an exam (archive guard). */
+    List<ExamSession> findAllByExamIdAndStatusIn(Long examId, List<ExamSessionStatus> statuses);
 
     /**
      * Bulk lazy-close: transitions ALL expired OPEN sessions for the owner to CLOSED.
-     * Must be called BEFORE {@link #findOwnedByTeacher} so the status filter and pagination
+     * Must be called BEFORE {@link #findCreatedByUser} so the status filter and pagination
      * see the effective status. Bulk UPDATE bypasses {@code @Version} (no optimistic-lock race;
      * no managed entities). {@code clearAutomatically=true} clears the persistence context so the
      * subsequent query loads fresh post-close state.
      */
     @Modifying(clearAutomatically = true)
     @Query("UPDATE ExamSession s SET s.status = :closed, s.closedAt = :now "
-            + "WHERE s.ownerTeacherId = :ownerId AND s.status = :open AND s.endsAt < :now")
-    int bulkLazyCloseExpiredOpenSessions(@Param("ownerId") Long ownerId,
+            + "WHERE s.createdBy = :userId AND s.status = :open AND s.endsAt < :now")
+    int bulkLazyCloseExpiredOpenSessions(@Param("userId") Long userId,
                                          @Param("open") ExamSessionStatus openStatus,
                                          @Param("closed") ExamSessionStatus closedStatus,
                                          @Param("now") Instant now);
 
     /**
      * Bulk lazy-open: transitions ALL due SCHEDULED sessions for the owner to OPEN.
-     * Called BEFORE findOwnedByTeacher so the list view reflects the effective status.
+     * Called BEFORE findCreatedByUser so the list view reflects the effective status.
      */
     @Modifying(clearAutomatically = true)
     @Query("UPDATE ExamSession s SET s.status = :open, s.openedAt = :now "
-            + "WHERE s.ownerTeacherId = :ownerId AND s.status = :scheduled "
+            + "WHERE s.createdBy = :userId AND s.status = :scheduled "
             + "AND s.startsAt <= :now AND s.endsAt >= :now")
-    int bulkLazyOpenScheduledSessions(@Param("ownerId") Long ownerId,
+    int bulkLazyOpenScheduledSessions(@Param("userId") Long userId,
                                       @Param("scheduled") ExamSessionStatus scheduledStatus,
                                       @Param("open") ExamSessionStatus openStatus,
                                       @Param("now") Instant now);
@@ -76,8 +84,8 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
      */
     @Modifying(clearAutomatically = true)
     @Query("UPDATE ExamSession s SET s.status = :closed, s.openedAt = :now, s.closedAt = :now "
-            + "WHERE s.ownerTeacherId = :ownerId AND s.status = :scheduled AND s.endsAt < :now")
-    int bulkCloseExpiredScheduledSessions(@Param("ownerId") Long ownerId,
+            + "WHERE s.createdBy = :userId AND s.status = :scheduled AND s.endsAt < :now")
+    int bulkCloseExpiredScheduledSessions(@Param("userId") Long userId,
                                          @Param("scheduled") ExamSessionStatus scheduledStatus,
                                          @Param("closed") ExamSessionStatus closedStatus,
                                          @Param("now") Instant now);

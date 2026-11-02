@@ -115,10 +115,10 @@ public class AttemptQueryService {
                     r.content, r.defaultPoints, r.sectionTitle, r.sectionInstructions, r.sectionPosition,
                     options, savedAnswer));
         }
-        // Load the exam title for the student-facing navbar (attempt → version → exam).
+        // Load the exam title for the student-facing navbar (attempt → session → exam).
         String examTitle = jdbc.queryForObject(
-                "SELECT e.title FROM exams e JOIN exam_versions ev ON ev.exam_id = e.id WHERE ev.id = ?",
-                String.class, attempt.getExamVersionId());
+                "SELECT e.title FROM exams e JOIN exam_sessions s ON s.exam_id = e.id WHERE s.id = ?",
+                String.class, attempt.getExamSessionId());
         return new AttemptDetailResponse(attempt.getId(), attempt.getExamSessionId(), attempt.getAttemptNumber(),
                 attempt.getStatus().name(), attempt.getStartedAt(), attempt.getDeadlineAt(),
                 attempt.getSubmittedAt(), serverTime, answeredCount, rows.size(), examTitle, questionViews);

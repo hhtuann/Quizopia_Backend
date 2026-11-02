@@ -248,16 +248,16 @@ class AttemptQuestionTypeInvariantIntegrationTests {
             long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + s + "'," + u + ")");
             insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, answer_key, created_by) "
                     + "VALUES (" + q + ",1,'" + type + "','Q',1,'{}'::jsonb," + answerKey + "," + u + ")");
-            long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + sch + "," + subj + "," + tp + ",'E" + s + "','Exam')");
-            long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + sch + "," + exam + ",1,'PUBLISHED',1,now()," + u + ")");
-            long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
-            long eq = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, "
-                    + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + ver + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','" + type + "','Q',1,0,'{}'::jsonb," + answerKey + ")");
+            long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + sch + "," + subj + "," + tp + ",'E" + s + "','Exam','PUBLISHED',now(),1)");
+            insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + sch + "," + exam + ",1,'PUBLISHED',1,now()," + u + ")");
+            long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
+            long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
+                    + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','" + type + "','Q',1,0,'{}'::jsonb," + answerKey + ")");
             if (optionCount > 0) {
                 insertOptions(eq, optionCount);
             }
-            long session = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) "
-                    + "VALUES (" + sch + "," + ver + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "')");
+            long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) "
+                    + "VALUES (" + sch + "," + exam + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "',60)");
             jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + sch + "," + session + "," + sp + "," + u + ")");
             ids[0] = u;
             ids[1] = session;

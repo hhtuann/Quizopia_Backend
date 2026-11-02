@@ -1,11 +1,17 @@
 package com.quizopia.backend.exam.domain.model;
 
 /**
- * Identity-level lifecycle state of an exam. {@code DRAFT} means no version has
- * been published yet; {@code READY} means at least one version is PUBLISHED.
- * The transition DRAFT → READY is one-way (never reverts).
+ * Exam lifecycle (Task B redesign, issue #2): DRAFT → PUBLISHED → ARCHIVED.
+ *
+ * <ul>
+ *   <li>DRAFT: composition fully editable.</li>
+ *   <li>PUBLISHED: immutable assessment content and grading policy; one-way,
+ *       no next content version, no return to DRAFT.</li>
+ *   <li>ARCHIVED: no new sessions; historical sessions/attempts/results remain.</li>
+ * </ul>
  */
 public enum ExamStatus {
     DRAFT,
-    READY
+    PUBLISHED,
+    ARCHIVED
 }

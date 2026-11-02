@@ -107,9 +107,9 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
     void sessionOpenSendsSessionOpened() throws Exception {
         Instant realNow = Instant.now();
         long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long ver = jdbc.queryForObject("SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long schedSession = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by) VALUES ("
-                + school + "," + ver + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'SCH','t','SCHEDULED','" + realNow.minusSeconds(3600) + "','" + realNow.plusSeconds(7200) + "',2," + teacherId + ")");
+        long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
+        long schedSession = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + school + "," + exam + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'SCH','t','SCHEDULED','" + realNow.minusSeconds(3600) + "','" + realNow.plusSeconds(7200) + "',2,60," + teacherId + ")");
         try (StompTestConnection conn = connect(teacherToken)) {
             CopyOnWriteArrayList<String> payloads = new CopyOnWriteArrayList<>();
             CountDownLatch eventLatch = new CountDownLatch(1);
@@ -124,7 +124,7 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
             // subscription (authorization + inbound receipt — NOT broker registration per B2F8). No SERVER_TIME_SYNC proxy.
             awaitAccepted(acceptedDestination("/topic/exam-sessions/" + schedSession), 10);
 
-            examSessionService.openSession(teacherId, schedSession); // SCHEDULED → OPEN
+            examSessionService.openSession(teacherId, null, schedSession); // SCHEDULED → OPEN
             assertThat(eventLatch.await(20, TimeUnit.SECONDS)).isTrue();
             assertThat(payloads).hasSize(1);
             assertThat(payloads.get(0)).contains("SESSION_OPENED").contains("\"sessionId\":" + schedSession)
