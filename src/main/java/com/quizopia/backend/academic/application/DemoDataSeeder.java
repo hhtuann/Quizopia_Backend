@@ -283,6 +283,8 @@ public class DemoDataSeeder implements ApplicationRunner {
         User user = userRepository.findByUsernameIgnoreCase(username).orElseGet(() -> {
             String hash = passwordHasher.hash(DEMO_PASSWORD);
             User u = new User(username, username + "@demo.quizopia.local", hash, displayName);
+            // Operator-seeded demo accounts are trusted: verified by seeding.
+            u.setEmailVerifiedAt(java.time.Instant.now());
             return userRepository.saveAndFlush(u);
         });
         // Role assignment (idempotent via find — user_roles PK is (user_id, role_id)).

@@ -80,12 +80,17 @@ class PublicLearnerEndToEndIntegrationTests {
                                                 + "@t.com\",\"password\":\"Passw0rd!123\","
                                                 + "\"displayName\":\"Public Creator\","
                                                 + "\"phone\":\"0900000010\","
-                                                + "\"accountType\":\"TEACHER\"}"))
+                                                + "\"accountType\":\"STUDENT\"}"))
                                 .andExpect(status().isCreated())
                                 .andReturn();
                 JsonNode body = tools.jackson.databind.json.JsonMapper.builder().build()
                                 .readTree(result.getResponse().getContentAsString());
-                return body.get("id").asLong();
+                Long userId = body.get("id").asLong();
+                // Identity-M1: teacher capability is granted post-registration
+                // (M2 self-upgrade semantics), never self-selected at signup.
+                jdbc.update("INSERT INTO user_roles (user_id, role_id, assigned_at) "
+                                + "SELECT " + userId + ", id, now() FROM roles WHERE code = 'TEACHER'");
+                return userId;
         }
 
         @Test

@@ -57,6 +57,14 @@ public class User {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    /**
+     * When the user proved ownership of their email (OTP or trusted OIDC
+     * provider). NULL = not yet verified; pre-M1 accounts are grandfathered
+     * by migration V18 (ADR-002 §6).
+     */
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
     @Column(name = "password_changed_at", nullable = false)
     private Instant passwordChangedAt;
 
@@ -194,6 +202,14 @@ public class User {
 
     public void setLastLoginAt(Instant lastLoginAt) {
         this.lastLoginAt = lastLoginAt;
+    }
+
+    public Instant getEmailVerifiedAt() {
+        return emailVerifiedAt;
+    }
+
+    public void setEmailVerifiedAt(Instant emailVerifiedAt) {
+        this.emailVerifiedAt = emailVerifiedAt;
     }
 
     public Instant getPasswordChangedAt() {

@@ -1,7 +1,6 @@
 package com.quizopia.backend.testsupport;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
+import com.quizopia.backend.notification.email.CaptureOtpMailSender;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
@@ -14,22 +13,30 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 /**
  * Base class for MockMvc-based authentication integration tests. Provides the
- * common annotations and JSON helpers to register, log in and read tokens/
- * cookies without duplicating boilerplate in every test class. Concrete classes
- * still carry {@code @SpringBootTest} + the Testcontainers import.
+ * common annotations and JSON helpers to register, verify the email OTP (from
+ * the in-memory capture mailbox), log in and read tokens/cookies without
+ * duplicating boilerplate in every test class. Concrete classes still carry
+ * {@code @SpringBootTest} + the Testcontainers import.
+ *
+ * <p>Identity-M1: {@link #registerAndVerify(String)} registers a student and
+ * completes the OTP verification so subsequent logins succeed; the raw
+ * {@link #login(String, String)} still exposes the unverified state to tests
+ * that assert the gate itself.
  */
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 public abstract class AbstractAuthenticationIntegrationTests {
 
-    protected static final String TEACHER_INVITE = "test-teacher-invite-code-only";
     protected static final String REFRESH_COOKIE = "quizopia_refresh";
 
     @Autowired
     protected MockMvc mockMvc;
 
     @Autowired
-    protected ObjectMapper objectMapper;
+    protected tools.jackson.databind.ObjectMapper objectMapper;
+
+    @Autowired
+    protected CaptureOtpMailSender otpMailbox;
 
     protected String studentRegisterJson(String username, String email, String password,
             String displayName, String phone) {
@@ -38,12 +45,18 @@ public abstract class AbstractAuthenticationIntegrationTests {
                 """.formatted(username, email, password, displayName, phone);
     }
 
+    /** Registration payload that tries to self-select the TEACHER role. */
     protected String teacherRegisterJson(String username, String email, String password,
-            String displayName, String phone, String invite) {
+            String displayName, String phone) {
         return """
-                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"TEACHER","teacherInviteCode":"%s"}
-                """
-                .formatted(username, email, password, displayName, phone, invite);
+                {"username":"%s","email":"%s","password":"%s","displayName":"%s","phone":"%s","accountType":"TEACHER"}
+                """.formatted(username, email, password, displayName, phone);
+    }
+
+    protected String verifyEmailJson(String email, String otp) {
+        return """
+                {"email":"%s","otp":"%s"}
+                """.formatted(email, otp);
     }
 
     protected String loginJson(String identifier, String password) {
@@ -57,6 +70,27 @@ public abstract class AbstractAuthenticationIntegrationTests {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json))
                 .andReturn();
+    }
+
+    /** Submits the OTP currently captured for the email. */
+    protected MvcResult verifyEmail(String email) throws Exception {
+        String otp = otpMailbox.latestOtpFor(email);
+        return mockMvc.perform(post("/api/auth/verify-email")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(verifyEmailJson(email, otp)))
+                .andReturn();
+    }
+
+    /** Registers a STUDENT and completes OTP verification in one step. */
+    protected MvcResult registerAndVerify(String username, String email, String password) throws Exception {
+        MvcResult registration = register(
+                studentRegisterJson(username, email, password, username + " Name", "+84991234567"));
+        assert registration.getResponse().getStatus() == 201
+                : "registration failed: " + registration.getResponse().getContentAsString();
+        MvcResult verification = verifyEmail(email);
+        assert verification.getResponse().getStatus() == 200
+                : "verification failed: " + verification.getResponse().getContentAsString();
+        return registration;
     }
 
     protected MvcResult login(String identifier, String password) throws Exception {
@@ -83,7 +117,8 @@ public abstract class AbstractAuthenticationIntegrationTests {
     }
 
     protected String extractAccessToken(MvcResult loginResult) throws Exception {
-        JsonNode root = objectMapper.readTree(loginResult.getResponse().getContentAsString());
+        tools.jackson.databind.JsonNode root =
+                objectMapper.readTree(loginResult.getResponse().getContentAsString());
         return root.get("accessToken").asString();
     }
 

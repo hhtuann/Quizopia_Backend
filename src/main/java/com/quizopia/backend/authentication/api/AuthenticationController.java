@@ -1,16 +1,24 @@
 package com.quizopia.backend.authentication.api;
 
 import com.quizopia.backend.authentication.application.CurrentUserService;
+import com.quizopia.backend.authentication.application.EmailVerificationService;
 import com.quizopia.backend.authentication.application.LoginService;
 import com.quizopia.backend.authentication.application.LogoutService;
 import com.quizopia.backend.authentication.application.RefreshService;
 import com.quizopia.backend.authentication.application.RegistrationService;
+import com.quizopia.backend.authentication.application.SessionIssuanceService;
+import com.quizopia.backend.authentication.dto.AuthProvidersResponse;
 import com.quizopia.backend.authentication.dto.ClientContext;
 import com.quizopia.backend.authentication.dto.CurrentUserResponse;
 import com.quizopia.backend.authentication.dto.LoginRequest;
+import com.quizopia.backend.authentication.dto.OauthExchangeRequest;
 import com.quizopia.backend.authentication.dto.RegisterRequest;
 import com.quizopia.backend.authentication.dto.RegisterResponse;
+import com.quizopia.backend.authentication.dto.ResendOtpRequest;
 import com.quizopia.backend.authentication.dto.TokenResponse;
+import com.quizopia.backend.authentication.dto.VerifyEmailRequest;
+import com.quizopia.backend.authentication.oauth.OAuthProperties;
+import com.quizopia.backend.authentication.oauth.OauthExchangeService;
 import com.quizopia.backend.security.web.RefreshCookieService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -26,11 +34,17 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 /**
  * Authentication endpoints. The controller only validates the request body,
  * delegates to an application service, sets or clears the refresh cookie, and
  * returns the response DTO. All business logic and transaction boundaries live
  * in the services.
+ *
+ * <p>Identity-M1 additions: email-OTP verification (+resend), the OAuth
+ * exchange step, and the provider availability endpoint. Login/refresh keep
+ * their existing contracts; register now reports the pending verification.
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -44,32 +58,71 @@ public class AuthenticationController {
     private final LogoutService logoutService;
     private final CurrentUserService currentUserService;
     private final RefreshCookieService refreshCookieService;
+    private final EmailVerificationService emailVerificationService;
+    private final OauthExchangeService oauthExchangeService;
+    private final OAuthProperties oauthProperties;
 
     public AuthenticationController(RegistrationService registrationService,
                                     LoginService loginService,
                                     RefreshService refreshService,
                                     LogoutService logoutService,
                                     CurrentUserService currentUserService,
-                                    RefreshCookieService refreshCookieService) {
+                                    RefreshCookieService refreshCookieService,
+                                    EmailVerificationService emailVerificationService,
+                                    OauthExchangeService oauthExchangeService,
+                                    OAuthProperties oauthProperties) {
         this.registrationService = registrationService;
         this.loginService = loginService;
         this.refreshService = refreshService;
         this.logoutService = logoutService;
         this.currentUserService = currentUserService;
         this.refreshCookieService = refreshCookieService;
+        this.emailVerificationService = emailVerificationService;
+        this.oauthExchangeService = oauthExchangeService;
+        this.oauthProperties = oauthProperties;
     }
 
     @PostMapping("/register")
-    public ResponseEntity<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
-        RegisterResponse response = registrationService.register(request);
+    public ResponseEntity<RegisterResponse> register(@Valid @RequestBody RegisterRequest request,
+                                                     HttpServletRequest httpRequest) {
+        RegisterResponse response = registrationService.register(request, clientContext(httpRequest));
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping("/verify-email")
+    public ResponseEntity<Map<String, Object>> verifyEmail(@Valid @RequestBody VerifyEmailRequest request) {
+        emailVerificationService.verify(request.email(), request.otp());
+        return ResponseEntity.ok(Map.of("verified", true));
+    }
+
+    @PostMapping("/verify-email/resend")
+    public ResponseEntity<Map<String, Object>> resendOtp(@Valid @RequestBody ResendOtpRequest request,
+                                                         HttpServletRequest httpRequest) {
+        long cooldownSeconds = emailVerificationService.resend(
+                request.email(), clientContext(httpRequest).remoteAddress());
+        return ResponseEntity.ok(Map.of("resendCooldownSeconds", cooldownSeconds));
+    }
+
+    @PostMapping("/oauth/exchange")
+    public ResponseEntity<TokenResponse> oauthExchange(@Valid @RequestBody OauthExchangeRequest request,
+                                                       HttpServletRequest httpRequest,
+                                                       HttpServletResponse httpResponse) {
+        SessionIssuanceService.IssuedSession session =
+                oauthExchangeService.exchange(request.code(), clientContext(httpRequest));
+        refreshCookieService.setRefreshCookie(httpResponse, session.rawRefreshToken(), session.refreshMaxAge());
+        return ResponseEntity.ok(session.tokenResponse());
+    }
+
+    @GetMapping("/providers")
+    public AuthProvidersResponse providers() {
+        return new AuthProvidersResponse(oauthProperties.getGoogle().isConfigured());
     }
 
     @PostMapping("/login")
     public ResponseEntity<TokenResponse> login(@Valid @RequestBody LoginRequest request,
                                                HttpServletRequest httpRequest,
                                                HttpServletResponse httpResponse) {
-        LoginService.LoginResult result = loginService.login(request, clientContext(httpRequest));
+        SessionIssuanceService.IssuedSession result = loginService.login(request, clientContext(httpRequest));
         refreshCookieService.setRefreshCookie(httpResponse, result.rawRefreshToken(), result.refreshMaxAge());
         return ResponseEntity.ok(result.tokenResponse());
     }

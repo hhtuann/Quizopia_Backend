@@ -133,7 +133,7 @@ class WorkspaceIntegrationTests {
                                 .content("{\"username\":\"" + username + "\",\"email\":\"" + username
                                                 + "@t.com\",\"password\":\"Passw0rd!123\","
                                                 + "\"displayName\":\"Reg User\",\"phone\":\"0900000001\","
-                                                + "\"accountType\":\"TEACHER\"}"))
+                                                + "\"accountType\":\"STUDENT\"}"))
                                 .andExpect(status().isCreated());
 
                 Long userId = jdbc.queryForObject(
@@ -146,8 +146,9 @@ class WorkspaceIntegrationTests {
         }
 
         @Test
-        void teacherRegistrationWithoutInviteIsAllowed() throws Exception {
-                // Public platform user (issue #1 A2): no school, no invite.
+        void teacherSelfSelectionAtRegistrationIsRejected() throws Exception {
+                // Identity-M1 (System #13): public registration is STUDENT-only;
+                // teacher access comes from the authenticated self-upgrade (M2).
                 String username = "ws-open-" + System.nanoTime();
                 mockMvc.perform(post("/api/auth/register")
                                 .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
@@ -155,7 +156,7 @@ class WorkspaceIntegrationTests {
                                                 + "@t.com\",\"password\":\"Passw0rd!123\","
                                                 + "\"displayName\":\"Open Creator\",\"phone\":\"0900000002\","
                                                 + "\"accountType\":\"TEACHER\"}"))
-                                .andExpect(status().isCreated());
+                                .andExpect(status().isForbidden());
         }
 
         // ==================== GET /api/workspaces/my ====================
@@ -289,10 +290,14 @@ class WorkspaceIntegrationTests {
                                 .content("{\"username\":\"" + username + "\",\"email\":\"" + username
                                                 + "@t.com\",\"password\":\"Passw0rd!123\","
                                                 + "\"displayName\":\"Solo Creator\",\"phone\":\"0900000003\","
-                                                + "\"accountType\":\"TEACHER\"}"))
+                                                + "\"accountType\":\"STUDENT\"}"))
                                 .andExpect(status().isCreated());
                 Long userId = jdbc.queryForObject(
                                 "SELECT id FROM users WHERE username = '" + username + "'", Long.class);
+                // Identity-M1: teacher capability granted post-registration
+                // (the public form no longer allows self-selection).
+                jdbc.update("INSERT INTO user_roles (user_id, role_id, assigned_at) "
+                                + "SELECT " + userId + ", id, now() FROM roles WHERE code = 'TEACHER'");
 
                 mockMvc.perform(post("/api/question-banks")
                                 .with(jwtFor(userId))

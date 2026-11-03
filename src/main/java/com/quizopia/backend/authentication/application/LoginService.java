@@ -2,37 +2,24 @@ package com.quizopia.backend.authentication.application;
 
 import com.quizopia.backend.authentication.dto.ClientContext;
 import com.quizopia.backend.authentication.dto.LoginRequest;
-import com.quizopia.backend.authentication.dto.TokenResponse;
 import com.quizopia.backend.authentication.exception.AuthErrorCode;
 import com.quizopia.backend.authentication.exception.AuthenticationException;
-import com.quizopia.backend.identity.domain.model.RefreshSession;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.domain.model.UserStatus;
-import com.quizopia.backend.identity.repository.RefreshSessionRepository;
 import com.quizopia.backend.identity.repository.UserRepository;
-import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.security.config.SecurityProperties;
 import com.quizopia.backend.security.password.PasswordHasher;
-import com.quizopia.backend.security.token.AccessTokenService;
-import com.quizopia.backend.security.token.IssuedAccessToken;
-import com.quizopia.backend.security.token.RefreshTokenGenerator;
-import com.quizopia.backend.security.token.RefreshTokenHasher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
- * Username-or-email login with account lockout, Argon2id verification, lazy
- * Argon2 rehash on parameters change, access-token issuance and first refresh
- * session creation.
+ * Username-or-email login with account lockout, Argon2id verification and lazy
+ * Argon2 rehash on parameter change. Token/session issuance is delegated to
+ * {@link SessionIssuanceService}.
  *
  * <p>Timing equalization: when the identifier does not match a user, a real
  * Argon2 verify is still run against a fixed dummy hash (computed once at
@@ -43,19 +30,19 @@ import java.util.UUID;
  * {@code locked_until} only, and never changes {@link UserStatus}. Five
  * consecutive failures lock for 15 minutes; a successful login or an expired
  * lock clears both fields.
+ *
+ * <p>Identity-M1: login additionally requires {@code email_verified_at} to be
+ * set. The check runs only after the password verifies so the error cannot be
+ * used to enumerate accounts (ADR-002 §2).
  */
 @Service
 public class LoginService {
 
     private final UserRepository userRepository;
-    private final UserRoleRepository userRoleRepository;
-    private final RefreshSessionRepository refreshSessionRepository;
     private final PasswordHasher passwordHasher;
-    private final AccessTokenService accessTokenService;
-    private final RefreshTokenGenerator refreshTokenGenerator;
-    private final RefreshTokenHasher refreshTokenHasher;
     private final SecurityProperties properties;
     private final Clock clock;
+    private final SessionIssuanceService sessionIssuanceService;
 
     /**
      * A fixed Argon2 hash used only to spend Argon2 verify time for a missing
@@ -66,28 +53,20 @@ public class LoginService {
     private final String dummyPasswordHash;
 
     public LoginService(UserRepository userRepository,
-                        UserRoleRepository userRoleRepository,
-                        RefreshSessionRepository refreshSessionRepository,
                         PasswordHasher passwordHasher,
-                        AccessTokenService accessTokenService,
-                        RefreshTokenGenerator refreshTokenGenerator,
-                        RefreshTokenHasher refreshTokenHasher,
                         SecurityProperties properties,
-                        Clock clock) {
+                        Clock clock,
+                        SessionIssuanceService sessionIssuanceService) {
         this.userRepository = userRepository;
-        this.userRoleRepository = userRoleRepository;
-        this.refreshSessionRepository = refreshSessionRepository;
         this.passwordHasher = passwordHasher;
-        this.accessTokenService = accessTokenService;
-        this.refreshTokenGenerator = refreshTokenGenerator;
-        this.refreshTokenHasher = refreshTokenHasher;
         this.properties = properties;
         this.clock = clock;
+        this.sessionIssuanceService = sessionIssuanceService;
         this.dummyPasswordHash = passwordHasher.hash("quizopia-login-timing-equalizer");
     }
 
     @Transactional
-    public LoginResult login(LoginRequest request, ClientContext client) {
+    public SessionIssuanceService.IssuedSession login(LoginRequest request, ClientContext client) {
         String identifier = request.identifier();
         Optional<User> userOpt = identifier.contains("@")
                 ? userRepository.findByEmailIgnoreCase(identifier)
@@ -118,6 +97,13 @@ public class LoginService {
             throw new AuthenticationException(AuthErrorCode.AUTH_INVALID_CREDENTIALS);
         }
 
+        // Identity-M1: checked only AFTER the password verifies so an
+        // unauthenticated caller cannot distinguish "wrong password" from
+        // "unverified email" and enumerate accounts (ADR-002 §2).
+        if (user.getEmailVerifiedAt() == null) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_EMAIL_NOT_VERIFIED);
+        }
+
         user.setFailedLoginAttempts(0);
         user.setLockedUntil(null);
         user.setLastLoginAt(now);
@@ -126,24 +112,7 @@ public class LoginService {
         }
         userRepository.save(user);
 
-        List<String> roleCodes = userRoleRepository.findActiveRoleCodesByUserId(user.getId(), now);
-        IssuedAccessToken access = accessTokenService.issue(
-                user.getId(), user.getUsername(), roleCodes, user.getTokenVersion());
-
-        String rawRefreshToken = refreshTokenGenerator.generate();
-        String refreshHash = refreshTokenHasher.hash(rawRefreshToken);
-        Duration familyLifetime = properties.getRefreshToken().getFamilyLifetime();
-        RefreshSession session = new RefreshSession(
-                UUID.randomUUID(),
-                user,
-                UUID.randomUUID(),
-                refreshHash,
-                client.userAgent(),
-                parseAddress(client.remoteAddress()),
-                now.plus(familyLifetime));
-        refreshSessionRepository.save(session);
-
-        return new LoginResult(toTokenResponse(access, roleCodes), rawRefreshToken, familyLifetime);
+        return sessionIssuanceService.issue(user, client);
     }
 
     /**
@@ -169,33 +138,5 @@ public class LoginService {
         if (attempts >= properties.getLockout().getThreshold()) {
             user.setLockedUntil(now.plus(properties.getLockout().getDuration()));
         }
-    }
-
-    private TokenResponse toTokenResponse(IssuedAccessToken access, List<String> roles) {
-        long expiresInSeconds = properties.getJwt().getAccessTokenLifetime().toSeconds();
-        return new TokenResponse(
-                access.getTokenValue(),
-                "Bearer",
-                access.getExpiresAt(),
-                expiresInSeconds,
-                roles);
-    }
-
-    private static InetAddress parseAddress(String remoteAddress) {
-        if (remoteAddress == null || remoteAddress.isBlank()) {
-            return null;
-        }
-        try {
-            return InetAddress.getByName(remoteAddress);
-        } catch (UnknownHostException ex) {
-            return null;
-        }
-    }
-
-    /**
-     * Outcome of a successful login: the access-token response body and the raw
-     * refresh token to place in the cookie, together with the cookie max age.
-     */
-    public record LoginResult(TokenResponse tokenResponse, String rawRefreshToken, Duration refreshMaxAge) {
     }
 }

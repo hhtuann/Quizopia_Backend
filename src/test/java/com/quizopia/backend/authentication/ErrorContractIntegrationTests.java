@@ -39,9 +39,9 @@ class ErrorContractIntegrationTests extends AbstractAuthenticationIntegrationTes
     }
 
     @Test
-    void teacherInviteInvalidReturns403Body() throws Exception {
-        JsonNode body = errorBody(registerTeacherWrongInvite(), "/api/auth/register");
-        assertSchema(body, 403, "AUTH_TEACHER_INVITE_INVALID", "/api/auth/register");
+    void teacherSelfSelectionReturns403Body() throws Exception {
+        JsonNode body = errorBody(registerTeacherSelfSelection(), "/api/auth/register");
+        assertSchema(body, 403, "AUTH_TEACHER_REGISTRATION_DISABLED", "/api/auth/register");
     }
 
     @Test
@@ -86,8 +86,8 @@ class ErrorContractIntegrationTests extends AbstractAuthenticationIntegrationTes
                 .andReturn();
     }
 
-    private MvcResult registerTeacherWrongInvite() throws Exception {
-        String json = teacherRegisterJson(unique("teach"), emailFor(unique("teach")), "Passw0rd!", "Teach", "+8499", "wrong");
+    private MvcResult registerTeacherSelfSelection() throws Exception {
+        String json = teacherRegisterJson(unique("teach"), emailFor(unique("teach")), "Passw0rd!", "Teach", "+8499");
         return mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andReturn();
     }
@@ -95,6 +95,7 @@ class ErrorContractIntegrationTests extends AbstractAuthenticationIntegrationTes
     private void registerStudent(String username) throws Exception {
         mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON)
                 .content(studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567")));
+        verifyEmail(emailFor(username)); // Identity-M1: verified accounts only
     }
 
     private MvcResult registerStudentRaw(String username, String email) throws Exception {

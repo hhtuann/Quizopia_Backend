@@ -4,6 +4,7 @@ import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.StudentProfileRepository;
 import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.authentication.dto.AccountType;
+import com.quizopia.backend.authentication.dto.ClientContext;
 import com.quizopia.backend.authentication.dto.RegisterRequest;
 import com.quizopia.backend.authentication.dto.RegisterResponse;
 import com.quizopia.backend.authentication.exception.AuthErrorCode;
@@ -14,66 +15,68 @@ import com.quizopia.backend.identity.domain.model.UserRole;
 import com.quizopia.backend.identity.repository.RoleRepository;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.identity.repository.UserRoleRepository;
-import com.quizopia.backend.security.config.SecurityProperties;
 import com.quizopia.backend.security.encryption.SensitiveDataEncryptor;
 import com.quizopia.backend.security.password.PasswordHasher;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.List;
-import java.util.Objects;
 
 /**
- * Public account registration. Hashes the password with Argon2id, encrypts
- * phone
- * and national identifier with AES-256-GCM (only ciphertext is stored),
- * resolves
- * the foundational role by code, and persists user + role assignment in one
- * transaction. The response echoes the plaintext phone/national-id the caller
- * supplied; the ciphertext, password hash and token version are never returned.
+ * Public account registration (Identity-M1, ADR-002 §1).
+ *
+ * <p>Every new account is STUDENT: the public form no longer offers a role
+ * choice and a client-supplied {@code accountType=TEACHER} is rejected before
+ * any write. The user row is created with {@code email_verified_at = NULL};
+ * an OTP challenge is issued in the same transaction and its delivery result
+ * is reported so the UI can offer an immediate resend. Login stays blocked
+ * until the OTP is verified (see {@link EmailVerificationService}).
+ *
+ * <p>Password is hashed with Argon2id, phone is encrypted with AES-256-GCM
+ * (only ciphertext stored), and a personal workspace is provisioned
+ * transactionally and idempotently (ADR-001). Concurrent registrations of the
+ * same username/email are settled by the DB unique indexes and mapped to 409.
  */
 @Service
 public class RegistrationService {
 
     static final String STUDENT_ROLE_CODE = "STUDENT";
-    static final String TEACHER_ROLE_CODE = "TEACHER";
+    private static final String USERNAME_UNIQUE_INDEX = "uk_users_username_ci";
+    private static final String EMAIL_UNIQUE_INDEX = "uk_users_email_ci";
 
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
     private final RoleRepository roleRepository;
     private final PasswordHasher passwordHasher;
     private final SensitiveDataEncryptor encryptor;
-    private final SecurityProperties properties;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
     private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
+    private final EmailVerificationService emailVerificationService;
 
     public RegistrationService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
             RoleRepository roleRepository,
             PasswordHasher passwordHasher,
             SensitiveDataEncryptor encryptor,
-            SecurityProperties properties,
             SchoolRepository schoolRepository,
             TeacherProfileRepository teacherProfileRepository,
             StudentProfileRepository studentProfileRepository,
             com.quizopia.backend.notification.application.NotificationService notificationService,
             com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
-            @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
+            EmailVerificationService emailVerificationService) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.encryptor = encryptor;
-        this.properties = properties;
         this.notificationService = notificationService;
         this.workspaceProvisioningService = workspaceProvisioningService;
+        this.emailVerificationService = emailVerificationService;
     }
 
     @Transactional
-    public RegisterResponse register(RegisterRequest request) {
+    public RegisterResponse register(RegisterRequest request, ClientContext client) {
         String username = trimmed(request.username());
         String email = trimmed(request.email());
         String displayName = trimmed(request.displayName());
@@ -84,7 +87,13 @@ public class RegistrationService {
                     "Username must not contain '@'");
         }
 
+        // Identity-M1: public registration is STUDENT-only. The client cannot
+        // self-select TEACHER (or any other role) on the public form; teacher
+        // access is granted by the authenticated self-upgrade flow (M2).
         AccountType accountType = request.accountType() == null ? AccountType.STUDENT : request.accountType();
+        if (accountType != AccountType.STUDENT) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_TEACHER_REGISTRATION_DISABLED);
+        }
 
         if (userRepository.existsByUsernameIgnoreCase(username)) {
             throw new AuthenticationException(AuthErrorCode.AUTH_USERNAME_ALREADY_EXISTS);
@@ -93,36 +102,27 @@ public class RegistrationService {
             throw new AuthenticationException(AuthErrorCode.AUTH_EMAIL_ALREADY_EXISTS);
         }
 
-        String roleCode = switch (accountType) {
-            case STUDENT -> STUDENT_ROLE_CODE;
-            case TEACHER -> {
-                // Public platform foundation (issue #1 A2): teacher/creator
-                // registration no longer REQUIRES an invite — a public user can
-                // self-select the teacher capability. When an invite code IS
-                // supplied it must be valid (optional invite-based onboarding).
-                if (request.teacherInviteCode() != null && !request.teacherInviteCode().isBlank()) {
-                    verifyTeacherInvite(request.teacherInviteCode());
-                }
-                yield TEACHER_ROLE_CODE;
-            }
-        };
-
         String passwordHash = passwordHasher.hash(request.password());
         String phoneEncrypted = encryptor.encrypt(phone);
 
         User user = new User(username, email, passwordHash, displayName);
         user.setPhoneEncrypted(phoneEncrypted);
-        userRepository.saveAndFlush(user);
+        try {
+            userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException race) {
+            // Two concurrent registrations of the same username/email: the
+            // unique lower() indexes decide the winner; the loser gets 409.
+            throw translateUniqueViolation(race);
+        }
 
-        Role role = roleRepository.findByCode(roleCode)
+        Role role = roleRepository.findByCode(STUDENT_ROLE_CODE)
                 .orElseThrow(() -> new IllegalStateException(
-                        "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
+                        "Required role '" + STUDENT_ROLE_CODE + "' is not seeded; check Flyway V3"));
 
         userRoleRepository.save(new UserRole(user, role, null, null));
 
-        // Public platform foundation (issue #1 A1/A2): every new user gets a
-        // personal workspace, provisioned transactionally and idempotently in
-        // the same transaction as the user row. No school/invite required.
+        // Every new user gets a personal workspace, provisioned
+        // transactionally and idempotently in the same transaction (ADR-001).
         workspaceProvisioningService.ensurePersonalWorkspace(user);
 
         // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
@@ -134,13 +134,11 @@ public class RegistrationService {
                     "/admin/pending-students");
         }
 
-        // NOTE: Registration no longer auto-creates academic profiles (V11 Student
-        // Onboarding).
-        // Students self-register → PENDING (user + STUDENT role, no profile).
-        // ACADEMIC_ADMIN assigns them to a school via POST
-        // /api/admin/students/{userId}/assign-school
-        // which creates the student_profiles row with an auto-generated student_code.
-        // DemoDataSeeder writes profiles directly (bypasses registration).
+        // Identity-M1: email OTP verification. Delivery is best-effort; a
+        // failure never blocks the registration and never verifies the
+        // account — the resend endpoint is the recovery flow.
+        boolean emailSent = emailVerificationService.issueForNewRegistration(
+                user, client == null ? null : client.remoteAddress());
 
         return new RegisterResponse(
                 user.getId(),
@@ -149,25 +147,22 @@ public class RegistrationService {
                 user.getDisplayName(),
                 phone,
                 user.getStatus(),
-                List.of(role.getCode()));
+                List.of(role.getCode()),
+                true,
+                emailSent);
     }
 
     /**
-     * Verifies the teacher invite code using a constant-time comparison. The
-     * expected code is never logged. A blank or mismatched code yields the same
-     * {@link AuthErrorCode#AUTH_TEACHER_INVITE_INVALID} error.
+     * Maps a unique-index violation raised by a concurrent registration to the
+     * matching 409 error code. Falls back to the email error when the exact
+     * index cannot be identified (both are conflict responses).
      */
-    private void verifyTeacherInvite(String provided) {
-        Objects.requireNonNull(properties.getTeacherInvite(), "teacher invite config must be present");
-        String expected = properties.getTeacherInvite().getCode();
-        boolean valid = provided != null
-                && !provided.isBlank()
-                && MessageDigest.isEqual(
-                        provided.getBytes(StandardCharsets.UTF_8),
-                        expected.getBytes(StandardCharsets.UTF_8));
-        if (!valid) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_TEACHER_INVITE_INVALID);
+    private static AuthenticationException translateUniqueViolation(DataIntegrityViolationException ex) {
+        String message = String.valueOf(ex.getMostSpecificCause());
+        if (message.contains(USERNAME_UNIQUE_INDEX)) {
+            return new AuthenticationException(AuthErrorCode.AUTH_USERNAME_ALREADY_EXISTS);
         }
+        return new AuthenticationException(AuthErrorCode.AUTH_EMAIL_ALREADY_EXISTS);
     }
 
     private static String trimmed(String value) {

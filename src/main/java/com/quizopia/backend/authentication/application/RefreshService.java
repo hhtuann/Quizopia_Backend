@@ -119,6 +119,13 @@ public class RefreshService {
             throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_PENDING);
         }
 
+        // Identity-M1: defense-in-depth. Sessions only exist for verified
+        // users in the first place, but a revoked-verification account (or a
+        // session created before verification was backfilled) must not rotate.
+        if (user.getEmailVerifiedAt() == null) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_EMAIL_NOT_VERIFIED);
+        }
+
         String newRawToken = rotate(now, session, user, client);
 
         List<String> roleCodes = userRoleRepository.findActiveRoleCodesByUserId(user.getId(), now);

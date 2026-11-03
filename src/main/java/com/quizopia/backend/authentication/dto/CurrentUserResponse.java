@@ -16,6 +16,7 @@ public record CurrentUserResponse(
         String displayName,
         String phone,
         UserStatus status,
+        boolean emailVerified,
         List<String> roles,
         List<String> permissions
 ) {

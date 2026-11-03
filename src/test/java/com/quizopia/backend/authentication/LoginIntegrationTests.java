@@ -184,6 +184,7 @@ class LoginIntegrationTests extends AbstractAuthenticationIntegrationTests {
     private void registerStudent(String username, String password) throws Exception {
         String json = studentRegisterJson(username, emailFor(username), password, username + " Name", "+84991234567");
         register(json);
+        verifyEmail(emailFor(username)); // Identity-M1: verified accounts only
     }
 
     private static String unique(String base) {

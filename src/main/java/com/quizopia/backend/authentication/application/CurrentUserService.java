@@ -58,6 +58,7 @@ public class CurrentUserService {
                 user.getDisplayName(),
                 decryptOrNull(user.getPhoneEncrypted()),
                 user.getStatus(),
+                user.getEmailVerifiedAt() != null,
                 roles,
                 permissions);
     }
