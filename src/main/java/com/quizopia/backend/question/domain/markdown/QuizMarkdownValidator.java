@@ -253,7 +253,9 @@ final class QuizMarkdownValidator {
     }
 
     private static int typeColumn(RawQuestion question) {
-        return "Câu ".length() + Integer.toString(question.number).length() + 3;
+        // Raw digit token length: "Câu 007" must report the column where the
+        // type token actually starts, not the normalized integer's length.
+        return "Câu ".length() + question.numberToken.length() + 3;
     }
 
     private static int answerColumn(String rawSuffix) {

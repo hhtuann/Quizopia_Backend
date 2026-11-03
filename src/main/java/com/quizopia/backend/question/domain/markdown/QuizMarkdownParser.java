@@ -91,7 +91,7 @@ public final class QuizMarkdownParser {
                     target = ContentTarget.NONE;
                     continue;
                 }
-                current = new RawQuestion(questionNumber, header.group(2), line.number());
+                current = new RawQuestion(questionNumber, header.group(1), header.group(2), line.number());
                 current.stem.add(contentAfterMarker(header.group(3)));
                 questions.add(current);
                 target = ContentTarget.STEM;
@@ -384,6 +384,7 @@ public final class QuizMarkdownParser {
 
     static final class RawQuestion {
         final int number;
+        final String numberToken;
         final String typeToken;
         final int headerLine;
         final List<String> stem = new ArrayList<>();
@@ -397,8 +398,9 @@ public final class QuizMarkdownParser {
         boolean optionStructureCompleteAtExplanation;
         boolean numericAnswerCompleteAtExplanation;
 
-        RawQuestion(int number, String typeToken, int headerLine) {
+        RawQuestion(int number, String numberToken, String typeToken, int headerLine) {
             this.number = number;
+            this.numberToken = numberToken;
             this.typeToken = typeToken;
             this.headerLine = headerLine;
         }

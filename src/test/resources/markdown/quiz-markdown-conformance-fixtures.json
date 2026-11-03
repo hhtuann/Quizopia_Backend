@@ -1,0 +1,807 @@
+{
+  "version": 1,
+  "description": "Canonical cross-language Quiz Markdown conformance fixtures (P2-M1-D, Quizopia_System issue #9). Byte-identical copies live in hhtuann/Quizopia_Backend (src/test/resources/markdown/) and hhtuann/quizopia_frontend (lib/quiz-markdown/conformance/); SHA-256 must match.",
+  "comparison": [
+    "Valid cases: full normalized question structure (number, type, stem/options/numericAnswer/explanation; content joined with \\n).",
+    "Invalid cases: diagnostics compared as an unordered set of code|questionNumber|line|column tuples (duplicate identical tuples collapse; intentional ordering differences between Java and TypeScript are ignored).",
+    "Java returns no content for invalid sources; TypeScript may expose partially parsed questions for live preview. Only validity and diagnostics are authoritative in this file."
+  ],
+  "cases": [
+    {
+      "id": "single-choice-basic",
+      "source": "Câu 1 [SINGLE_CHOICE]: 2 + 2 bằng bao nhiêu?\n*A. 3\nB. 4\nC. 5\nD. 6\nLời giải: 2 + 2 = 4",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "SINGLE_CHOICE",
+          "stem": "2 + 2 bằng bao nhiêu?",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "3"
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "4"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "5"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "6"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": "2 + 2 = 4"
+        }
+      ]
+    },
+    {
+      "id": "multiple-choice-two-correct",
+      "source": "Câu 1 [MULTIPLE_CHOICE]: Chọn các số nguyên tố.\n*A. 2\nB. 4\n*C. 5\nD. 9",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "MULTIPLE_CHOICE",
+          "stem": "Chọn các số nguyên tố.",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "2"
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "4"
+            },
+            {
+              "label": "C",
+              "correct": true,
+              "content": "5"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "9"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "true-false-mixed",
+      "source": "Câu 1 [TRUE_FALSE_MATRIX]: Đánh dấu đúng/sai.\n*A. HTTP thuộc tầng Application.\nB. TCP thuộc tầng Application.\nC. HTTPS dùng được TLS.\nD. UDP đảm bảo delivery.",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "TRUE_FALSE_MATRIX",
+          "stem": "Đánh dấu đúng/sai.",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "HTTP thuộc tầng Application."
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "TCP thuộc tầng Application."
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "HTTPS dùng được TLS."
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "UDP đảm bảo delivery."
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "true-false-all-false",
+      "source": "Câu 1 [TRUE_FALSE_MATRIX]: Tất cả đều sai.\nA. one\nB. two\nC. three\nD. four",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "TRUE_FALSE_MATRIX",
+          "stem": "Tất cả đều sai.",
+          "options": [
+            {
+              "label": "A",
+              "correct": false,
+              "content": "one"
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "two"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "three"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "four"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "numeric-basic",
+      "source": "Câu 1 [NUMERIC_FILL]: 10 / 4 (viết hai chữ số thập phân)?\nĐáp án: 2.50\nLời giải: `10 / 4 = 2.5`.",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "NUMERIC_FILL",
+          "stem": "10 / 4 (viết hai chữ số thập phân)?",
+          "options": [],
+          "numericAnswer": "2.50",
+          "explanation": "`10 / 4 = 2.5`."
+        }
+      ]
+    },
+    {
+      "id": "numeric-negative-and-leading-dot",
+      "source": "Câu 1 [NUMERIC_FILL]: Nhiệt độ ban đêm?\nĐáp án: -3.5\nCâu 2 [NUMERIC_FILL]: Giá trị khác?\nĐáp án: -.50",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "NUMERIC_FILL",
+          "stem": "Nhiệt độ ban đêm?",
+          "options": [],
+          "numericAnswer": "-3.5",
+          "explanation": null
+        },
+        {
+          "number": 2,
+          "type": "NUMERIC_FILL",
+          "stem": "Giá trị khác?",
+          "options": [],
+          "numericAnswer": "-.50",
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "numeric-ascii-whitespace-trim",
+      "source": "Câu 1 [NUMERIC_FILL]: Giá trị?\nĐáp án: \t2.50 \n",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "NUMERIC_FILL",
+          "stem": "Giá trị?",
+          "options": [],
+          "numericAnswer": "2.50",
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "numeric-java-only-separator-whitespace",
+      "source": "Câu 1 [NUMERIC_FILL]: Giá trị?\nĐáp án: \u001c1234\u001d\n",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "NUMERIC_FILL",
+          "stem": "Giá trị?",
+          "options": [],
+          "numericAnswer": "1234",
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "all-types-multiline-unicode",
+      "source": "Câu 1 [SINGLE_CHOICE]: Dòng đầu 🌟 ≠ ½\n  dòng thứ hai có dấu\n*A. Phương án A dòng 1\nA dòng 2.\nB. β\nC. γ\nD. δ\nLời giải: Giải thích dòng 1\nGiải thích dòng 2.\nCâu 2 [NUMERIC_FILL]: Kết quả 3 ÷ 4?\nĐáp án: 0.75",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "SINGLE_CHOICE",
+          "stem": "Dòng đầu 🌟 ≠ ½\n  dòng thứ hai có dấu",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "Phương án A dòng 1\nA dòng 2."
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "β"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "γ"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "δ"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": "Giải thích dòng 1\nGiải thích dòng 2."
+        },
+        {
+          "number": 2,
+          "type": "NUMERIC_FILL",
+          "stem": "Kết quả 3 ÷ 4?",
+          "options": [],
+          "numericAnswer": "0.75",
+          "explanation": null
+        }
+      ]
+    },
+    {
+      "id": "crlf-multiline",
+      "source": "Câu 1 [SINGLE_CHOICE]: Dòng 1\r\nDòng 2.\r\n*A. Phương án A dòng 1\r\nA dòng 2.\r\nB. b\r\nC. c\r\nD. d\r\nLời giải: Giải thích 1\r\nGiải thích 2.\r\n",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "SINGLE_CHOICE",
+          "stem": "Dòng 1\nDòng 2.",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "Phương án A dòng 1\nA dòng 2."
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "b"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "c"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "d"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": "Giải thích 1\nGiải thích 2.\n"
+        }
+      ]
+    },
+    {
+      "id": "fence-shields-structural-markers",
+      "source": "Câu 1 [SINGLE_CHOICE]: Xem đoạn sau:\n```text\nCâu 99 [MULTIPLE_CHOICE]: fake\n*A. fake\nĐáp án: 1234\nLời giải: fake\n```\nSau fence vẫn là stem.\n*A. code:\n```java\nB. not an option\nSystem.out.println(\"Câu 2 [NUMERIC_FILL]:\");\n```\nB. b\nC. c\nD. d\nLời giải:\n```text\nCâu 2 [SINGLE_CHOICE]: vẫn chỉ là code\nA. fake\n```\nKết thúc lời giải.",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "SINGLE_CHOICE",
+          "stem": "Xem đoạn sau:\n```text\nCâu 99 [MULTIPLE_CHOICE]: fake\n*A. fake\nĐáp án: 1234\nLời giải: fake\n```\nSau fence vẫn là stem.",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "code:\n```java\nB. not an option\nSystem.out.println(\"Câu 2 [NUMERIC_FILL]:\");\n```"
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "b"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "c"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "d"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": "\n```text\nCâu 2 [SINGLE_CHOICE]: vẫn chỉ là code\nA. fake\n```\nKết thúc lời giải."
+        }
+      ]
+    },
+    {
+      "id": "display-math-shields-structural-markers",
+      "source": "Câu 1 [SINGLE_CHOICE]: Compute\n$$\nCâu 99 [NUMERIC_FILL]: x^2\n$$\n*A. answer\n$$\nB. x+y\n$$\nB. second\nC. third\nD. fourth\nLời giải: Reason\n$$\n*A. x^2\n$$",
+      "valid": true,
+      "questions": [
+        {
+          "number": 1,
+          "type": "SINGLE_CHOICE",
+          "stem": "Compute\n$$\nCâu 99 [NUMERIC_FILL]: x^2\n$$",
+          "options": [
+            {
+              "label": "A",
+              "correct": true,
+              "content": "answer\n$$\nB. x+y\n$$"
+            },
+            {
+              "label": "B",
+              "correct": false,
+              "content": "second"
+            },
+            {
+              "label": "C",
+              "correct": false,
+              "content": "third"
+            },
+            {
+              "label": "D",
+              "correct": false,
+              "content": "fourth"
+            }
+          ],
+          "numericAnswer": null,
+          "explanation": "Reason\n$$\n*A. x^2\n$$"
+        }
+      ]
+    },
+    {
+      "id": "empty-source",
+      "source": "",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "NO_QUESTIONS",
+          "questionNumber": null,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "content-outside-question",
+      "source": "plain text",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "CONTENT_OUTSIDE_QUESTION",
+          "questionNumber": null,
+          "line": 1,
+          "column": 1
+        },
+        {
+          "code": "NO_QUESTIONS",
+          "questionNumber": null,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "single-choice-zero-correct",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\nA. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "SINGLE_CHOICE_CORRECT_COUNT",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "multiple-choice-none-correct",
+      "source": "Câu 1 [MULTIPLE_CHOICE]: stem\nA. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "MULTIPLE_CHOICE_CORRECT_REQUIRED",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "numeric-token-too-long",
+      "source": "Câu 1 [NUMERIC_FILL]: v?\nĐáp án:   12345\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "NUMERIC_ANSWER_INVALID",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 11
+        }
+      ]
+    },
+    {
+      "id": "numeric-nbsp-not-stripped",
+      "source": "Câu 1 [NUMERIC_FILL]: v?\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "NUMERIC_ANSWER_INVALID",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 8
+        }
+      ]
+    },
+    {
+      "id": "numeric-answer-missing",
+      "source": "Câu 1 [NUMERIC_FILL]: v?\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "NUMERIC_ANSWER_REQUIRED",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "missing-and-duplicate-option",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nC. c\nD. d\nD. dup\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "MISSING_OPTION",
+          "questionNumber": 1,
+          "line": 3,
+          "column": 1
+        },
+        {
+          "code": "MISSING_OPTION",
+          "questionNumber": 1,
+          "line": 4,
+          "column": 1
+        },
+        {
+          "code": "DUPLICATE_OPTION",
+          "questionNumber": 1,
+          "line": 5,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "duplicate-option-out-of-order",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nB. b\nB. dup\nD. d",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "OPTION_OUT_OF_ORDER",
+          "questionNumber": 1,
+          "line": 4,
+          "column": 1
+        },
+        {
+          "code": "DUPLICATE_OPTION",
+          "questionNumber": 1,
+          "line": 4,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "empty-option",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nB.\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "EMPTY_OPTION",
+          "questionNumber": 1,
+          "line": 3,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "empty-stem",
+      "source": "Câu 1 [SINGLE_CHOICE]:\n*A. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "EMPTY_STEM",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "numbering-gap",
+      "source": "Câu 1 [NUMERIC_FILL]: one\nĐáp án: 1234\nCâu 3 [NUMERIC_FILL]: three\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "QUESTION_NUMBER_GAP",
+          "questionNumber": 3,
+          "line": 3,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "id": "numbering-duplicate",
+      "source": "Câu 1 [NUMERIC_FILL]: one\nĐáp án: 1234\nCâu 1 [NUMERIC_FILL]: again\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "DUPLICATE_QUESTION_NUMBER",
+          "questionNumber": 1,
+          "line": 3,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "id": "numbering-not-continuous",
+      "source": "Câu 2 [NUMERIC_FILL]: two\nĐáp án: 1234\nCâu 1 [NUMERIC_FILL]: one\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "QUESTION_NUMBER_MUST_START_AT_ONE",
+          "questionNumber": 2,
+          "line": 1,
+          "column": 5
+        },
+        {
+          "code": "QUESTION_NUMBER_NOT_CONTINUOUS",
+          "questionNumber": 1,
+          "line": 3,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "id": "number-overflow",
+      "source": "Câu 2147483648 [SINGLE_CHOICE]: x\n*A. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "MALFORMED_QUESTION_HEADER",
+          "questionNumber": null,
+          "line": 1,
+          "column": 5
+        },
+        {
+          "code": "NO_QUESTIONS",
+          "questionNumber": null,
+          "line": 1,
+          "column": 1
+        },
+        {
+          "code": "OPTION_OUTSIDE_QUESTION",
+          "questionNumber": null,
+          "line": 2,
+          "column": 1
+        },
+        {
+          "code": "OPTION_OUTSIDE_QUESTION",
+          "questionNumber": null,
+          "line": 3,
+          "column": 1
+        },
+        {
+          "code": "OPTION_OUTSIDE_QUESTION",
+          "questionNumber": null,
+          "line": 4,
+          "column": 1
+        },
+        {
+          "code": "OPTION_OUTSIDE_QUESTION",
+          "questionNumber": null,
+          "line": 5,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "zero-padded-unknown-type",
+      "source": "Câu 007 [bogus]: x\nA. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "QUESTION_NUMBER_MUST_START_AT_ONE",
+          "questionNumber": 7,
+          "line": 1,
+          "column": 5
+        },
+        {
+          "code": "UNKNOWN_QUESTION_TYPE",
+          "questionNumber": 7,
+          "line": 1,
+          "column": 10
+        }
+      ]
+    },
+    {
+      "id": "malformed-header-missing-colon",
+      "source": "Câu 1 [NUMERIC_FILL]: first\nĐáp án: 1234\nCâu 2 [SINGLE_CHOICE]\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "MALFORMED_QUESTION_HEADER",
+          "questionNumber": 2,
+          "line": 3,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "unclosed-code-fence",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n```java\nint x = 1;",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "MISSING_OPTION",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        },
+        {
+          "code": "SINGLE_CHOICE_CORRECT_COUNT",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        },
+        {
+          "code": "UNCLOSED_CODE_FENCE",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "unclosed-display-math",
+      "source": "Câu 1 [NUMERIC_FILL]: x\n$$\nCâu 2 [NUMERIC_FILL]: fake",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "NUMERIC_ANSWER_REQUIRED",
+          "questionNumber": 1,
+          "line": 1,
+          "column": 1
+        },
+        {
+          "code": "UNCLOSED_MATH_BLOCK",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "answer-marker-in-choice",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nB. b\nC. c\nD. d\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "UNEXPECTED_NUMERIC_ANSWER",
+          "questionNumber": 1,
+          "line": 6,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "explanation-before-structure",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\nLời giải: early\n*A. a\nB. b\nC. c\nD. d\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "EXPLANATION_BEFORE_ANSWER_STRUCTURE",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 1
+        },
+        {
+          "code": "OPTION_AFTER_EXPLANATION",
+          "questionNumber": 1,
+          "line": 3,
+          "column": 1
+        },
+        {
+          "code": "OPTION_AFTER_EXPLANATION",
+          "questionNumber": 1,
+          "line": 4,
+          "column": 1
+        },
+        {
+          "code": "OPTION_AFTER_EXPLANATION",
+          "questionNumber": 1,
+          "line": 5,
+          "column": 1
+        },
+        {
+          "code": "OPTION_AFTER_EXPLANATION",
+          "questionNumber": 1,
+          "line": 6,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "duplicate-explanation",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nB. b\nC. c\nD. d\nLời giải: one\nLời giải: two\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "DUPLICATE_EXPLANATION",
+          "questionNumber": 1,
+          "line": 7,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "option-after-explanation",
+      "source": "Câu 1 [SINGLE_CHOICE]: stem\n*A. a\nB. b\nC. c\nD. d\nLời giải: exp\nA. late\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "OPTION_AFTER_EXPLANATION",
+          "questionNumber": 1,
+          "line": 7,
+          "column": 1
+        },
+        {
+          "code": "DUPLICATE_OPTION",
+          "questionNumber": 1,
+          "line": 7,
+          "column": 1
+        },
+        {
+          "code": "TOO_MANY_OPTIONS",
+          "questionNumber": 1,
+          "line": 7,
+          "column": 1
+        }
+      ]
+    },
+    {
+      "id": "unexpected-option-in-numeric",
+      "source": "Câu 1 [NUMERIC_FILL]: stem\nA. invalid\nĐáp án: 1234\n",
+      "valid": false,
+      "diagnostics": [
+        {
+          "code": "UNEXPECTED_OPTION",
+          "questionNumber": 1,
+          "line": 2,
+          "column": 1
+        }
+      ]
+    }
+  ]
+}

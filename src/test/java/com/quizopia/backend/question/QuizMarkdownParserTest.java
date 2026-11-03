@@ -304,6 +304,24 @@ class QuizMarkdownParserTest {
     }
 
     @Test
+    void parse_zeroPaddedNumber_reportsTypeColumnFromRawDigits() {
+        QuizMarkdownParseResult result = parser.parse(
+                """
+                Câu 007 [bogus]: x
+                A. a
+                B. b
+                C. c
+                D. d
+                """);
+
+        QuizMarkdownError error = error(result, "UNKNOWN_QUESTION_TYPE");
+        assertThat(error.questionNumber()).isEqualTo(7);
+        assertThat(error.line()).isEqualTo(1);
+        // Raw token "007": "Câu " (4) + "007" (3) + " [" (2) → column 10.
+        assertThat(error.column()).isEqualTo(10);
+    }
+
+    @Test
     void parse_malformedHeader_reportsItsOwnQuestionNumber() {
         QuizMarkdownParseResult result = parser.parse(
                 """
