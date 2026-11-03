@@ -36,7 +36,7 @@ canonical cross-language fixtures with SHA-256 parity live in
 | `explanationMarkdown` | `QuestionVersion.explanation` | Nullable — matches "zero or one `Lời giải:` block". |
 | options A–D (`label`, `markdown`, `correct`) | `QuestionOption(optionKey, content, isCorrect, position)` | `position` = 0–3 in authored order; markdown enforces exactly A–D while the DB allows A–F (no conflict for markdown input). |
 | `correct` flags (choice/matrix) | `question_options.is_correct` | Same storage the Excel import uses; `answer_key` stays `null` for SINGLE/MULTIPLE/TRUE_FALSE. |
-| `numericAnswer` | `QuestionVersion.answerKey.expectedAnswer` | JSONB `{"expectedAnswer": "<4 chars>"}` — identical to `QuestionImportService.buildAnswerKey`; options list empty for NUMERIC_FILL. |
+| `numericAnswer` | `QuestionVersion.answerKey.expectedAnswer` | JSONB `{"expectedAnswer": "<4 chars>"}` — identical to `QuestionImportService.buildAnswerKey`; options list empty for NUMERIC_FILL. Note: the Markdown token grammar accepts `-.50`, which editing/publish validation rejects — see the cross-layer table below. |
 
 ## Metadata NOT present in Markdown (adapter must not invent values)
 
@@ -49,28 +49,59 @@ canonical cross-language fixtures with SHA-256 parity live in
 | `status` | draft lifecycle | Import creates draft questions like Excel import. |
 | `metadata` JSONB | `{}` | Reserved. |
 
-## Known validation mismatches (documented, unchanged in P2-M1)
+## Cross-layer compatibility differences (verified against origin/main @ 9a43e46; tracked in Quizopia_System issue #10)
 
-1. **MULTIPLE_CHOICE minimum correct count.** The Markdown grammar (donor
-   spec, accepted v1.0) requires **≥ 1** correct option
-   (`MULTIPLE_CHOICE_CORRECT_REQUIRED`). Existing Question Bank validation
-   requires **≥ 2**: `ExcelQuestionParser` ("requires at least two correct
-   answers") and `QuestionService` update path ("exactly 4 options with at
-   least 2 correct"). A Markdown document with exactly one correct
-   MULTIPLE_CHOICE answer parses as valid but cannot be saved as-is today.
-   Resolution options for P2-M2: (a) reject at adapter level with a clear
-   diagnostic, (b) loosen import validation, or (c) tighten the grammar.
-   Deliberately NOT changed in #9; flagged for Technical Lead decision.
-2. **Option count.** DB/Excel accept flexible A–D (Excel) / A–F (DB) shapes;
-   the Markdown grammar hard-requires exactly A–D in order. Markdown is
-   strictly narrower — no conflict, but adapter error messages should surface
-   parser diagnostics, not entity constraint errors.
-3. **Numeric answer normalization.** `QuestionService` update path trims and
-   re-validates with `^-?[0-9]+([.][0-9]+)?$`-style rules (4 chars); the
-   Markdown parser applies Java `String.strip()` + the four-character grammar.
-   Grammars agree on accepted tokens (conformance fixtures verify both sides);
-   the adapter should store the parser's normalized token verbatim, like the
-   Excel path ("preserved verbatim, no reparse").
+The Markdown grammar does **not** currently agree with the existing Question
+Bank editing, Excel Import and Exam publication rules. A Markdown source that
+the parser accepts is **not automatically importable or publishable**. These
+are facts of the current code, not decisions — grammar and validation are
+unchanged in P2-M1; unification is tracked in
+[Issue #10](https://github.com/hhtuann/Quizopia_System/issues/10) and decided
+in P2-M2. (Note: this table reflects this branch's snapshot of `origin/main`;
+the concurrently running Phase 1 worktree may introduce further changes that
+must be re-audited at merge time.)
+
+| Rule | Markdown<br>(`QuizMarkdownValidator` / `QuizNumericAnswer`) | Excel Import<br>(`ExcelQuestionParser`) | Question editing<br>(`QuestionService`) | Exam publication<br>(`ExamService.validatePublishedQuestionType`) |
+|---|---|---|---|---|
+| MULTIPLE_CHOICE min correct | **≥ 1** (`MULTIPLE_CHOICE_CORRECT_REQUIRED`) | **≥ 2** ("at least two correct answers") | **≥ 2** ("exactly 4 options with at least 2 correct") | **≥ 2** (`correct < 2` → `EXAM_VALIDATION_ERROR`) |
+| Choice option count | exactly A–D in order | exactly A–D | exactly 4 options | 4–6 options |
+| TRUE_FALSE_MATRIX option count | exactly A–D | exactly A–D (T/F strings) | exactly 4 | exactly 4 |
+| Numeric answer token | 4 chars over `[0-9]`, `-`, `.`; `-` only first; `.` not first/last; surrounding Java `strip()` whitespace | `^-?[0-9]+([,.][0-9]+)?$` + exactly 4 chars; comma normalized to dot | `^-?[0-9]+([.][0-9]+)?$` + exactly 4 chars | `^-?[0-9]+([.][0-9]+)?$` + exactly 4 chars |
+| `-.50` accepted? | **yes** (fixture `numeric-negative-and-leading-dot`) | no | **no** | **no** |
+| `2,50` accepted? | no (comma not in grammar) | **yes** (normalized to `2.50` on import) | **no** | **no** |
+
+Consequences, explicitly:
+
+1. **MULTIPLE_CHOICE:** a Markdown question with exactly one correct option
+   parses as valid (`MULTIPLE_CHOICE_CORRECT_REQUIRED` only fires at zero)
+   but is rejected by Excel Import validation, question editing and Exam
+   publication today.
+2. **`-.50`:** Markdown-accepted, downstream-rejected everywhere
+   (`-?[0-9]+` requires at least one leading digit before the decimal
+   point in the other three layers).
+3. **`2,50`:** Excel Import accepts (and normalizes) a comma decimal that
+   the Markdown grammar, question editing and Exam publication all reject.
+
+### P2-M2 adapter obligation (preflight before persistence/publication)
+
+The future Question Bank Markdown adapter must **not** assume
+parser-valid ⇒ import/publish-valid. It must re-check every parsed question
+against the final agreed domain policy (whatever Issue #10 resolves: unified
+grammar, stricter adapter rejection with actionable diagnostics, or relaxed
+service validation) before writing `QuestionVersion`/`QuestionOption` rows or
+allowing a question into a publishable exam version. Until then, Markdown
+authors can hit downstream rejections that the parser cannot currently
+predict — surfacing those conflicts early in the editor is a P2-M2 concern.
+
+### Other documented asymmetries (no conflict for Markdown input)
+
+- **Option count:** the Markdown grammar hard-requires exactly A–D in order —
+  narrower than Excel (A–D) and the DB (A–F), and narrower than Exam
+  publication (4–6). Adapter error messages should surface parser
+  diagnostics, not entity constraint errors.
+- **Numeric token storage:** the adapter should store the parser's
+  normalized token verbatim, like the Excel path ("preserved verbatim, no
+  reparse") — but only after the preflight above accepts it.
 
 ## Extension point: AI-generated Markdown
 
@@ -101,3 +132,12 @@ persistence. No AI functionality is implemented or implied by P2-M1.
   source offsets for invalid sources (live preview) while Java is
   all-or-nothing; diagnostic emission order may differ, so fixtures compare
   unordered diagnostic sets.
+
+### Known limitations of the conformance evidence
+
+- Diagnostic-set comparison collapses identical duplicate tuples; emission
+  order and human-readable message text are not verified (documented policy).
+- No fuzzing or latency benchmark has been run; the fixtures are curated
+  cases, not exhaustive input exploration.
+- The backend full Testcontainers integration suite was not executed for
+  P2-M1-D (targeted markdown suites only; changes were parser/test-scoped).
