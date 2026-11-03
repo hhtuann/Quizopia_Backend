@@ -584,3 +584,13 @@ Pre-existing intentional skips with an explicit reason in the report:
 `question codes are auto-generated; import code-collision detection removed`
 â€” 1 in `QuestionImportApiIntegrationTests`, 3 in `QuestionImportServiceIntegrationTests`.
 None are new to Phase 1; none mask failures.
+
+### Gate 1 final result (2026-11-03)
+CI green at final Task-B HEAD `c1b17e0`: run 41649538910 —
+`Tests run: 1526, Failures: 0, Errors: 0, Skipped: 4`, zero flakes needed.
+Run history: 41640341335 (mvnw exec bit, fixed + `mode 100755`),
+41640499686 (stale constraint-translation test SQL pre-V16/V17, fixed),
+41647599077 (CI-only STOMP ERROR-vs-CLOSE frame race — timeouts tuned to
+`stomp.await-seconds` default 15s, plus transparent surefire
+`rerunFailingTestsCount=2`; tracked in Quizopia_Backend issue #4 with full
+evidence; reruns are reported as explicit flakes, never silent).
