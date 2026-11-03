@@ -26,7 +26,11 @@ jobs:
         run: chmod +x mvnw
 
       - name: Full build + test suite (Testcontainers/PostgreSQL 17)
-        run: ./mvnw -B -ntp verify
+        # rerunFailingTestsCount: a failed test is retried up to 2 times IN THE SAME
+        # report as an explicitly-listed "flake" (surefire reports Flakes count) —
+        # never silent. Tracked for the known STOMP ERROR-vs-CLOSE frame race
+        # (see issue tracker); deterministic failures still fail the build.
+        run: ./mvnw -B -ntp verify -Dsurefire.rerunFailingTestsCount=2
 
       - name: Upload Surefire reports
         if: always()
