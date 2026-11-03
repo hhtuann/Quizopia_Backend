@@ -85,10 +85,11 @@ class V9AttemptSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8','9')", Integer.class);
         assertThat(n).isEqualTo(9);
+        // Phase 1 Task A adds V10–V12 (workspace foundation); latest applied is 12.
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("9");
+        assertThat(current).isEqualTo("12");
     }
 
     @Test

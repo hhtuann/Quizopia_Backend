@@ -48,6 +48,8 @@ public class StudentOnboardingService {
     private final NamedParameterJdbcTemplate jdbc;
     private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
+    private final com.quizopia.backend.workspace.repository.WorkspaceMembershipRepository workspaceMembershipRepository;
 
     public StudentOnboardingService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -57,7 +59,9 @@ public class StudentOnboardingService {
             SchoolRepository schoolRepository,
             NamedParameterJdbcTemplate jdbc,
             Clock clock,
-            com.quizopia.backend.notification.application.NotificationService notificationService) {
+            com.quizopia.backend.notification.application.NotificationService notificationService,
+            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
+            com.quizopia.backend.workspace.repository.WorkspaceMembershipRepository workspaceMembershipRepository) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
@@ -67,6 +71,8 @@ public class StudentOnboardingService {
         this.jdbc = jdbc;
         this.clock = clock;
         this.notificationService = notificationService;
+        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
+        this.workspaceMembershipRepository = workspaceMembershipRepository;
     }
 
     // ============================================================
@@ -143,6 +149,17 @@ public class StudentOnboardingService {
         String studentCode = generateStudentCode(school);
         StudentProfile profile = new StudentProfile(targetUserId, schoolId, studentCode);
         studentProfileRepository.saveAndFlush(profile);
+
+        // Public platform foundation (issue #1): joining a school also grants
+        // ACTIVE MEMBER membership in the school's organization workspace.
+        Long workspaceId = organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
+        if (!workspaceMembershipRepository.existsByWorkspaceIdAndUserIdAndStatus(workspaceId, targetUserId,
+                com.quizopia.backend.workspace.domain.model.WorkspaceMembershipStatus.ACTIVE)) {
+            workspaceMembershipRepository.saveAndFlush(
+                    new com.quizopia.backend.workspace.domain.model.WorkspaceMembership(
+                            workspaceId, targetUserId,
+                            com.quizopia.backend.workspace.domain.model.WorkspaceRole.MEMBER));
+        }
 
         // Notify the student they've been approved and assigned to a school.
         notificationService.create(targetUserId,

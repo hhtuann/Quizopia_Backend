@@ -48,7 +48,7 @@ public class ClassroomService {
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt");
     private static final String CODE_CONFLICT_INDEX = "uk_classrooms_owner_code_ci";
-    private static final String MEMBER_DUPLICATE_CONSTRAINT = "uk_classroom_members_classroom_student";
+    private static final String MEMBER_DUPLICATE_CONSTRAINT = "uk_classroom_members_classroom_";
 
     private final TeacherProfileRepository teacherProfileRepository;
     private final StudentProfileRepository studentProfileRepository;
@@ -59,6 +59,8 @@ public class ClassroomService {
     private final EntityManager entityManager;
     private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
+    private final com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService;
 
     public ClassroomService(TeacherProfileRepository teacherProfileRepository,
             StudentProfileRepository studentProfileRepository,
@@ -68,7 +70,9 @@ public class ClassroomService {
             RolePermissionRepository rolePermissionRepository,
             EntityManager entityManager,
             Clock clock,
-            com.quizopia.backend.notification.application.NotificationService notificationService) {
+            com.quizopia.backend.notification.application.NotificationService notificationService,
+            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
+            com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService) {
         this.teacherProfileRepository = teacherProfileRepository;
         this.studentProfileRepository = studentProfileRepository;
         this.classroomRepository = classroomRepository;
@@ -78,6 +82,8 @@ public class ClassroomService {
         this.entityManager = entityManager;
         this.clock = clock;
         this.notificationService = notificationService;
+        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
+        this.workspaceAccessService = workspaceAccessService;
     }
 
     // ============================================================
@@ -93,7 +99,12 @@ public class ClassroomService {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_CODE_CONFLICT);
         }
 
-        Classroom classroom = new Classroom(profile.getSchoolId(), profile.getId(), request.code(), request.name());
+        Long workspaceId = requireOrganizationWorkspaceId(profile.getSchoolId());
+        // P0-2 (issue #4): creating in the org workspace requires an ACTIVE
+        // membership (revoked members are denied even with a teacher profile).
+        workspaceAccessService.requireContentEditor(userId, workspaceId);
+        Classroom classroom = new Classroom(workspaceId, profile.getSchoolId(), profile.getId(),
+                request.code(), request.name());
         classroom.setDescription(request.description());
         try {
             classroomRepository.saveAndFlush(classroom);
@@ -119,9 +130,16 @@ public class ClassroomService {
         // (small N per teacher); reuse the page query at a large size.
         Page<Classroom> page = classroomRepository.findByOwnerTeacherIdOrderByCreatedAtDescIdDesc(
                 profile.getId(), PageRequest.of(0, MAX_PAGE_SIZE));
+        // P0-2 (issue #4): hide classrooms in workspaces the user may no
+        // longer access (revoked organization membership).
+        java.util.Set<Long> accessible = new java.util.HashSet<>(
+                workspaceAccessService.accessibleWorkspaceIds(userId));
+        List<Classroom> visible = page.getContent().stream()
+                .filter(c -> accessible.contains(c.getWorkspaceId()))
+                .toList();
         Map<Long, Long> counts = batchMemberCounts(
-                page.getContent().stream().map(Classroom::getId).toList());
-        List<ClassroomResponse> items = page.getContent().stream()
+                visible.stream().map(Classroom::getId).toList());
+        List<ClassroomResponse> items = visible.stream()
                 .map(c -> toResponse(c, counts.getOrDefault(c.getId(), 0L)))
                 .toList();
         return new MyClassroomsResponse(items);
@@ -140,17 +158,18 @@ public class ClassroomService {
 
         List<ClassroomMember> members = memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId);
         Map<Long, StudentProfile> profiles = batchStudentProfiles(
-                members.stream().map(ClassroomMember::getStudentProfileId).toList());
+                members.stream().map(ClassroomMember::getStudentProfileId)
+                        .filter(Objects::nonNull).toList());
         Map<Long, String> displayNames = batchDisplayNames(
-                profiles.values().stream().map(StudentProfile::getUserId).collect(Collectors.toSet()));
+                members.stream().map(ClassroomMember::getUserId).collect(Collectors.toSet()));
 
         List<MemberView> memberViews = members.stream()
                 .map(m -> {
-                    StudentProfile sp = profiles.get(m.getStudentProfileId());
+                    StudentProfile sp = m.getStudentProfileId() != null ? profiles.get(m.getStudentProfileId()) : null;
                     return new MemberView(
                             m.getStudentProfileId(),
                             sp != null ? sp.getStudentCode() : null,
-                            sp != null ? displayNames.get(sp.getUserId()) : null,
+                            displayNames.get(m.getUserId()),
                             m.getAddedAt());
                 })
                 .toList();
@@ -197,15 +216,14 @@ public class ClassroomService {
         }
         List<Long> distinctIds = new ArrayList<>(seen);
 
-        // Batch-check existing memberships.
-        Set<Long> existing = memberRepository
-                .findAllByClassroomIdAndStudentProfileIdIn(classroomId, distinctIds).stream()
-                .map(ClassroomMember::getStudentProfileId)
-                .collect(Collectors.toSet());
-
-        // Batch-load student profiles + validate same school.
+        // Batch-load profiles + batch-check existing memberships (user-based, V12).
         Map<Long, StudentProfile> profiles = studentProfileRepository.findAllById(distinctIds).stream()
                 .collect(Collectors.toMap(StudentProfile::getId, p -> p));
+        Set<Long> existingUsers = memberRepository
+                .findAllByClassroomIdAndUserIdIn(classroomId,
+                        profiles.values().stream().map(StudentProfile::getUserId).toList()).stream()
+                .map(ClassroomMember::getUserId)
+                .collect(Collectors.toSet());
 
         List<Long> toInsert = new ArrayList<>();
         List<Long> duplicated = new ArrayList<>(duplicatedInRequest);
@@ -216,8 +234,8 @@ public class ClassroomService {
                 invalid.add(id); // missing
             } else if (!sp.getSchoolId().equals(classroom.getSchoolId())) {
                 invalid.add(id); // cross-school
-            } else if (existing.contains(id)) {
-                duplicated.add(id); // already a member
+            } else if (existingUsers.contains(sp.getUserId())) {
+                duplicated.add(id); // already a member (user-based)
             } else {
                 toInsert.add(id); // valid
             }
@@ -226,8 +244,9 @@ public class ClassroomService {
         if (!toInsert.isEmpty()) {
             try {
                 for (Long spId : toInsert) {
-                    memberRepository.saveAndFlush(
-                            new ClassroomMember(classroomId, spId, classroom.getSchoolId()));
+                    StudentProfile sp = profiles.get(spId);
+                    memberRepository.saveAndFlush(new ClassroomMember(
+                            classroomId, sp.getUserId(), spId, classroom.getSchoolId()));
                 }
             } catch (DataIntegrityViolationException ex) {
                 if (isMemberDuplicate(ex)) {
@@ -271,8 +290,19 @@ public class ClassroomService {
         requirePermission(userId, "CLASSROOM_MEMBER_REMOVE");
         TeacherProfile profile = resolveTeacherProfile(userId);
         Classroom classroom = requireOwnedClassroom(profile, classroomId);
-        // Idempotent: deleteBy returns rows affected; missing member → 200 (no-op).
-        memberRepository.deleteByClassroomIdAndStudentProfileId(classroomId, studentProfileId);
+        // User-based removal (V12): resolve the profile's user, then remove the
+        // membership row by user. Falls back to the legacy profile-scoped delete
+        // for rows without a resolvable user. Idempotent by design.
+        Long targetUserId = studentProfileRepository.findById(studentProfileId)
+                .map(StudentProfile::getUserId)
+                .orElse(null);
+        long removed = 0;
+        if (targetUserId != null) {
+            removed = memberRepository.deleteByClassroomIdAndUserId(classroomId, targetUserId);
+        }
+        if (removed == 0) {
+            memberRepository.deleteByClassroomIdAndStudentProfileId(classroomId, studentProfileId);
+        }
         // Notify the removed student.
         studentProfileRepository.findById(studentProfileId).ifPresent(sp -> {
             notificationService.create(sp.getUserId(),
@@ -298,19 +328,20 @@ public class ClassroomService {
         PageRequest pageable = safePageable(page, size, sort);
         Page<ClassroomMember> members = memberRepository.findByClassroomIdOrderByIdAsc(classroomId, pageable);
 
-        List<Long> spIds = members.getContent().stream().map(ClassroomMember::getStudentProfileId).toList();
+        List<Long> spIds = members.getContent().stream().map(ClassroomMember::getStudentProfileId)
+                .filter(Objects::nonNull).toList();
         Map<Long, StudentProfile> profiles = batchStudentProfiles(spIds);
         Map<Long, String> displayNames = batchDisplayNames(
-                profiles.values().stream().map(StudentProfile::getUserId).collect(Collectors.toSet()));
+                members.getContent().stream().map(ClassroomMember::getUserId).collect(Collectors.toSet()));
 
         List<ClassroomMemberResponse> items = members.getContent().stream()
                 .map(m -> {
-                    StudentProfile sp = profiles.get(m.getStudentProfileId());
+                    StudentProfile sp = m.getStudentProfileId() != null ? profiles.get(m.getStudentProfileId()) : null;
                     return new ClassroomMemberResponse(
                             m.getId(),
                             m.getStudentProfileId(),
                             sp != null ? sp.getStudentCode() : null,
-                            sp != null ? displayNames.get(sp.getUserId()) : null,
+                            displayNames.get(m.getUserId()),
                             m.getAddedAt());
                 })
                 .toList();
@@ -322,11 +353,27 @@ public class ClassroomService {
     // Helpers
     // ============================================================
 
+    /**
+     * Resolves the organization workspace for a school (classrooms stay
+     * org-scoped in Phase 1, ADR-001 §2.2). Lazily provisions the
+     * organization + workspace pair on first use.
+     */
+    private Long requireOrganizationWorkspaceId(Long schoolId) {
+        return organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
+    }
+
     private Classroom requireOwnedClassroom(TeacherProfile profile, Long classroomId) {
         Classroom classroom = classroomRepository.findById(classroomId)
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.CLASSROOM_NOT_FOUND));
         if (!classroom.getOwnerTeacherId().equals(profile.getId())
                 || !classroom.getSchoolId().equals(profile.getSchoolId())) {
+            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+        }
+        // P0-2 (issue #4): owning the classroom is not enough when the
+        // organization membership has been revoked.
+        try {
+            workspaceAccessService.requireResourceRead(profile.getUserId(), classroom.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
         }
         return classroom;

@@ -46,6 +46,11 @@ public class Attempt {
     @Column(name = "exam_session_id", nullable = false)
     private Long examSessionId;
 
+    /** Attempt owner user (NOT NULL, V12 — user-based ownership per issue #1 A4). */
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    /** Legacy provenance; retained while historical rows depend on it. */
     @Column(name = "student_profile_id", nullable = false)
     private Long studentProfileId;
 
@@ -89,10 +94,22 @@ public class Attempt {
     protected Attempt() {
     }
 
-    private Attempt(Long schoolId, Long examSessionId, Long studentProfileId, Long examVersionId,
+    private Attempt(Long schoolId, Long examSessionId, Long userId, Long studentProfileId, Long examVersionId,
                     Integer attemptNumber, Instant startedAt, Instant deadlineAt, UUID clientInstanceId) {
+        this(schoolId, examSessionId, userId, studentProfileId, examVersionId, attemptNumber,
+                startedAt, deadlineAt, clientInstanceId, false);
+    }
+
+    private Attempt(Long schoolId, Long examSessionId, Long userId, Long studentProfileId, Long examVersionId,
+                    Integer attemptNumber, Instant startedAt, Instant deadlineAt, UUID clientInstanceId,
+                    boolean legacyOwner) {
         this.schoolId = Objects.requireNonNull(schoolId, "schoolId must not be null");
         this.examSessionId = Objects.requireNonNull(examSessionId, "examSessionId must not be null");
+        if (legacyOwner) {
+            Objects.requireNonNull(studentProfileId, "studentProfileId must not be null");
+        } else {
+            this.userId = Objects.requireNonNull(userId, "userId must not be null");
+        }
         this.studentProfileId = Objects.requireNonNull(studentProfileId, "studentProfileId must not be null");
         this.examVersionId = Objects.requireNonNull(examVersionId, "examVersionId must not be null");
         this.attemptNumber = requirePositive(attemptNumber, "attemptNumber");
@@ -107,18 +124,47 @@ public class Attempt {
      * {@code deadline_at = min(session.ends_at, started_at + duration)}.
      * {@code submittedAt} and the submission idempotency key are null.
      */
-    public static Attempt start(Long schoolId, Long examSessionId, Long studentProfileId, Long examVersionId,
-                                Integer attemptNumber, Instant startedAt, Instant deadlineAt) {
-        return new Attempt(schoolId, examSessionId, studentProfileId, examVersionId, attemptNumber,
+    public static Attempt start(Long schoolId, Long examSessionId, Long userId, Long studentProfileId,
+                                Long examVersionId, Integer attemptNumber, Instant startedAt, Instant deadlineAt) {
+        return new Attempt(schoolId, examSessionId, userId, studentProfileId, examVersionId, attemptNumber,
                 startedAt, deadlineAt, null);
     }
 
     /** Factory overload accepting an optional clientInstanceId (null allowed). */
+    public static Attempt start(Long schoolId, Long examSessionId, Long userId, Long studentProfileId,
+                                Long examVersionId, Integer attemptNumber, Instant startedAt, Instant deadlineAt,
+                                UUID clientInstanceId) {
+        return new Attempt(schoolId, examSessionId, userId, studentProfileId, examVersionId, attemptNumber,
+                startedAt, deadlineAt, clientInstanceId);
+    }
+
+    /**
+     * Legacy-shape factory (transitional, ADR-001 §2.2): the owner user is
+     * resolved by the V12 BEFORE INSERT trigger from {@code studentProfileId}.
+     * Intended for legacy fixtures; application services must pass the
+     * authenticated {@code userId} explicitly.
+     */
+    public static Attempt start(Long schoolId, Long examSessionId, Long studentProfileId, Long examVersionId,
+                                Integer attemptNumber, Instant startedAt, Instant deadlineAt) {
+        return legacyStart(schoolId, examSessionId, studentProfileId, examVersionId, attemptNumber,
+                startedAt, deadlineAt, null);
+    }
+
+    /** Legacy-shape factory overload with clientInstanceId (transitional). */
     public static Attempt start(Long schoolId, Long examSessionId, Long studentProfileId, Long examVersionId,
                                 Integer attemptNumber, Instant startedAt, Instant deadlineAt,
                                 UUID clientInstanceId) {
-        return new Attempt(schoolId, examSessionId, studentProfileId, examVersionId, attemptNumber,
+        return legacyStart(schoolId, examSessionId, studentProfileId, examVersionId, attemptNumber,
                 startedAt, deadlineAt, clientInstanceId);
+    }
+
+    private static Attempt legacyStart(Long schoolId, Long examSessionId, Long studentProfileId, Long examVersionId,
+                                       Integer attemptNumber, Instant startedAt, Instant deadlineAt,
+                                       UUID clientInstanceId) {
+        // Legacy shape: owner user is null in memory; the transitional V12
+        // BEFORE INSERT trigger resolves it from studentProfileId.
+        return new Attempt(schoolId, examSessionId, null, studentProfileId, examVersionId, attemptNumber,
+                startedAt, deadlineAt, clientInstanceId, true);
     }
 
     /**
@@ -166,6 +212,10 @@ public class Attempt {
 
     public Long getExamSessionId() {
         return examSessionId;
+    }
+
+    public Long getUserId() {
+        return userId;
     }
 
     public Long getStudentProfileId() {

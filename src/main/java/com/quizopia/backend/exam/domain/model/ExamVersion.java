@@ -31,7 +31,8 @@ public class ExamVersion {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
+    /** Legacy provenance; nullable since V11 for personal-workspace draft exams (removed from the runtime path by Task B). */
+    @Column(name = "school_id")
     private Long schoolId;
 
     @Column(name = "exam_id", nullable = false)

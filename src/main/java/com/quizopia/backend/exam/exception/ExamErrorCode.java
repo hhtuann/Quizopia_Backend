@@ -11,6 +11,7 @@ public enum ExamErrorCode {
     EXAM_SUBJECT_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Subject does not belong to the caller's school"),
     EXAM_PURPOSE_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam purpose not found"),
     EXAM_PURPOSE_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Exam purpose does not belong to the caller's school"),
+    EXAM_SCHOOL_WORKSPACE_NOT_FOUND(HttpStatus.NOT_FOUND, "No organization workspace found for the caller's school"),
     EXAM_CODE_CONFLICT(HttpStatus.CONFLICT, "Exam code already exists for this owner"),
     EXAM_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam not found"),
     EXAM_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam version not found"),

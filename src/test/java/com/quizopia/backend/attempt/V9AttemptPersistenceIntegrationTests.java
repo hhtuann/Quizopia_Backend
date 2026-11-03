@@ -140,7 +140,7 @@ class V9AttemptPersistenceIntegrationTests {
 
     @Test
     void attemptRoundTrip() {
-        Attempt a = Attempt.start(schoolId, sessionId, studentProfileId, examVersionId, 1,
+        Attempt a = Attempt.start(schoolId, sessionId, userId, studentProfileId, examVersionId, 1,
                 Instant.parse("2026-07-03T07:00:00Z"), Instant.parse("2026-07-03T08:00:00Z"));
         em.persist(a);
         em.flush();
@@ -148,6 +148,7 @@ class V9AttemptPersistenceIntegrationTests {
         Attempt reloaded = em.find(Attempt.class, a.getId());
         assertThat(reloaded.getSchoolId()).isEqualTo(schoolId);
         assertThat(reloaded.getExamSessionId()).isEqualTo(sessionId);
+        assertThat(reloaded.getUserId()).isEqualTo(userId);
         assertThat(reloaded.getStudentProfileId()).isEqualTo(studentProfileId);
         assertThat(reloaded.getExamVersionId()).isEqualTo(examVersionId);
         assertThat(reloaded.getAttemptNumber()).isEqualTo(1);
@@ -684,7 +685,9 @@ class V9AttemptPersistenceIntegrationTests {
     }
 
     private Attempt persistAttemptForSession(int number, long session, long student, long version) {
-        Attempt a = Attempt.start(schoolId, session, student, version, number,
+        Long ownerUserId = jdbc.queryForObject(
+                "SELECT user_id FROM student_profiles WHERE id = " + student, Long.class);
+        Attempt a = Attempt.start(schoolId, session, ownerUserId, student, version, number,
                 Instant.now(), Instant.now().plusSeconds(3600));
         em.persist(a);
         em.flush();
