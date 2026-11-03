@@ -519,3 +519,68 @@ real JWT auth via form login, no MockMvc, no mocks)
   postflight SQL equality) is documented in the runbook but NOT yet executed - required
   before production cutover approval.
 - The two baseline test failures above remain accepted-known (pre-existing).
+
+## 17. Release hardening � gates evidence (2026-11-03)
+
+Follows the Tech Lead release review (GO for hardening only; merge NO-GO until gates).
+
+### Gate 1 � Backend CI
+- Added `.github/workflows/ci.yml` (Java 21 Temurin, Maven cache, `./mvnw -B -ntp verify`,
+  surefire artifacts upload). Run history: first run failed on mvnw exec bit
+  (fixed in-repo `mode 100755` + chmod guard); second run failed on
+  `AttemptConstraintTranslationIntegrationTests.psqlFallbackExtractsConstraintName` �
+  its raw JDBC SQL predated the V16/V17 user-based schema (attempts/participants
+  inserts omitted `user_id`); fixed the test SQL to the canonical schema
+  (CI artifact `surefire-reports` was the evidence; the two pre-existing stale
+  test expectations � student auto-code `STU\d{8}` and 9-column xlsx template �
+  were aligned in the same push series).
+- Local mirror of the CI goal: `mvnw -B -ntp verify` ? tests **1526 run /
+  0 failures / 0 errors / 4 skipped** (skip list explained below); the local
+  `repackage` step fails only because the user-managed runtime holds the JAR
+  (Windows lock) � not a test failure; CI has no such lock.
+- Final-HEAD CI run: recorded in the Issue #4 report (run id + URL).
+
+### Gate 2 � Migration verification
+- **No production database or pre-upgrade backup exists** � the production-data
+  rehearsal of phase1-migration.md CANNOT be executed yet; this sub-gate stays
+  open for the first real deployment and must not be claimed as passed.
+- Executed on staging instead: automated gate fresh on HEAD
+  (`P1CheckpointBMetadataIntegrationTests` 15/15 + both staged Flyway suites
+  1/1 + 1/1 = 17/17 BUILD SUCCESS); real `pg_dump -Fc` of the staging DB
+  (SHA-256 `8AF2C74092F112E21C833491FDAC4573926C78CB140CFA5B4B0DCB2295BB059F`),
+  `pg_restore --exit-on-error` into an independent scratch database, and
+  full row-group equality (flyway history checksum, users, exams, sessions,
+  attempts, participants � 6/6 identical) between source and restore.
+  Scratch DB dropped afterwards; source staging data untouched.
+- Clean V1->V17 on empty schema is exercised by the full suite/CI.
+
+### Gate 3 � Runtime/deployment readiness
+- Static packaging: standalone `.next/static` 58/58 byte-identical, live asset
+  HTTP 200; frontend served via `node .next/standalone/server.js` (the
+  `next start` incompatibility is documented).
+- Build identity: chunks bake `NEXT_PUBLIC_API_URL=http://localhost:8181`;
+  backend health `{"status":"UP"}`; real login issues HS256 JWT; authenticated
+  `/api/auth/me` and `/api/exams/my` return 200; anonymous `/api/exams/my` 401.
+- Audit logging: `logback-spring.xml` routes `quizopia.security.audit` to
+  `logs/security-audit.log` (daily+size rollover, 90-day/512MB cap, gzipped,
+  console duplication for container collectors); context boot verified by test.
+  Production collector wiring remains a deployment-environment task.
+- `docs/runbooks/phase1-deploy-rollback.md` added: pre-deploy checks, backend/
+  frontend deploy steps (standalone copy steps are mandatory), audit shipping,
+  application-only rollback and data-restore last resort.
+
+### Gate 4 � Integration state (pre-merge snapshot)
+- Backend Task A `15171665` <- Task B `170853d` (PR #2 MERGEABLE, stacked);
+  Frontend PR #1 `738a81f` MERGEABLE (Vercel PASS); System PR #3 OPEN and still
+  pinning pre-P0 pointers � pointer update deferred until final approval.
+- Working trees: backend/frontend clean; frontend WIP stash `pre-phase1-wip`
+  intact; parent has only uncommitted submodule checkout drift + untracked
+  local `issue4.json` helper file (not part of any PR).
+- Merge order (when approved): Backend PR #2 (Task A <- B), then Frontend PR #1,
+  then System PR #3 pointer update. No merges or pushes to main performed.
+
+### Skipped tests (4) in the full suite
+Pre-existing intentional skips with an explicit reason in the report:
+`question codes are auto-generated; import code-collision detection removed`
+— 1 in `QuestionImportApiIntegrationTests`, 3 in `QuestionImportServiceIntegrationTests`.
+None are new to Phase 1; none mask failures.
