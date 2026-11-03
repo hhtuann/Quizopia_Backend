@@ -83,6 +83,7 @@ class V9AttemptPersistenceIntegrationTests {
     private long schoolId;
     private long bankId;
     private long studentProfileId;
+    private long teacherProfileId;
     private long examId;
     private long sessionId;
     private long examQuestionId;
@@ -97,6 +98,7 @@ class V9AttemptPersistenceIntegrationTests {
                 + "VALUES (" + schoolId + "," + gradeLevelId + ",'MATH','Math')");
         long teacherId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
                 + "VALUES (" + userId + "," + schoolId + ",'TC')");
+        teacherProfileId = teacherId;
         studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
                 + "VALUES (" + userId + "," + schoolId + ",'SC')");
         bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
@@ -660,8 +662,11 @@ class V9AttemptPersistenceIntegrationTests {
     }
 
     private long newOpenSession(String code) {
+        // owner_teacher_id is the teacher_profiles.id (FK fk_exam_sessions_owner_school
+        // references teacher_profiles(school_id, id)) — NOT the user id. Using the user id
+        // passed locally only when the users/teacher_profiles sequences happened to align.
         return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + examId + "," + userId
+                + "starts_at, ends_at, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + examId + "," + teacherProfileId
                 + ",'" + code + "','t','OPEN',now()-interval '1 hour',now()+interval '2 hours'," + userId + ",now(),60)");
     }
 
