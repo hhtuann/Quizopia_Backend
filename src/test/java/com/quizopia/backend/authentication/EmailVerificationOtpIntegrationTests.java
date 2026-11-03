@@ -196,18 +196,28 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         String username = unique("otp-rate");
         String email = emailFor(username);
         register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        // Test cooldown is 1s; the per-email cap is 5 challenges/hour — the
-        // registration already created one, so four more resends hit the cap.
-        int lastStatus = 0;
+        // The mutable clock is shared by every test in this class (and by
+        // rerun attempts), so pin it just AHEAD of real time before each
+        // resend: the cooldown check compares against the challenge's
+        // @CreationTimestamp (real time), and pinning makes "cooldown
+        // elapsed" deterministic regardless of accumulated clock state.
+        // The per-email cap is 5 challenges/hour; the registration already
+        // created one, so exactly four resends succeed before the 429.
+        int[] statuses = new int[5];
         for (int i = 0; i < 5; i++) {
-            clock.advance(java.time.Duration.ofSeconds(2));
+            clock.setInstant(java.time.Instant.now().plusSeconds(2));
             MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content("{\"email\":\"%s\"}".formatted(email)))
                     .andReturn();
-            lastStatus = result.getResponse().getStatus();
+            statuses[i] = result.getResponse().getStatus();
         }
-        assertThat(lastStatus).isEqualTo(429);
+        // Fail fast on unexpected outcomes instead of only checking the last.
+        assertThat(statuses[0]).isEqualTo(200);
+        assertThat(statuses[1]).isEqualTo(200);
+        assertThat(statuses[2]).isEqualTo(200);
+        assertThat(statuses[3]).isEqualTo(200);
+        assertThat(statuses[4]).isEqualTo(429);
     }
 
     @Test
