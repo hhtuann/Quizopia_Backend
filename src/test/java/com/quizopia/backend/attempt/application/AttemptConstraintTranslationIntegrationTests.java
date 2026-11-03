@@ -73,7 +73,7 @@ class AttemptConstraintTranslationIntegrationTests {
         // max_attempts=5 so the service reaches the attempt INSERT (where the test trigger fires).
         sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
                 + school + "," + exam + "," + tp + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + studentUserId + ")");
+        insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, user_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + studentUserId + "," + studentUserId + ")");
         installTestConstraintTrigger();
     }
 
@@ -122,8 +122,8 @@ class AttemptConstraintTranslationIntegrationTests {
     void psqlFallbackExtractsConstraintName() {
         // Trigger must be inert for the seed inserts below.
         armTrigger(null);
-        long attemptId = insert("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, "
-                + "attempt_number, status, started_at, deadline_at) SELECT s.school_id, s.id, sp.id, "
+        long attemptId = insert("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, user_id, "
+                + "attempt_number, status, started_at, deadline_at) SELECT s.school_id, s.id, sp.id, sp.user_id, "
                 + "1, 'IN_PROGRESS', '" + clock.instant() + "', '" + clock.instant().plusSeconds(3600) + "' "
                 + "FROM exam_sessions s JOIN exam_session_participants sp ON sp.exam_session_id = s.id WHERE s.id = " + sessionId);
         long eqId = jdbc.queryForObject("SELECT id FROM exam_questions WHERE exam_id=(SELECT exam_id FROM exam_sessions WHERE id=" + sessionId + ")", Long.class);

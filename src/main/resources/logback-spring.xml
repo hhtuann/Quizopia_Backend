@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Quizopia logging: console for application logs + a dedicated, retained
+  SECURITY AUDIT file for the `quizopia.security.audit` logger
+  (SystemAdminResultAccessPolicy grant events).
+
+  Retention: 90 days / 512 MB cap, daily+size rollover (security-audit
+  retention baseline; adjust to the deployment's compliance requirement).
+-->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <appender name="SECURITY_AUDIT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${QUIZOPIA_LOG_DIR:-logs}/security-audit.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${QUIZOPIA_LOG_DIR:-logs}/security-audit.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>64MB</maxFileSize>
+            <maxHistory>90</maxHistory>
+            <totalSizeCap>512MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="quizopia.security.audit" level="INFO" additivity="false">
+        <appender-ref ref="SECURITY_AUDIT_FILE"/>
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>
