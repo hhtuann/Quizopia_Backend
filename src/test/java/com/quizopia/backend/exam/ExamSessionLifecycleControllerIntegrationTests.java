@@ -61,12 +61,10 @@ class ExamSessionLifecycleControllerIntegrationTests {
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         long examId = firstJsonId(examBody);
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition").with(jwt().jwt(j -> j.subject(String.valueOf(teacherUserId))))
-                        .contentType("application/json").content("{\"expectedVersionNumber\":1,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + q + ",\"position\":0}]}]}"))
+                        .contentType("application/json").content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + q + ",\"position\":0}]}]}"))
                 .andExpect(status().isOk());
-        Long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
-        // Clear the persistence context: PUT composition loaded v1 as a managed DRAFT entity, so the
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
+        // Clear the persistence context: PUT composition loaded the exam as a managed entity, so the
         // JDBC PUBLISHED flip must be re-read (not served from the first-level cache) by createSession.
         entityManager.clear();
 
@@ -152,7 +150,7 @@ class ExamSessionLifecycleControllerIntegrationTests {
     private long createSession(long examId, String code, Instant starts, Instant ends) throws Exception {
         String body = mockMvc.perform(post("/api/exam-sessions").with(jwt().jwt(j -> j.subject(String.valueOf(teacherUserId))))
                         .contentType("application/json")
-                        .content("{\"examId\":" + examId + ",\"examVersionNumber\":1,\"code\":\"" + code + "\",\"title\":\"T\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
+                        .content("{\"examId\":" + examId + ",\"code\":\"" + code + "\",\"title\":\"T\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return firstJsonId(body);
     }

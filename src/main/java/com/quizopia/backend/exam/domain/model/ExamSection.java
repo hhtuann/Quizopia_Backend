@@ -6,9 +6,9 @@ import org.hibernate.annotations.CreationTimestamp;
 import java.time.Instant;
 
 /**
- * JPA entity mapping the {@code exam_sections} table. A section is a mandatory
- * container for exam questions within a version. Section position is unique
- * within a version; question position is local within a section.
+ * JPA entity mapping the {@code exam_sections} table. A section belongs
+ * directly to an Exam (one-exam-one-content, issue #2); position is unique
+ * within the exam.
  */
 @Entity
 @Table(name = "exam_sections")
@@ -18,8 +18,8 @@ public class ExamSection {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "exam_version_id", nullable = false)
-    private Long examVersionId;
+    @Column(name = "exam_id", nullable = false)
+    private Long examId;
 
     @Column(name = "code", length = 80)
     private String code;
@@ -40,8 +40,8 @@ public class ExamSection {
     protected ExamSection() {
     }
 
-    public ExamSection(Long examVersionId, String title, Integer position) {
-        this.examVersionId = ExamPurpose.requireNonNullId(examVersionId, "examVersionId");
+    public ExamSection(Long examId, String title, Integer position) {
+        this.examId = ExamPurpose.requireNonNullId(examId, "examId");
         this.title = ExamPurpose.requireNonBlank("title", title);
         this.position = requireNonNegative(position, "position");
     }
@@ -50,8 +50,8 @@ public class ExamSection {
         return id;
     }
 
-    public Long getExamVersionId() {
-        return examVersionId;
+    public Long getExamId() {
+        return examId;
     }
 
     public String getCode() {
@@ -102,7 +102,7 @@ public class ExamSection {
     public String toString() {
         return "ExamSection{" +
                 "id=" + id +
-                ", examVersionId=" + examVersionId +
+                ", examId=" + examId +
                 ", code='" + code + '\'' +
                 ", position=" + position +
                 ", createdAt=" + createdAt +

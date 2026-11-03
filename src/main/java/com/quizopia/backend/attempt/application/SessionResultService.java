@@ -32,9 +32,11 @@ public class SessionResultService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final JdbcTemplate jdbc;
+    private final SystemAdminResultAccessPolicy adminAccess;
 
-    public SessionResultService(JdbcTemplate jdbc) {
+    public SessionResultService(JdbcTemplate jdbc, SystemAdminResultAccessPolicy adminAccess) {
         this.jdbc = jdbc;
+        this.adminAccess = adminAccess;
     }
 
     private static final Map<String, String> SORT_SQL = Map.of(
@@ -98,19 +100,21 @@ public class SessionResultService {
         }
 
         // CTE with ROW_NUMBER for BEST + COUNT(*) OVER for attempt_count — no N+1
+        // User-based partition (issue #4 P0-1); student_profile is optional
+        // provenance (public users have none).
         String baseCte = """
-                SELECT a.student_profile_id AS student_id, a.id AS attempt_id, a.submitted_at,
+                SELECT a.user_id AS student_id, a.id AS attempt_id, a.submitted_at,
                        g.final_score, g.max_score, g.percentage, g.status AS grade_status, g.graded_at,
                        sp.student_code, u.display_name,
                        ROW_NUMBER() OVER (
-                           PARTITION BY a.student_profile_id
+                           PARTITION BY a.user_id
                            ORDER BY g.percentage DESC NULLS LAST, g.final_score DESC, a.submitted_at ASC, a.id ASC
                        ) AS rn,
-                       COUNT(*) OVER (PARTITION BY a.student_profile_id) AS attempt_count
+                       COUNT(*) OVER (PARTITION BY a.user_id) AS attempt_count
                 FROM attempts a
                 JOIN grades g ON g.attempt_id = a.id
-                JOIN student_profiles sp ON sp.id = a.student_profile_id
-                JOIN users u ON u.id = sp.user_id
+                JOIN users u ON u.id = a.user_id
+                LEFT JOIN student_profiles sp ON sp.id = a.student_profile_id
                 WHERE a.exam_session_id = ? AND a.status IN ('SUBMITTED','GRADED')
                 """;
         String filters = filterSql.toString();
@@ -154,27 +158,34 @@ public class SessionResultService {
     }
 
     /**
-     * Package-private authorization check — fail-closed: unsupported/null roles are
-     * denied.
+     * Resource-based authorization (issue #4 P0-R3) — the resolved role no
+     * longer grants blanket access:
+     * <ol>
+     *   <li>SYSTEM_ADMIN — explicit, DB-verified platform-operator break-glass
+     *       (audited policy; never a caller-supplied role string);</li>
+     *   <li>everyone else (TEACHER, ACADEMIC_ADMIN, STUDENT, unsupported/null)
+     *       — organizer check: session creator with valid workspace access, or
+     *       an ACTIVE OWNER/ADMIN member of the exam's workspace. An
+     *       ACADEMIC_ADMIN of a FOREIGN organization (or with a revoked or
+     *       absent membership) is denied.</li>
+     * </ol>
      */
     void authorizeSessionAccess(Long userId, String primaryRole, Long sessionId) {
-        if (primaryRole == null) {
-            throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
+        if (adminAccess.grantRead(userId, "SESSION_RESULTS", sessionId)) {
+            return;
         }
-        switch (primaryRole) {
-            case "STUDENT" -> throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
-            case "SYSTEM_ADMIN", "ACADEMIC_ADMIN" -> {
-                /* allowed */ }
-            case "TEACHER" -> {
-                Integer owns = jdbc.queryForObject(
-                        "SELECT count(*) FROM exam_sessions s JOIN teacher_profiles tp ON tp.id = s.owner_teacher_id "
-                                + "WHERE s.id = ? AND tp.user_id = ?",
-                        Integer.class, sessionId, userId);
-                if (owns == null || owns == 0) {
-                    throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
-                }
-            }
-            default -> throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
+        Integer owns = jdbc.queryForObject(
+                "SELECT count(*) FROM exam_sessions s "
+                        + "JOIN exams e ON e.id = s.exam_id "
+                        + "JOIN workspaces w ON w.id = e.workspace_id "
+                        + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
+                        + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
+                        + "WHERE s.id = ? AND ("
+                        + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
+                        + "  OR wm.role IN ('OWNER','ADMIN'))",
+                Integer.class, userId, sessionId, userId);
+        if (owns == null || owns == 0) {
+            throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
         }
     }
 
@@ -185,18 +196,18 @@ public class SessionResultService {
     List<SessionResultItem> queryBestResults(Long sessionId) {
         return jdbc.query("""
                 SELECT * FROM (
-                    SELECT a.student_profile_id AS student_id, a.id AS attempt_id, a.submitted_at,
+                    SELECT a.user_id AS student_id, a.id AS attempt_id, a.submitted_at,
                            g.final_score, g.max_score, g.percentage, g.status AS grade_status, g.graded_at,
                            sp.student_code, u.display_name,
                            ROW_NUMBER() OVER (
-                               PARTITION BY a.student_profile_id
+                               PARTITION BY a.user_id
                                ORDER BY g.percentage DESC NULLS LAST, g.final_score DESC, a.submitted_at ASC, a.id ASC
                            ) AS rn,
-                           COUNT(*) OVER (PARTITION BY a.student_profile_id) AS attempt_count
+                           COUNT(*) OVER (PARTITION BY a.user_id) AS attempt_count
                     FROM attempts a
                     JOIN grades g ON g.attempt_id = a.id
-                    JOIN student_profiles sp ON sp.id = a.student_profile_id
-                    JOIN users u ON u.id = sp.user_id
+                    JOIN users u ON u.id = a.user_id
+                    LEFT JOIN student_profiles sp ON sp.id = a.student_profile_id
                     WHERE a.exam_session_id = ? AND a.status IN ('SUBMITTED','GRADED')
                 ) ranked WHERE rn = 1
                 ORDER BY percentage DESC NULLS LAST, submitted_at ASC, student_id ASC

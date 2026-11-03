@@ -1,17 +1,31 @@
 package com.quizopia.backend.exam.application;
 
 import com.quizopia.backend.academic.domain.model.TeacherProfile;
+import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.classroom.domain.model.Classroom;
 import com.quizopia.backend.classroom.repository.ClassroomRepository;
 import com.quizopia.backend.common.BusinessCodes;
-import com.quizopia.backend.exam.domain.model.*;
-import com.quizopia.backend.exam.dto.*;
+import com.quizopia.backend.exam.domain.model.Exam;
+import com.quizopia.backend.exam.domain.model.ExamSession;
+import com.quizopia.backend.exam.domain.model.ExamSessionStatus;
+import com.quizopia.backend.exam.domain.model.ExamStatus;
+import com.quizopia.backend.exam.domain.model.SessionVisibility;
+import com.quizopia.backend.exam.dto.CreateExamSessionRequest;
+import com.quizopia.backend.exam.dto.ExamSessionDetailResponse;
+import com.quizopia.backend.exam.dto.ExamSessionListItem;
+import com.quizopia.backend.exam.dto.SessionClassesResponse;
+import com.quizopia.backend.exam.dto.SessionRosterItem;
+import com.quizopia.backend.exam.dto.UpdateExamSessionRequest;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
-import com.quizopia.backend.exam.repository.*;
+import com.quizopia.backend.exam.repository.ExamRepository;
+import com.quizopia.backend.exam.repository.ExamSessionParticipantRepository;
+import com.quizopia.backend.exam.repository.ExamSessionRepository;
 import com.quizopia.backend.question.dto.PageResponse;
 import com.quizopia.backend.realtime.event.RealtimeEventType;
 import com.quizopia.backend.realtime.event.SessionRealtimeEvent;
+import com.quizopia.backend.workspace.application.WorkspaceAccessService;
+import com.quizopia.backend.workspace.domain.model.WorkspaceRole;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -23,104 +37,105 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Application service for the Exam Session API — 4 endpoints (A3.2-3A):
- * <ul>
- * <li>POST /api/exam-sessions — create session from a PUBLISHED version</li>
- * <li>GET /api/exam-sessions/my — paginated owner-scoped list</li>
- * <li>GET /api/exam-sessions/{sessionId} — detail (with lazy-close)</li>
- * <li>PUT /api/exam-sessions/{sessionId} — update config (DRAFT/SCHEDULED
- * only)</li>
- * </ul>
- *
- * <p>
- * Authorization (deny by default): active TEACHER role (DB) + effective
- * permission (DB)
- * + TeacherProfile. No JWT-claim authority, no role hierarchy. Lazy-close (OPEN
- * + now >
- * endsAt → CLOSED) runs on read paths (list + detail).
+ * Application service for exam sessions under the one-exam-one-content model
+ * (issue #2): sessions reference the exam directly ({@code examId}), can only
+ * be created for PUBLISHED exams, and own their duration/window/attempts/
+ * visibility settings. Legacy {@code /api/exam-sessions/*} routes and the
+ * nested {@code /api/exams/{examId}/sessions/*} routes delegate here.
  */
 @Service
 public class ExamSessionService {
 
     private static final int MAX_PAGE_SIZE = 100;
-    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status", "startsAt",
-            "endsAt");
+    private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status");
     private static final String SESSION_CODE_CONFLICT = "uk_exam_sessions_owner_code_ci";
 
     private final ExamAuthorizationService auth;
     private final ExamRepository examRepository;
-    private final ExamVersionRepository versionRepository;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
     private final ClassroomRepository classroomRepository;
+    private final TeacherProfileRepository teacherProfileRepository;
+    private final WorkspaceAccessService workspaceAccessService;
     private final NamedParameterJdbcTemplate jdbc;
     private final ApplicationEventPublisher eventPublisher;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
 
     public ExamSessionService(ExamAuthorizationService auth,
             ExamRepository examRepository,
-            ExamVersionRepository versionRepository,
             ExamSessionRepository sessionRepository,
             ExamSessionParticipantRepository participantRepository,
             ClassroomRepository classroomRepository,
+            TeacherProfileRepository teacherProfileRepository,
+            WorkspaceAccessService workspaceAccessService,
             NamedParameterJdbcTemplate jdbc,
             ApplicationEventPublisher eventPublisher,
             com.quizopia.backend.notification.application.NotificationService notificationService) {
         this.auth = auth;
         this.examRepository = examRepository;
-        this.versionRepository = versionRepository;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
         this.classroomRepository = classroomRepository;
+        this.teacherProfileRepository = teacherProfileRepository;
+        this.workspaceAccessService = workspaceAccessService;
         this.jdbc = jdbc;
         this.eventPublisher = eventPublisher;
         this.notificationService = notificationService;
     }
 
     // ============================================================
-    // POST /api/exam-sessions
+    // POST (nested) /api/exams/{examId}/sessions + legacy POST /api/exam-sessions
     // ============================================================
 
     @Transactional
-    public ExamSessionDetailResponse createSession(Long userId, CreateExamSessionRequest request) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_CREATE");
-        Long schoolId = profile.getSchoolId();
-
-        Exam exam = examRepository.findById(request.examId())
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        if (!exam.getOwnerTeacherId().equals(profile.getId()) || !exam.getSchoolId().equals(schoolId)) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+    public ExamSessionDetailResponse createSession(Long userId, Long pathExamId, CreateExamSessionRequest request) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_CREATE");
+        Long examId = pathExamId != null ? pathExamId : request.examId();
+        if (request.examId() != null && pathExamId != null && !request.examId().equals(pathExamId)) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_EXAM_MISMATCH);
         }
 
-        ExamVersion version = versionRepository
-                .findByExamIdAndVersionNumber(request.examId(), request.examVersionNumber())
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_VERSION_NOT_FOUND));
-        if (version.getStatus() != ExamVersionStatus.PUBLISHED) {
-            throw new ExamException(ExamErrorCode.EXAM_VERSION_NOT_DRAFT);
+        Exam exam = examRepository.findById(examId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
+        requireSessionManageable(userId, exam);
+
+        if (exam.getStatus() != ExamStatus.PUBLISHED) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_NOT_PUBLISHED_EXAM);
         }
 
         if (!request.endsAt().isAfter(request.startsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
 
+        // Session-owned duration: request override, else the exam's editor
+        // default, else 60 minutes.
+        Integer duration = request.durationMinutes() != null
+                ? request.durationMinutes()
+                : (exam.getDurationMinutes() != null ? exam.getDurationMinutes() : 60);
+
+        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
+
         String code = (request.code() == null || request.code().isBlank())
                 ? BusinessCodes.readableCode("ES", 8,
-                        c -> sessionRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), c))
+                        c -> sessionRepository.existsByCreatedByAndCodeIgnoreCase(userId, c))
                 : request.code().trim();
-        ExamSession session = new ExamSession(schoolId, version.getId(), profile.getId(),
+        ExamSession session = new ExamSession(exam.getId(), exam.getSchoolId(),
+                profile != null ? profile.getId() : null,
                 code, request.title(), request.startsAt(), request.endsAt(),
-                request.maxAttempts(), userId);
-        // Visibility: CLASS_RESTRICTED is the safe default (teacher must explicitly
-        // choose PUBLIC).
+                request.maxAttempts(), duration, userId);
         SessionVisibility visibility = request.visibility() != null
                 ? request.visibility()
                 : SessionVisibility.CLASS_RESTRICTED;
         session.setVisibility(visibility);
-        session.setDurationMinutes(request.durationMinutes());
 
         try {
             session = sessionRepository.saveAndFlush(session);
@@ -131,72 +146,80 @@ public class ExamSessionService {
             throw ex;
         }
 
-        // Assign classes (only meaningful for CLASS_RESTRICTED; ignored when PUBLIC).
+        // Assign classes (only meaningful for CLASS_RESTRICTED; org sessions only).
         if (visibility == SessionVisibility.CLASS_RESTRICTED
                 && request.classroomIds() != null && !request.classroomIds().isEmpty()) {
-            List<Classroom> classrooms = validateClassroomsForOwner(profile, request.classroomIds());
-            replaceSessionClasses(schoolId, session.getId(), classrooms);
+            List<Classroom> classrooms = validateClassroomsForOwner(userId, request.classroomIds());
+            replaceSessionClasses(session.getSchoolId(), session.getId(), classrooms);
         }
 
         return buildDetailResponse(session, 0L);
     }
 
     // ============================================================
-    // GET /api/exam-sessions/my
+    // GET (nested) /api/exams/{examId}/sessions + legacy GET /api/exam-sessions/my
     // ============================================================
 
     @SuppressWarnings("null")
     @Transactional // not readOnly — lazy-close writes
-    public PageResponse<ExamSessionListItem> listMySessions(
+    public PageResponse<ExamSessionListItem> listSessions(
             Long userId, String search, String statusStr, Long examId,
             int page, int size, String sort) {
 
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
 
         ExamSessionStatus statusFilter = parseSessionStatusFilter(statusStr);
         PageRequest pageable = safeSessionPageable(page, size, sort);
         String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
 
-        // Bulk lazy-close: expired OPEN → CLOSED BEFORE the filter query, so the status
-        // filter
-        // and pagination see the effective status. Bulk UPDATE bypasses @Version (no
-        // race; no
-        // managed entities). @Modifying(clearAutomatically=true) clears the PC for
-        // fresh reads.
         Instant now = Instant.now();
-        sessionRepository.bulkLazyCloseExpiredOpenSessions(
-                profile.getId(), ExamSessionStatus.OPEN, ExamSessionStatus.CLOSED, now);
-        // Bulk lazy-open: due SCHEDULED → OPEN before the filter query.
-        sessionRepository.bulkLazyOpenScheduledSessions(
-                profile.getId(), ExamSessionStatus.SCHEDULED, ExamSessionStatus.OPEN, now);
-        // Bulk close expired SCHEDULED sessions (never opened, past window → CLOSED).
-        sessionRepository.bulkCloseExpiredScheduledSessions(
-                profile.getId(), ExamSessionStatus.SCHEDULED, ExamSessionStatus.CLOSED, now);
+        sessionRepository.refreshLifecycleForCreator(userId, now);
 
-        Page<ExamSession> sessions = sessionRepository.findOwnedByTeacher(
-                profile.getId(), trimmedSearch, statusFilter, examId, pageable);
+        // P0-2 (issue #4): only sessions in workspaces the user may still
+        // access (personal + ACTIVE-membership organizations) are listed.
+        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
+        if (accessibleWorkspaceIds.isEmpty()) {
+            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
+        }
 
-        // Batch participantCount + pinned version resolution (no N+1).
+        Page<ExamSession> sessions = sessionRepository.findCreatedByUser(
+                userId, trimmedSearch, statusFilter, examId, accessibleWorkspaceIds, pageable);
+
+        return sessionListResponse(sessions, pageable);
+    }
+
+    @Transactional // not readOnly — lazy lifecycle writes
+    public PageResponse<ExamSessionListItem> listSessionsForExam(
+            Long userId, String search, String statusStr, Long examId,
+            int page, int size, String sort) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
+        Exam parent = examRepository.findById(examId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
+        try {
+            workspaceAccessService.requireResourceRead(userId, parent.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
+        }
+        ExamSessionStatus statusFilter = parseSessionStatusFilter(statusStr);
+        PageRequest pageable = safeSessionPageable(page, size, sort);
+        String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
+        sessionRepository.refreshLifecycleForExam(examId, Instant.now());
+        return sessionListResponse(sessionRepository.findForExam(examId, trimmedSearch, statusFilter, pageable),
+                pageable);
+    }
+
+    private PageResponse<ExamSessionListItem> sessionListResponse(Page<ExamSession> sessions, PageRequest pageable) {
         List<Long> sessionIds = sessions.getContent().stream().map(ExamSession::getId).toList();
         Map<Long, Long> participantCounts = batchParticipantCounts(sessionIds);
-        Set<Long> versionIds = sessions.getContent().stream().map(ExamSession::getExamVersionId)
-                .collect(Collectors.toSet());
-        Map<Long, ExamVersion> versions = versionIds.isEmpty() ? Map.of()
-                : versionRepository.findAllById(versionIds).stream()
-                        .collect(Collectors.toMap(ExamVersion::getId, v -> v));
 
         List<ExamSessionListItem> items = sessions.getContent().stream()
-                .map(s -> {
-                    ExamVersion v = versions.get(s.getExamVersionId());
-                    return new ExamSessionListItem(
-                            s.getId(),
-                            v != null ? v.getExamId() : null,
-                            v != null ? v.getVersionNumber() : null,
-                            s.getCode(), s.getTitle(), s.getStatus().name(),
-                            s.getStartsAt(), s.getEndsAt(), s.getMaxAttempts(),
-                            participantCounts.getOrDefault(s.getId(), 0L),
-                            s.getCreatedAt());
-                })
+                .map(s -> new ExamSessionListItem(
+                        s.getId(),
+                        s.getExamId(),
+                        s.getCode(), s.getTitle(), s.getStatus().name(),
+                        s.getStartsAt(), s.getEndsAt(), s.getMaxAttempts(),
+                        participantCounts.getOrDefault(s.getId(), 0L),
+                        s.getCreatedAt()))
                 .toList();
 
         return new PageResponse<>(items, sessions.getNumber(), sessions.getSize(),
@@ -205,21 +228,15 @@ public class ExamSessionService {
     }
 
     // ============================================================
-    // GET /api/exam-sessions/{sessionId}
+    // GET /api/exams/{examId}/sessions/{sessionId} (nested + legacy)
     // ============================================================
 
     @Transactional // lazy-close may write
-    public ExamSessionDetailResponse getSessionDetail(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
+    public ExamSessionDetailResponse getSessionDetail(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
 
-        ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
 
-        // Lazy-close: OPEN past endsAt → CLOSED.
         Instant now = Instant.now();
         if (session.getStatus() == ExamSessionStatus.OPEN && now.isAfter(session.getEndsAt())) {
             session.close(now);
@@ -228,7 +245,6 @@ public class ExamSessionService {
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
         }
 
-        // Lazy-open: SCHEDULED within the time window → OPEN.
         if (session.getStatus() == ExamSessionStatus.SCHEDULED
                 && !now.isBefore(session.getStartsAt()) && !now.isAfter(session.getEndsAt())) {
             session.open(now);
@@ -236,9 +252,7 @@ public class ExamSessionService {
             eventPublisher
                     .publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
         }
-        // Lazy-close: SCHEDULED past window (never opened) → CLOSED. Uses expire()
-        // (not close()) so openedAt is also set — the V8 invariant requires CLOSED
-        // rows to have both timestamps non-null, and this session was never opened.
+
         if (session.getStatus() == ExamSessionStatus.SCHEDULED && now.isAfter(session.getEndsAt())) {
             session.expire(now);
             sessionRepository.saveAndFlush(session);
@@ -251,37 +265,28 @@ public class ExamSessionService {
     }
 
     // ============================================================
-    // PUT /api/exam-sessions/{sessionId}
+    // PUT /api/exams/{examId}/sessions/{sessionId}
     // ============================================================
 
     @Transactional
-    public ExamSessionDetailResponse updateSession(Long userId, Long sessionId, UpdateExamSessionRequest request) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_UPDATE");
+    public ExamSessionDetailResponse updateSession(Long userId, Long pathExamId, Long sessionId,
+            UpdateExamSessionRequest request) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_UPDATE");
 
-        ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
 
-        // Optimistic token: expectedVersion == ExamSession.@Version.
         if (!session.getVersion().equals(request.expectedVersion())) {
             throw new ExamException(ExamErrorCode.EXAM_CONCURRENT_MODIFICATION);
         }
 
-        // State check: only DRAFT or SCHEDULED.
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
 
-        // Time validation (before updateConfig to throw the right error code).
         if (!request.endsAt().isAfter(request.startsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
 
-        // Update config (title/startsAt/endsAt/maxAttempts only — NOT
-        // code/examVersion/owner/school).
         session.updateConfig(request.title(), request.startsAt(), request.endsAt(), request.maxAttempts());
         session = sessionRepository.saveAndFlush(session);
 
@@ -290,14 +295,13 @@ public class ExamSessionService {
     }
 
     // ============================================================
-    // POST /api/exam-sessions/{sessionId}/schedule
+    // Lifecycle: schedule / open / close / cancel
     // ============================================================
 
     @Transactional
-    public ExamSessionDetailResponse scheduleSession(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_SCHEDULE");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
-        // Idempotent: already SCHEDULED → 200, no mutation, no timestamp change.
+    public ExamSessionDetailResponse scheduleSession(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_SCHEDULE");
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
         if (session.getStatus() == ExamSessionStatus.SCHEDULED) {
             return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
         }
@@ -305,28 +309,18 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
         Instant now = Instant.now();
-        // Validate window: endsAt > startsAt (always true via invariants, defensive)
-        // AND now < endsAt.
         if (!session.getEndsAt().isAfter(session.getStartsAt()) || !now.isBefore(session.getEndsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
-        session.schedule(); // DRAFT → SCHEDULED (no timestamp; V8 invariant: all timestamps NULL)
+        session.schedule();
         sessionRepository.saveAndFlush(session);
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 
-    // ============================================================
-    // POST /api/exam-sessions/{sessionId}/open
-    // ============================================================
-
     @Transactional
-    public ExamSessionDetailResponse openSession(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_OPEN");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
-        // Idempotent: already OPEN → 200. Deliberately NO lazy-close here (lifecycle
-        // endpoints
-        // short-circuit on state); an OPEN session past endsAt stays OPEN until
-        // explicit /close.
+    public ExamSessionDetailResponse openSession(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_OPEN");
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
         if (session.getStatus() == ExamSessionStatus.OPEN) {
             return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
         }
@@ -334,25 +328,19 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
         Instant now = Instant.now();
-        // No early open, no open after window: startsAt <= now <= endsAt.
         if (now.isBefore(session.getStartsAt()) || now.isAfter(session.getEndsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
         }
-        session.open(now); // SCHEDULED → OPEN + openedAt (V8 invariant: openedAt set, closedAt NULL)
+        session.open(now);
         sessionRepository.saveAndFlush(session);
         eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_OPENED, session.getId(), now));
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 
-    // ============================================================
-    // POST /api/exam-sessions/{sessionId}/close
-    // ============================================================
-
     @Transactional
-    public ExamSessionDetailResponse closeSession(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_CLOSE");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
-        // Idempotent: already CLOSED → 200, closedAt not overwritten.
+    public ExamSessionDetailResponse closeSession(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_CLOSE");
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
         if (session.getStatus() == ExamSessionStatus.CLOSED) {
             return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
         }
@@ -360,37 +348,27 @@ public class ExamSessionService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
         Instant now = Instant.now();
-        session.close(now); // OPEN → CLOSED + closedAt (V8 invariant: openedAt & closedAt set)
+        session.close(now);
         sessionRepository.saveAndFlush(session);
         eventPublisher.publishEvent(new SessionRealtimeEvent(RealtimeEventType.SESSION_CLOSED, session.getId(), now));
-        // Notify the session owner that the session has ended.
         notificationService.create(session.getCreatedBy(),
                 com.quizopia.backend.notification.domain.model.NotificationType.SESSION_ENDED,
                 "Session ended",
                 "Exam session has been closed.",
-                "/exam-sessions/" + sessionId);
+                "/exams/" + session.getExamId() + "/sessions/" + sessionId);
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
     }
 
-    // ============================================================
-    // POST /api/exam-sessions/{sessionId}/cancel
-    // ============================================================
-
     @Transactional
-    public ExamSessionDetailResponse cancelSession(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_CANCEL");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
-        // Idempotent: already CANCELLED → 200.
+    public ExamSessionDetailResponse cancelSession(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_CANCEL");
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
         if (session.getStatus() == ExamSessionStatus.CANCELLED) {
             return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
         }
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
-        // CANCELLED invariant (V8): openedAt IS NULL AND closedAt IS NULL.
-        // DRAFT/SCHEDULED have both
-        // NULL, so cancel() (status-only) satisfies the CHECK. (V8 has no cancelled_at
-        // column.)
         session.cancel();
         sessionRepository.saveAndFlush(session);
         return buildDetailResponse(session, participantRepository.countByExamSessionId(sessionId));
@@ -401,34 +379,81 @@ public class ExamSessionService {
     // ============================================================
 
     /**
-     * Lock the session row (pessimistic write) then verify owner + school. Lock
-     * order: session
-     * first; lifecycle ops never lock participants (they don't mutate them).
+     * Loads a session, verifies the optional path examId matches, and enforces
+     * ownership: the session creator or a workspace OWNER/ADMIN of the exam's
+     * workspace. P0-2 (issue #4): the creator of an ORGANIZATION-workspace
+     * session must still hold an ACTIVE membership; only the authenticated
+     * owner of a PERSONAL workspace bypasses membership. When
+     * {@code forUpdate} the row is pessimistically locked.
+     *
+     * <p>Package-private: shared by the participant-management service so all
+     * session-scoped endpoints enforce ONE policy (issue #4 P0-R6).
      */
-    private ExamSession resolveOwnedSessionForUpdate(TeacherProfile profile, Long sessionId) {
-        ExamSession session = sessionRepository.findByIdForUpdate(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+    ExamSession resolveOwnedSession(Long userId, Long pathExamId, Long sessionId, boolean forUpdate) {
+        ExamSession session = forUpdate
+                ? sessionRepository.findByIdForUpdate(sessionId)
+                        .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND))
+                : sessionRepository.findById(sessionId)
+                        .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
+        if (pathExamId != null && !pathExamId.equals(session.getExamId())) {
+            // Cross-exam nested access: 404 (anti-enumeration).
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_EXAM_MISMATCH);
         }
-        return session;
+        if (session.getCreatedBy().equals(userId)) {
+            requireCreatorWorkspaceAccess(userId, session);
+            return session;
+        }
+        Exam exam = examRepository.findById(session.getExamId()).orElse(null);
+        if (exam != null) {
+            try {
+                workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
+                        exam.getCreatedByUserUserId());
+                return session;
+            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+                // fall through to deny
+            }
+        }
+        throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
     }
 
-    @SuppressWarnings("null")
-    private ExamSessionDetailResponse buildDetailResponse(ExamSession session, long participantCount) {
-        ExamVersion version = versionRepository.findById(session.getExamVersionId()).orElse(null);
-        String examCode = null;
-        if (version != null && version.getExamId() != null) {
-            examCode = examRepository.findById(version.getExamId())
-                    .map(com.quizopia.backend.exam.domain.model.Exam::getCode)
-                    .orElse(null);
+    /** P0-2: creator access requires an ACTIVE org membership (personal owners pass). */
+    private void requireCreatorWorkspaceAccess(Long userId, ExamSession session) {
+        Exam exam = examRepository.findById(session.getExamId()).orElse(null);
+        if (exam == null) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND);
         }
+        try {
+            workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
+    }
+
+    private void requireSessionManageable(Long userId, Exam exam) {
+        if (exam.getCreatedByUserUserId().equals(userId)) {
+            try {
+                workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
+            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+                throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+            }
+            return;
+        }
+        try {
+            workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
+                    exam.getCreatedByUserUserId());
+        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
+    }
+
+    private ExamSessionDetailResponse buildDetailResponse(ExamSession session, long participantCount) {
+        String examCode = examRepository.findById(session.getExamId())
+                .map(Exam::getCode)
+                .orElse(null);
         return new ExamSessionDetailResponse(
                 session.getId(),
-                version != null ? version.getExamId() : null,
+                session.getExamId(),
                 examCode,
-                version != null ? version.getVersionNumber() : null,
                 session.getCode(), session.getTitle(), session.getStatus().name(),
                 session.getStartsAt(), session.getEndsAt(), session.getMaxAttempts(),
                 session.getDurationMinutes(),
@@ -438,37 +463,27 @@ public class ExamSessionService {
     }
 
     // ============================================================
-    // PUT /api/exam-sessions/{sessionId}/classes — assign (replace) classes
+    // PUT/GET /api/exams/{examId}/sessions/{sessionId}/classes
     // ============================================================
 
     @Transactional
-    public SessionClassesResponse assignClasses(Long userId, Long sessionId, List<Long> classroomIds) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_UPDATE");
-        ExamSession session = resolveOwnedSessionForUpdate(profile, sessionId);
+    public SessionClassesResponse assignClasses(Long userId, Long pathExamId, Long sessionId, List<Long> classroomIds) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_UPDATE");
+        ExamSession session = resolveOwnedSession(userId, pathExamId, sessionId, true);
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
         List<Classroom> classrooms = (classroomIds == null || classroomIds.isEmpty())
                 ? List.of()
-                : validateClassroomsForOwner(profile, classroomIds);
+                : validateClassroomsForOwner(userId, classroomIds);
         replaceSessionClasses(session.getSchoolId(), sessionId, classrooms);
-        return listClasses(userId, sessionId);
+        return listClasses(userId, pathExamId, sessionId);
     }
 
-    // ============================================================
-    // GET /api/exam-sessions/{sessionId}/classes — list assigned classes
-    // ============================================================
-
     @Transactional(readOnly = true)
-    public SessionClassesResponse listClasses(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
-        // Read-only owner check (any state OK).
-        ExamSession session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
+    public SessionClassesResponse listClasses(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
+        resolveOwnedSession(userId, pathExamId, sessionId, false);
         List<SessionClassesResponse.ClassSummary> items = jdbc.query(
                 "SELECT c.id, c.code, c.name FROM classrooms c "
                         + "JOIN exam_session_classes esc ON esc.classroom_id = c.id "
@@ -480,37 +495,41 @@ public class ExamSessionService {
     }
 
     // ============================================================
-    // GET /api/exam-sessions/{sessionId}/roster
+    // GET /api/exams/{examId}/sessions/{sessionId}/roster
     // ============================================================
 
     /**
-     * Effective student roster for a session: class members ∪ direct participants.
-     * Used by the teacher live-monitor to resolve {@code studentProfileId} →
-     * {@code studentCode + displayName}.
+     * Effective roster for a session: class members (user-based) ∪ direct
+     * participants. The legacy {@code studentProfileId} is included for
+     * realtime-event correlation (attempt events still carry it).
      */
     @Transactional(readOnly = true)
-    public List<SessionRosterItem> listRoster(Long userId, Long sessionId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_SESSION_READ");
-        ExamSession session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!session.getOwnerTeacherId().equals(profile.getId())
-                || !session.getSchoolId().equals(profile.getSchoolId())) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-        }
-        String sql = "SELECT DISTINCT sp.id AS pid, sp.student_code AS code, u.display_name AS name "
+    public List<SessionRosterItem> listRoster(Long userId, Long pathExamId, Long sessionId) {
+        auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
+        resolveOwnedSession(userId, pathExamId, sessionId, false);
+        // Effective roster (issue #4 P0-R5): assigned-class members ∪ direct
+        // participants ∪ DISTINCT actual attempt participants (user-based —
+        // includes PUBLIC profile-less learners who already started).
+        String sql = "SELECT DISTINCT u.id AS uid, sp.id AS pid, sp.student_code AS code, u.display_name AS name "
                 + "FROM ( "
-                + "  SELECT cm.student_profile_id FROM exam_session_classes esc "
+                + "  SELECT cm.user_id FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
                 + "  WHERE esc.exam_session_id = :sid "
                 + "  UNION "
-                + "  SELECT student_profile_id FROM exam_session_participants WHERE exam_session_id = :sid "
+                + "  SELECT sp2.user_id FROM exam_session_participants p "
+                + "  JOIN student_profiles sp2 ON sp2.id = p.student_profile_id "
+                + "  WHERE p.exam_session_id = :sid "
+                + "  UNION "
+                + "  SELECT a.user_id FROM attempts a WHERE a.exam_session_id = :sid "
                 + ") AS roster "
-                + "JOIN student_profiles sp ON sp.id = roster.student_profile_id "
-                + "JOIN users u ON u.id = sp.user_id "
-                + "ORDER BY sp.student_code";
+                + "JOIN users u ON u.id = roster.user_id "
+                + "LEFT JOIN student_profiles sp ON sp.user_id = u.id "
+                + "ORDER BY code NULLS LAST, uid";
         return jdbc.query(sql, new MapSqlParameterSource("sid", sessionId),
                 (rs, n) -> new SessionRosterItem(
-                        rs.getLong("pid"), rs.getString("code"), rs.getString("name")));
+                        rs.getLong("uid"),
+                        rs.getObject("pid") != null ? rs.getLong("pid") : null,
+                        rs.getString("code"), rs.getString("name")));
     }
 
     // ============================================================
@@ -518,12 +537,14 @@ public class ExamSessionService {
     // ============================================================
 
     /**
-     * Validate that every classroomId resolves to an ACTIVE classroom owned by the
-     * caller in the same school. Returns the resolved classrooms (insert order).
+     * Validates that every classroomId resolves to an ACTIVE classroom owned
+     * by the caller (via their teacher profile). Returns resolved classrooms.
      */
     @SuppressWarnings("null")
-    private List<Classroom> validateClassroomsForOwner(TeacherProfile profile, List<Long> classroomIds) {
-        // De-dup, preserve order.
+    private List<Classroom> validateClassroomsForOwner(Long userId, List<Long> classroomIds) {
+        TeacherProfile profile = teacherProfileRepository.findByUserId(userId)
+                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED,
+                        "Class assignment requires a teacher profile"));
         List<Long> distinct = new ArrayList<>(new LinkedHashSet<>(classroomIds));
         Map<Long, Classroom> byId = classroomRepository.findAllById(distinct).stream()
                 .collect(Collectors.toMap(Classroom::getId, c -> c));
@@ -532,7 +553,6 @@ public class ExamSessionService {
             Classroom c = byId.get(id);
             if (c == null
                     || !c.getOwnerTeacherId().equals(profile.getId())
-                    || !c.getSchoolId().equals(profile.getSchoolId())
                     || c.getStatus() != com.quizopia.backend.classroom.domain.model.ClassroomStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
             }
@@ -543,12 +563,17 @@ public class ExamSessionService {
 
     /**
      * Replace the session's assigned classes (delete old + insert new) in one tx.
+     * The junction requires a non-null school (org sessions only).
      */
     private void replaceSessionClasses(Long schoolId, Long sessionId, List<Classroom> classrooms) {
         jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid",
                 new MapSqlParameterSource("sid", sessionId));
         if (classrooms.isEmpty()) {
             return;
+        }
+        if (schoolId == null) {
+            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
+                    "Classes can only be assigned to school (organization) sessions");
         }
         for (Classroom c : classrooms) {
             jdbc.update(

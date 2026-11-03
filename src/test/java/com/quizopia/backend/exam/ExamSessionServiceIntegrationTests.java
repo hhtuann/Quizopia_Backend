@@ -78,13 +78,13 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E1");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        ExamSessionDetailResponse r = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "S1", "Session 1", starts, ends, 1));
+        ExamSessionDetailResponse r = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "S1", "Session 1", starts, ends, 1, null, null, null));
 
         assertThat(r.id()).isPositive();
         assertThat(r.status()).isEqualTo("DRAFT");
         assertThat(r.examId()).isEqualTo(pub.examId);
-        assertThat(r.examVersionNumber()).isEqualTo(1);
+        assertThat(r.durationMinutes()).isEqualTo(60);
         assertThat(r.maxAttempts()).isEqualTo(1);
         assertThat(r.participantCount()).isZero();
         assertThat(r.version()).isZero();
@@ -93,13 +93,13 @@ class ExamSessionServiceIntegrationTests {
     @Test
     void createSessionDraftVersionRejected() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(subjectId, null, "E2", "T", null)).id();
-        // v1 is DRAFT (never published)
+                new CreateExamRequest(null, subjectId, null, "E2", "T", null)).id();
+        // Exam is DRAFT (never published)
         Instant starts = Instant.now().plusSeconds(3600);
-        assertThatThrownBy(() -> sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, "S2", "T", starts, starts.plusSeconds(3600), 1)))
+        assertThatThrownBy(() -> sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, "S2", "T", starts, starts.plusSeconds(3600), 1, null, null, null)))
                 .isInstanceOfSatisfying(ExamException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VERSION_NOT_DRAFT));
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_NOT_PUBLISHED_EXAM));
     }
 
     @Test
@@ -112,8 +112,8 @@ class ExamSessionServiceIntegrationTests {
         insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
                 + ",'SS2')");
         Instant starts = Instant.now().plusSeconds(3600);
-        assertThatThrownBy(() -> sessionService.createSession(u2,
-                new CreateExamSessionRequest(pub.examId, 1, "SX", "T", starts, starts.plusSeconds(3600), 1)))
+        assertThatThrownBy(() -> sessionService.createSession(u2, null,
+                new CreateExamSessionRequest(pub.examId, "SX", "T", starts, starts.plusSeconds(3600), 1, null, null, null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED));
     }
@@ -123,10 +123,10 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E4");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "DUP", "T", starts, ends, 1));
-        assertThatThrownBy(() -> sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "dup", "T2", starts, ends, 1)))
+        sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "DUP", "T", starts, ends, 1, null, null, null));
+        assertThatThrownBy(() -> sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "dup", "T2", starts, ends, 1, null, null, null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_CODE_CONFLICT));
     }
@@ -144,10 +144,10 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam exam2 = setupPublishedExamForUser(u2, tp2, "E5B");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "SHARED", "T", starts, ends, 1));
-        ExamSessionDetailResponse r2 = sessionService.createSession(u2,
-                new CreateExamSessionRequest(exam2.examId, 1, "SHARED", "T2", starts, ends, 1));
+        sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "SHARED", "T", starts, ends, 1, null, null, null));
+        ExamSessionDetailResponse r2 = sessionService.createSession(u2, null,
+                new CreateExamSessionRequest(exam2.examId, "SHARED", "T2", starts, ends, 1, null, null, null));
         assertThat(r2.id()).isPositive();
     }
 
@@ -156,8 +156,8 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E6");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.minusSeconds(1800); // ends < starts
-        assertThatThrownBy(() -> sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "S6", "T", starts, ends, 1)))
+        assertThatThrownBy(() -> sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "S6", "T", starts, ends, 1, null, null, null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_TIME_INVALID));
     }
@@ -169,25 +169,25 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E7");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "ALPHA", "Alpha", starts, ends, 1));
-        sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "BETA", "Beta", starts, ends, 2));
+        sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "ALPHA", "Alpha", starts, ends, 1, null, null, null));
+        sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "BETA", "Beta", starts, ends, 2, null, null, null));
 
         // All
-        PageResponse<ExamSessionListItem> all = sessionService.listMySessions(teacherUserId, null, null, null, 0, 20,
+        PageResponse<ExamSessionListItem> all = sessionService.listSessions(teacherUserId, null, null, null, 0, 20,
                 null);
         assertThat(all.items()).hasSize(2);
         // Search
-        PageResponse<ExamSessionListItem> search = sessionService.listMySessions(teacherUserId, "alpha", null, null, 0,
+        PageResponse<ExamSessionListItem> search = sessionService.listSessions(teacherUserId, "alpha", null, null, 0,
                 20, null);
         assertThat(search.items()).hasSize(1);
         assertThat(search.items().get(0).code()).isEqualTo("ALPHA");
         // Status filter
-        PageResponse<ExamSessionListItem> draft = sessionService.listMySessions(teacherUserId, null, "DRAFT", null, 0,
+        PageResponse<ExamSessionListItem> draft = sessionService.listSessions(teacherUserId, null, "DRAFT", null, 0,
                 20, null);
         assertThat(draft.items()).hasSize(2);
-        PageResponse<ExamSessionListItem> open = sessionService.listMySessions(teacherUserId, null, "OPEN", null, 0, 20,
+        PageResponse<ExamSessionListItem> open = sessionService.listSessions(teacherUserId, null, "OPEN", null, 0, 20,
                 null);
         assertThat(open.items()).isEmpty();
         // Other teacher sees 0
@@ -196,7 +196,7 @@ class ExamSessionServiceIntegrationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
         insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
                 + ",'SS4')");
-        PageResponse<ExamSessionListItem> u2List = sessionService.listMySessions(u2, null, null, null, 0, 20, null);
+        PageResponse<ExamSessionListItem> u2List = sessionService.listSessions(u2, null, null, null, 0, 20, null);
         assertThat(u2List.items()).isEmpty();
     }
 
@@ -206,20 +206,20 @@ class ExamSessionServiceIntegrationTests {
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
         // N=1
-        sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "Q1", "T", starts, ends, 1));
+        sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "Q1", "T", starts, ends, 1, null, null, null));
         Statistics stats = entityManagerFactory.unwrap(org.hibernate.SessionFactory.class).getStatistics();
         stats.setStatisticsEnabled(true);
         stats.clear();
-        sessionService.listMySessions(teacherUserId, null, null, null, 0, 20, null);
+        sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
         long n1 = selectExecutionCount(stats);
         // N=20
         for (int i = 0; i < 19; i++) {
-            sessionService.createSession(teacherUserId,
-                    new CreateExamSessionRequest(pub.examId, 1, "Q" + (i + 2), "T", starts, ends, 1));
+            sessionService.createSession(teacherUserId, null,
+                    new CreateExamSessionRequest(pub.examId, "Q" + (i + 2), "T", starts, ends, 1, null, null, null));
         }
         stats.clear();
-        sessionService.listMySessions(teacherUserId, null, null, null, 0, 20, null);
+        sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
         long n20 = selectExecutionCount(stats);
         System.out.println("SESSION_LIST_QUERY_COUNT N=1=" + n1 + " N=20=" + n20);
         assertThat(Math.abs(n20 - n1)).as("delta N=1=%d N=20=%d", n1, n20).isLessThanOrEqualTo(4L);
@@ -232,9 +232,9 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E9");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "D1", "Detail", starts, ends, 1));
-        ExamSessionDetailResponse detail = sessionService.getSessionDetail(teacherUserId, created.id());
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "D1", "Detail", starts, ends, 1, null, null, null));
+        ExamSessionDetailResponse detail = sessionService.getSessionDetail(teacherUserId, null, created.id());
         assertThat(detail.code()).isEqualTo("D1");
         assertThat(detail.participantCount()).isZero();
         assertThat(detail.version()).isZero();
@@ -244,14 +244,14 @@ class ExamSessionServiceIntegrationTests {
     void getSessionDetailForeignReturns403() {
         PublishedExam pub = setupPublishedExam("E10");
         Instant starts = Instant.now().plusSeconds(3600);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "D2", "T", starts, starts.plusSeconds(3600), 1));
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "D2", "T", starts, starts.plusSeconds(3600), 1, null, null, null));
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s5','s5@t','h','S5')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
         insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
                 + ",'SS5')");
-        assertThatThrownBy(() -> sessionService.getSessionDetail(u2, created.id()))
+        assertThatThrownBy(() -> sessionService.getSessionDetail(u2, null, created.id()))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED));
     }
@@ -263,11 +263,11 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("E11");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "U1", "Original", starts, ends, 1));
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "U1", "Original", starts, ends, 1, null, null, null));
         Instant newStarts = starts.plusSeconds(1800);
         Instant newEnds = newStarts.plusSeconds(3600);
-        ExamSessionDetailResponse updated = sessionService.updateSession(teacherUserId, created.id(),
+        ExamSessionDetailResponse updated = sessionService.updateSession(teacherUserId, null, created.id(),
                 new UpdateExamSessionRequest(created.version(), "Updated", newStarts, newEnds, 3));
         assertThat(updated.title()).isEqualTo("Updated");
         assertThat(updated.maxAttempts()).isEqualTo(3);
@@ -280,9 +280,9 @@ class ExamSessionServiceIntegrationTests {
     void updateSessionExpectedVersionMismatch409() {
         PublishedExam pub = setupPublishedExam("E12");
         Instant starts = Instant.now().plusSeconds(3600);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "U2", "T", starts, starts.plusSeconds(3600), 1));
-        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, created.id(),
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "U2", "T", starts, starts.plusSeconds(3600), 1, null, null, null));
+        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, null, created.id(),
                 new UpdateExamSessionRequest(99, "Stale", starts, starts.plusSeconds(3600), 1)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_CONCURRENT_MODIFICATION));
@@ -292,12 +292,12 @@ class ExamSessionServiceIntegrationTests {
     void updateSessionOpenStateRejected() {
         PublishedExam pub = setupPublishedExam("E13");
         Instant starts = Instant.now().plusSeconds(3600);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "U3", "T", starts, starts.plusSeconds(3600), 1));
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "U3", "T", starts, starts.plusSeconds(3600), 1, null, null, null));
         // Force session to OPEN via jdbc
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", created.id());
         entityManager.clear();
-        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, created.id(),
+        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, null, created.id(),
                 new UpdateExamSessionRequest(0, "X", starts, starts.plusSeconds(3600), 1)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
@@ -307,10 +307,10 @@ class ExamSessionServiceIntegrationTests {
     void updateSessionInvalidTime400() {
         PublishedExam pub = setupPublishedExam("E14");
         Instant starts = Instant.now().plusSeconds(3600);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "U4", "T", starts, starts.plusSeconds(3600), 1));
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "U4", "T", starts, starts.plusSeconds(3600), 1, null, null, null));
         Instant badEnds = starts.minusSeconds(1800); // ends < starts
-        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, created.id(),
+        assertThatThrownBy(() -> sessionService.updateSession(teacherUserId, null, created.id(),
                 new UpdateExamSessionRequest(created.version(), "T", starts, badEnds, 1)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_TIME_INVALID));
@@ -324,17 +324,17 @@ class ExamSessionServiceIntegrationTests {
         // Session with past window, forced to OPEN
         Instant pastStarts = Instant.now().minusSeconds(7200);
         Instant pastEnds = Instant.now().minusSeconds(3600);
-        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "LC1", "T", pastStarts, pastEnds, 1));
+        ExamSessionDetailResponse created = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "LC1", "T", pastStarts, pastEnds, 1, null, null, null));
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", created.id());
         entityManager.clear();
         // Detail read → lazy-close
-        ExamSessionDetailResponse detail = sessionService.getSessionDetail(teacherUserId, created.id());
+        ExamSessionDetailResponse detail = sessionService.getSessionDetail(teacherUserId, null, created.id());
         assertThat(detail.status()).isEqualTo("CLOSED");
         assertThat(detail.closedAt()).isNotNull();
         // Idempotent: second read stays CLOSED
         entityManager.clear();
-        ExamSessionDetailResponse detail2 = sessionService.getSessionDetail(teacherUserId, created.id());
+        ExamSessionDetailResponse detail2 = sessionService.getSessionDetail(teacherUserId, null, created.id());
         assertThat(detail2.status()).isEqualTo("CLOSED");
     }
 
@@ -344,7 +344,7 @@ class ExamSessionServiceIntegrationTests {
     void lazyCloseListExpiredOpenFilterOpenNotReturned() {
         PublishedExam pub = setupPublishedExam("LC2");
         Long expiredId = setupExpiredOpenSession(pub, "EXO");
-        PageResponse<ExamSessionListItem> openList = sessionService.listMySessions(teacherUserId, null, "OPEN", null, 0,
+        PageResponse<ExamSessionListItem> openList = sessionService.listSessions(teacherUserId, null, "OPEN", null, 0,
                 20, null);
         assertThat(openList.items()).noneMatch(s -> s.id().equals(expiredId));
         assertThat(openList.totalElements()).isZero();
@@ -354,7 +354,7 @@ class ExamSessionServiceIntegrationTests {
     void lazyCloseListExpiredOpenFilterClosedReturned() {
         PublishedExam pub = setupPublishedExam("LC3");
         Long expiredId = setupExpiredOpenSession(pub, "EXC");
-        PageResponse<ExamSessionListItem> closedList = sessionService.listMySessions(teacherUserId, null, "CLOSED",
+        PageResponse<ExamSessionListItem> closedList = sessionService.listSessions(teacherUserId, null, "CLOSED",
                 null, 0, 20, null);
         assertThat(closedList.items()).hasSize(1);
         assertThat(closedList.items().get(0).id()).isEqualTo(expiredId);
@@ -365,7 +365,7 @@ class ExamSessionServiceIntegrationTests {
     void lazyCloseListNoFilterShowsClosedStatus() {
         PublishedExam pub = setupPublishedExam("LC4");
         Long expiredId = setupExpiredOpenSession(pub, "NFD");
-        PageResponse<ExamSessionListItem> all = sessionService.listMySessions(teacherUserId, null, null, null, 0, 20,
+        PageResponse<ExamSessionListItem> all = sessionService.listSessions(teacherUserId, null, null, null, 0, 20,
                 null);
         var expired = all.items().stream().filter(s -> s.id().equals(expiredId)).findFirst().orElseThrow();
         assertThat(expired.status()).isEqualTo("CLOSED");
@@ -375,9 +375,9 @@ class ExamSessionServiceIntegrationTests {
     void lazyCloseListIdempotent() {
         PublishedExam pub = setupPublishedExam("LC5");
         setupExpiredOpenSession(pub, "IDM");
-        sessionService.listMySessions(teacherUserId, null, null, null, 0, 20, null);
+        sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
         entityManager.clear();
-        PageResponse<ExamSessionListItem> all2 = sessionService.listMySessions(teacherUserId, null, null, null, 0, 20,
+        PageResponse<ExamSessionListItem> all2 = sessionService.listSessions(teacherUserId, null, null, null, 0, 20,
                 null);
         assertThat(all2.items().get(0).status()).isEqualTo("CLOSED");
     }
@@ -387,11 +387,11 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("LC6");
         Instant starts = Instant.now().minusSeconds(3600);
         Instant ends = Instant.now().plusSeconds(3600);
-        Long sessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "NOPN", "T", starts, ends, 1)).id();
+        Long sessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "NOPN", "T", starts, ends, 1, null, null, null)).id();
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", sessionId);
         entityManager.clear();
-        PageResponse<ExamSessionListItem> openList = sessionService.listMySessions(teacherUserId, null, "OPEN", null, 0,
+        PageResponse<ExamSessionListItem> openList = sessionService.listSessions(teacherUserId, null, "OPEN", null, 0,
                 20, null);
         assertThat(openList.items()).hasSize(1);
         assertThat(openList.items().get(0).status()).isEqualTo("OPEN");
@@ -402,16 +402,16 @@ class ExamSessionServiceIntegrationTests {
         PublishedExam pub = setupPublishedExam("LC7");
         Instant pastStarts = Instant.now().minusSeconds(7200);
         Instant pastEnds = Instant.now().minusSeconds(3600);
-        Long closedId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "CLD", "T", pastStarts, pastEnds, 1)).id();
-        Long cancelledId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, "CND", "T", pastStarts, pastEnds, 1)).id();
+        Long closedId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "CLD", "T", pastStarts, pastEnds, 1, null, null, null)).id();
+        Long cancelledId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, "CND", "T", pastStarts, pastEnds, 1, null, null, null)).id();
         jdbc.update(
                 "UPDATE exam_sessions SET status='CLOSED', opened_at=now()-interval '2 hours', closed_at=now()-interval '1 hour' WHERE id=?",
                 closedId);
         jdbc.update("UPDATE exam_sessions SET status='CANCELLED' WHERE id=?", cancelledId);
         entityManager.clear();
-        sessionService.listMySessions(teacherUserId, null, null, null, 0, 20, null);
+        sessionService.listSessions(teacherUserId, null, null, null, 0, 20, null);
         assertThat(jdbc.queryForObject("SELECT status FROM exam_sessions WHERE id=?", String.class, closedId))
                 .isEqualTo("CLOSED");
         assertThat(jdbc.queryForObject("SELECT status FROM exam_sessions WHERE id=?", String.class, cancelledId))
@@ -442,15 +442,11 @@ class ExamSessionServiceIntegrationTests {
                     "INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES ("
                             + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long examId = examService.createExam(userId, new CreateExamRequest(subjectId, null, examCode, "T", null)).id();
-        examService.updateDraftComposition(userId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
+        Long examId = examService.createExam(userId, new CreateExamRequest(null, subjectId, null, examCode, "T", null)).id();
+        examService.updateDraftComposition(userId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
-        // Flip v1 to PUBLISHED + exam READY
-        long v1Id = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class,
-                examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?",
-                v1Id);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
+        // Flip the exam to PUBLISHED
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
         entityManager.clear();
         return new PublishedExam(examId, q);
     }
@@ -458,8 +454,8 @@ class ExamSessionServiceIntegrationTests {
     private Long setupExpiredOpenSession(PublishedExam pub, String code) {
         Instant pastStarts = Instant.now().minusSeconds(7200);
         Instant pastEnds = Instant.now().minusSeconds(3600);
-        Long sessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(pub.examId, 1, code, "T", pastStarts, pastEnds, 1)).id();
+        Long sessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(pub.examId, code, "T", pastStarts, pastEnds, 1, null, null, null)).id();
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", sessionId);
         entityManager.clear();
         return sessionId;

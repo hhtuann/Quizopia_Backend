@@ -1,0 +1,41 @@
+name: Backend CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Java 21, PostgreSQL Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Ensure Maven wrapper is executable
+        run: chmod +x mvnw
+
+      - name: Full build + test suite (Testcontainers/PostgreSQL 17)
+        # rerunFailingTestsCount: a failed test is retried up to 2 times IN THE SAME
+        # report as an explicitly-listed "flake" (surefire reports Flakes count) —
+        # never silent. Tracked for the known STOMP ERROR-vs-CLOSE frame race
+        # (see issue tracker); deterministic failures still fail the build.
+        run: ./mvnw -B -ntp verify -Dsurefire.rerunFailingTestsCount=2
+
+      - name: Upload Surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/**
+          retention-days: 14

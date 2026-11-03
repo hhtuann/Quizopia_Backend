@@ -2,7 +2,6 @@ package com.quizopia.backend.exam.domain.model;
 
 import com.quizopia.backend.question.domain.model.QuestionDifficulty;
 import com.quizopia.backend.question.domain.model.QuestionType;
-import com.quizopia.backend.question.domain.model.QuestionVersion;
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -14,17 +13,14 @@ import java.math.BigDecimal;
 
 /**
  * JPA entity mapping the {@code exam_questions} table — an immutable snapshot
- * of a Question Bank question version, used for attempt/grading.
+ * of a Question Bank question version, used for attempt/grading. Belongs
+ * directly to an Exam (one-exam-one-content, issue #2).
  *
- * <p><b>Provenance mapping (H1 remediation):</b> Two writable scalar columns
- * ({@code source_question_id}, {@code source_question_version_id}) are the
- * source of truth. A read-only {@code @ManyToOne} association to
- * {@link QuestionVersion} via composite join columns
- * {@code (source_question_id → question_id, source_question_version_id → id)}
- * targets the {@code uk_question_versions_question_id UNIQUE(question_id, id)}
- * constraint, proving Hibernate supports the composite provenance FK. Both join
- * columns are {@code insertable=false, updatable=false} so only the scalars are
- * writable (no repeated-column mapping error).
+ * <p><b>Provenance:</b> two writable scalar columns
+ * ({@code source_question_id}, {@code source_question_version_id}) point at the
+ * pinned immutable Question Bank version the snapshot was taken from. The
+ * composite DB FK targets
+ * {@code uk_question_versions_question_id UNIQUE(question_id, id)}.
  *
  * <p>{@code answerKey} and {@code metadata} are mapped as native JSONB via
  * {@link SqlTypes#JSON} with {@link JsonNode}; {@code metadata} is initialised
@@ -39,8 +35,8 @@ public class ExamQuestion {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "exam_version_id", nullable = false)
-    private Long examVersionId;
+    @Column(name = "exam_id", nullable = false)
+    private Long examId;
 
     @Column(name = "exam_section_id", nullable = false)
     private Long examSectionId;
@@ -50,22 +46,6 @@ public class ExamQuestion {
 
     @Column(name = "source_question_version_id", nullable = false)
     private Long sourceQuestionVersionId;
-
-    /**
-     * Read-only composite association to QuestionVersion, targeting the
-     * {@code uk_question_versions_question_id UNIQUE(question_id, id)} constraint.
-     * Hibernate resolves the join via (source_question_id → question_id,
-     * source_question_version_id → id). Both columns are read-only here; the
-     * writable scalars above are the source of truth.
-     */
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumns({
-            @JoinColumn(name = "source_question_id", referencedColumnName = "question_id",
-                    insertable = false, updatable = false),
-            @JoinColumn(name = "source_question_version_id", referencedColumnName = "id",
-                    insertable = false, updatable = false)
-    })
-    private QuestionVersion sourceQuestionVersion;
 
     @Column(name = "question_code", nullable = false, length = 80)
     private String questionCode;
@@ -105,11 +85,11 @@ public class ExamQuestion {
     protected ExamQuestion() {
     }
 
-    public ExamQuestion(Long examVersionId, Long examSectionId,
+    public ExamQuestion(Long examId, Long examSectionId,
                         Long sourceQuestionId, Long sourceQuestionVersionId,
                         String questionCode, QuestionType questionType,
                         String content, BigDecimal defaultPoints, Integer position) {
-        this.examVersionId = ExamPurpose.requireNonNullId(examVersionId, "examVersionId");
+        this.examId = ExamPurpose.requireNonNullId(examId, "examId");
         this.examSectionId = ExamPurpose.requireNonNullId(examSectionId, "examSectionId");
         this.sourceQuestionId = ExamPurpose.requireNonNullId(sourceQuestionId, "sourceQuestionId");
         this.sourceQuestionVersionId = ExamPurpose.requireNonNullId(sourceQuestionVersionId, "sourceQuestionVersionId");
@@ -124,8 +104,8 @@ public class ExamQuestion {
         return id;
     }
 
-    public Long getExamVersionId() {
-        return examVersionId;
+    public Long getExamId() {
+        return examId;
     }
 
     public Long getExamSectionId() {
@@ -136,17 +116,12 @@ public class ExamQuestion {
         return sourceQuestionId;
     }
 
+    /**
+     * The pinned immutable source Question Bank version id (provenance;
+     * never mutated after publish).
+     */
     public Long getSourceQuestionVersionId() {
         return sourceQuestionVersionId;
-    }
-
-    /**
-     * Returns the read-only composite association to the source QuestionVersion.
-     * Resolved lazily from {@code (source_question_id, source_question_version_id)}
-     * → {@code question_versions(question_id, id)}.
-     */
-    public QuestionVersion getSourceQuestionVersion() {
-        return sourceQuestionVersion;
     }
 
     public String getQuestionCode() {
@@ -229,7 +204,7 @@ public class ExamQuestion {
     public String toString() {
         return "ExamQuestion{" +
                 "id=" + id +
-                ", examVersionId=" + examVersionId +
+                ", examId=" + examId +
                 ", examSectionId=" + examSectionId +
                 ", sourceQuestionId=" + sourceQuestionId +
                 ", sourceQuestionVersionId=" + sourceQuestionVersionId +

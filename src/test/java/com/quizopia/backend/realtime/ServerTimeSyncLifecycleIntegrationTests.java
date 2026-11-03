@@ -29,6 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ServerTimeSyncLifecycleIntegrationTests extends RealtimeStompTestBase {
 
+    /** CI-safe default; see WebSocketSubscribeIntegrationTests.AWAIT_SECONDS. */
+    private static final int AWAIT_SECONDS = Integer.getInteger("stomp.await-seconds", 15);
+
     private static final int ACCEPTED_TIMEOUT_SECONDS = 10;
     private static final int OUTBOUND_TIMEOUT_SECONDS = 45;
     private static final int CLIENT_DELIVERY_TIMEOUT_SECONDS = 45;
@@ -96,7 +99,7 @@ class ServerTimeSyncLifecycleIntegrationTests extends RealtimeStompTestBase {
             assertThat(received.get(0)).contains("SERVER_TIME_SYNC")
                     .contains("\"eventId\"").contains("\"occurredAt\"").contains("\"serverTime\"")
                     .doesNotContain("\"sessionId\"").doesNotContain("\"attemptId\"")
-                    .doesNotContain("\"studentProfileId\"").doesNotContain("\"activeCount\"")
+                    .doesNotContain("\"userId\"").doesNotContain("\"studentProfileId\"").doesNotContain("\"activeCount\"")
                     .doesNotContain("\"answerKey\"").doesNotContain("\"score\"");
         }
     }
@@ -274,7 +277,7 @@ class ServerTimeSyncLifecycleIntegrationTests extends RealtimeStompTestBase {
         try (StompTestConnection conn = connect(studentToken)) {
             conn.send("/topic/exam-sessions/1", "spoof".getBytes(StandardCharsets.UTF_8));
             // Client-side ERROR capture (Spring dispatches ERROR to the session handler). Per-connection.
-            String observed = conn.awaitError(5);
+            String observed = conn.awaitError(AWAIT_SECONDS);
             assertThat(observed)
                     .as("ERROR frame must not leak sensitive data")
                     .doesNotContain(studentToken)          // raw token

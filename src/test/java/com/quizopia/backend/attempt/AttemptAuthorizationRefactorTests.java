@@ -41,7 +41,7 @@ class AttemptAuthorizationRefactorTests {
     private long schoolId;
     private long studentProfileId;
     private long teacherId;
-    private long examVersionId;
+    private long examId;
     private long publicSessionId;
     private long classRestrictedSessionId;
     private long classroomId;
@@ -70,28 +70,31 @@ class AttemptAuthorizationRefactorTests {
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-        long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + subj + "," + teacherId + ",'E','Exam')");
-        examVersionId = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
+        long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
+                + "published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacherId
+                + ",'E','Exam','PUBLISHED',now(),1)");
+        // Legacy provenance row (exam_versions is an audit table).
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
                 + "published_at, created_by) VALUES (" + schoolId + "," + examId + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + examVersionId + ",'S',0)");
-        long eq = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        this.examId = examId;
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId + ",'S',0)");
+        long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + examVersionId + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
+                + "VALUES (" + examId + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
                 + "VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
 
         // PUBLIC session (DB default is PUBLIC, but explicit for clarity).
-        publicSessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility) VALUES (" + schoolId + "," + examVersionId + ","
+        publicSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + schoolId + "," + examId + ","
                 + teacherId + ",'PUB','Public','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
-                + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','PUBLIC')");
+                + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','PUBLIC',60)");
 
         // CLASS_RESTRICTED session.
-        classRestrictedSessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility) VALUES (" + schoolId + "," + examVersionId + ","
+        classRestrictedSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + schoolId + "," + examId + ","
                 + teacherId + ",'CLS','ClassRestricted','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
-                + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED')");
+                + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
 
         // Classroom owned by the teacher (NOT yet assigned to the class-restricted session, student NOT yet a member).
         classroomId = insert("INSERT INTO classrooms (school_id, owner_teacher_id, code, name) "
@@ -129,7 +132,8 @@ class AttemptAuthorizationRefactorTests {
     }
 
     @Test
-    void crossSchoolStudentCannotSeePublicSession() {
+    void crossSchoolStudentCanSeePublicSession() {
+        // PUBLIC sessions are platform-wide (ADR-001 §2.3) — no same-school check.
         // Create a student in a different school.
         long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS','Other')");
         long osUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('os','os@t.com','h','OS')");
@@ -138,7 +142,7 @@ class AttemptAuthorizationRefactorTests {
         insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + osUser + "," + otherSchool + ",'OS')");
 
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(osUser);
-        assertThat(resp.items()).extracting(i -> i.sessionId()).doesNotContain(publicSessionId);
+        assertThat(resp.items()).extracting(i -> i.sessionId()).contains(publicSessionId);
     }
 
     // ============================================================
@@ -179,16 +183,16 @@ class AttemptAuthorizationRefactorTests {
     }
 
     @Test
-    void startCrossSchoolDenied() {
+    void startCrossSchoolPublicSessionSucceeds() {
+        // PUBLIC is platform-wide (ADR-001 §2.3): a cross-school student may start.
         long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS2','Other2')");
         long osUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('os2','os2@t.com','h','OS2')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + osUser + "," + sr + ")");
         insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + osUser + "," + otherSchool + ",'OS2')");
 
-        assertThatThrownBy(() -> attemptService.startAttempt(osUser, publicSessionId, new StartAttemptRequest(null)))
-                .isInstanceOf(AttemptException.class)
-                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code()).isEqualTo("ATTEMPT_NOT_ELIGIBLE"));
+        StartAttemptResponse r = attemptService.startAttempt(osUser, publicSessionId, new StartAttemptRequest(null));
+        assertThat(r.status()).isEqualTo("IN_PROGRESS");
     }
 
     // ============================================================
@@ -203,6 +207,12 @@ class AttemptAuthorizationRefactorTests {
     private void addMemberToClassroom(long studentProfileId, long classroomId) {
         jdbc.update("INSERT INTO classroom_members (classroom_id, student_profile_id, school_id) VALUES ("
                 + classroomId + "," + studentProfileId + "," + schoolId + ")");
+        // P0-R2: the fixture exam lives in an ORGANIZATION workspace, so a CLASS_RESTRICTED
+        // member additionally needs an ACTIVE workspace membership.
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT e.workspace_id, sp.user_id, 'MEMBER', 'ACTIVE' "
+                + "FROM exams e, student_profiles sp WHERE e.id=" + examId
+                + " AND sp.id=" + studentProfileId + " ON CONFLICT DO NOTHING");
     }
 
     private long insert(String sql) {

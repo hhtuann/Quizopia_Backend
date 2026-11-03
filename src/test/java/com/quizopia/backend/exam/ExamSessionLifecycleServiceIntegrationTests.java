@@ -66,7 +66,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void scheduleDraftToScheduledSuccess() {
         long sid = createDraftSession("SD1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("SCHEDULED");
         assertThat(r.openedAt()).isNull();
         assertThat(r.closedAt()).isNull();
@@ -77,9 +77,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void scheduleIdempotentDoesNotMutate() {
         long sid = createDraftSession("SD2", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        sessionService.scheduleSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
         entityManager.clear();
-        ExamSessionDetailResponse r2 = sessionService.scheduleSession(teacherUserId, sid);
+        ExamSessionDetailResponse r2 = sessionService.scheduleSession(teacherUserId, null, sid);
         assertThat(r2.status()).isEqualTo("SCHEDULED");
         assertThat(r2.openedAt()).isNull();
         assertThat(r2.closedAt()).isNull();
@@ -88,7 +88,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void scheduleZeroParticipantStillSuccess() {
         long sid = createDraftSession("SD3", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("SCHEDULED");
         assertThat(r.participantCount()).isZero();
     }
@@ -96,7 +96,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void scheduleExpiredRejected() {
         long sid = createDraftSession("SD4", Instant.now().minusSeconds(7200), Instant.now().minusSeconds(3600));
-        assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, sid))
+        assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, null, sid))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_TIME_INVALID));
     }
 
@@ -109,7 +109,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
         long cancelled = createDraftSession("SX1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
         setState(cancelled, "CANCELLED", null, null);
         for (long sid : new long[]{open, closed, cancelled}) {
-            assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, sid))
+            assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, null, sid))
                     .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
         }
     }
@@ -119,9 +119,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void openScheduledToOpenSuccess() {
         long sid = createDraftSession("OP1", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
         entityManager.clear();
-        ExamSessionDetailResponse r = sessionService.openSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.openSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("OPEN");
         assertThat(r.openedAt()).isNotNull();
         assertThat(r.closedAt()).isNull();
@@ -131,12 +131,12 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void openIdempotentOpenedAtStable() {
         long sid = createDraftSession("OP2", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
         entityManager.clear();
-        sessionService.openSession(teacherUserId, sid);
+        sessionService.openSession(teacherUserId, null, sid);
         Object openedAfterFirst = jdbc.queryForObject("SELECT opened_at FROM exam_sessions WHERE id=?", Object.class, sid);
         entityManager.clear();
-        sessionService.openSession(teacherUserId, sid); // idempotent retry
+        sessionService.openSession(teacherUserId, null, sid); // idempotent retry
         Object openedAfterSecond = jdbc.queryForObject("SELECT opened_at FROM exam_sessions WHERE id=?", Object.class, sid);
         // openedAt is NOT overwritten on idempotent retry (compare DB values: timestamptz micros).
         assertThat(openedAfterSecond).isEqualTo(openedAfterFirst);
@@ -146,9 +146,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void openEarlyRejected() {
         long sid = createDraftSession("OP3", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        sessionService.scheduleSession(teacherUserId, sid); // now < ends, so schedule is valid
+        sessionService.scheduleSession(teacherUserId, null, sid); // now < ends, so schedule is valid
         entityManager.clear();
-        assertThatThrownBy(() -> sessionService.openSession(teacherUserId, sid))
+        assertThatThrownBy(() -> sessionService.openSession(teacherUserId, null, sid))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_TIME_INVALID));
     }
 
@@ -157,7 +157,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
         // SCHEDULED with a past window — unreachable via /schedule (it would reject), so stage via jdbc.
         long sid = createDraftSession("OP4", Instant.now().minusSeconds(7200), Instant.now().minusSeconds(3600));
         setState(sid, "SCHEDULED", null, null);
-        assertThatThrownBy(() -> sessionService.openSession(teacherUserId, sid))
+        assertThatThrownBy(() -> sessionService.openSession(teacherUserId, null, sid))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_TIME_INVALID));
     }
 
@@ -165,7 +165,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
     void openOnExpiredOpenStaysOpenNoLazyClose() {
         long sid = createDraftSession("OP5", Instant.now().minusSeconds(7200), Instant.now().minusSeconds(3600));
         setState(sid, "OPEN", "now()-interval '2 hours'", null);
-        ExamSessionDetailResponse r = sessionService.openSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.openSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("OPEN"); // idempotent 200, NOT lazy-closed
         assertThat(r.closedAt()).isNull();
         assertDbState(sid, "OPEN", notNull(), null);
@@ -179,7 +179,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
         long cancelled = createDraftSession("OP8", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
         setState(cancelled, "CANCELLED", null, null);
         for (long sid : new long[]{draft, closed, cancelled}) {
-            assertThatThrownBy(() -> sessionService.openSession(teacherUserId, sid))
+            assertThatThrownBy(() -> sessionService.openSession(teacherUserId, null, sid))
                     .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
         }
     }
@@ -189,10 +189,10 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void closeOpenToClosedSuccess() {
         long sid = createDraftSession("CL1", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, sid);
-        sessionService.openSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
+        sessionService.openSession(teacherUserId, null, sid);
         entityManager.clear();
-        ExamSessionDetailResponse r = sessionService.closeSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.closeSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("CLOSED");
         assertThat(r.openedAt()).isNotNull();
         assertThat(r.closedAt()).isNotNull();
@@ -202,13 +202,13 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void closeIdempotentClosedAtStable() {
         long sid = createDraftSession("CL2", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, sid);
-        sessionService.openSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
+        sessionService.openSession(teacherUserId, null, sid);
         entityManager.clear();
-        sessionService.closeSession(teacherUserId, sid);
+        sessionService.closeSession(teacherUserId, null, sid);
         Object closedAfterFirst = jdbc.queryForObject("SELECT closed_at FROM exam_sessions WHERE id=?", Object.class, sid);
         entityManager.clear();
-        sessionService.closeSession(teacherUserId, sid); // idempotent retry
+        sessionService.closeSession(teacherUserId, null, sid); // idempotent retry
         Object closedAfterSecond = jdbc.queryForObject("SELECT closed_at FROM exam_sessions WHERE id=?", Object.class, sid);
         // closedAt is NOT overwritten on idempotent retry (compare DB values: timestamptz micros).
         assertThat(closedAfterSecond).isEqualTo(closedAfterFirst);
@@ -218,12 +218,12 @@ class ExamSessionLifecycleServiceIntegrationTests {
     void closeFromDraftScheduledCancelledRejected() {
         long draft = createDraftSession("CL3", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
         long scheduled = createDraftSession("CL4", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, scheduled);
+        sessionService.scheduleSession(teacherUserId, null, scheduled);
         long cancelled = createDraftSession("CL5", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
         setState(cancelled, "CANCELLED", null, null);
         entityManager.clear();
         for (long sid : new long[]{draft, scheduled, cancelled}) {
-            assertThatThrownBy(() -> sessionService.closeSession(teacherUserId, sid))
+            assertThatThrownBy(() -> sessionService.closeSession(teacherUserId, null, sid))
                     .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
         }
     }
@@ -233,7 +233,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void cancelDraftToCancelledSuccess() {
         long sid = createDraftSession("CN1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        ExamSessionDetailResponse r = sessionService.cancelSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.cancelSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("CANCELLED");
         assertThat(r.openedAt()).isNull();
         assertThat(r.closedAt()).isNull();
@@ -243,9 +243,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void cancelScheduledToCancelledSuccess() {
         long sid = createDraftSession("CN2", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
         entityManager.clear();
-        ExamSessionDetailResponse r = sessionService.cancelSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.cancelSession(teacherUserId, null, sid);
         assertThat(r.status()).isEqualTo("CANCELLED");
         assertThat(r.openedAt()).isNull();
         assertThat(r.closedAt()).isNull();
@@ -254,9 +254,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void cancelIdempotent() {
         long sid = createDraftSession("CN3", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        sessionService.cancelSession(teacherUserId, sid);
+        sessionService.cancelSession(teacherUserId, null, sid);
         entityManager.clear();
-        ExamSessionDetailResponse r2 = sessionService.cancelSession(teacherUserId, sid);
+        ExamSessionDetailResponse r2 = sessionService.cancelSession(teacherUserId, null, sid);
         assertThat(r2.status()).isEqualTo("CANCELLED");
     }
 
@@ -267,7 +267,7 @@ class ExamSessionLifecycleServiceIntegrationTests {
         long closed = createDraftSession("CN5", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
         setState(closed, "CLOSED", "now()-interval '2 hours'", "now()-interval '1 hour'");
         for (long sid : new long[]{open, closed}) {
-            assertThatThrownBy(() -> sessionService.cancelSession(teacherUserId, sid))
+            assertThatThrownBy(() -> sessionService.cancelSession(teacherUserId, null, sid))
                     .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
         }
     }
@@ -280,18 +280,18 @@ class ExamSessionLifecycleServiceIntegrationTests {
         long d = createDraftSession("IV1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
         assertDbState(d, "DRAFT", null, null);
         // SCHEDULED
-        sessionService.scheduleSession(teacherUserId, d);
+        sessionService.scheduleSession(teacherUserId, null, d);
         assertDbState(d, "SCHEDULED", null, null);
         // (reuse a straddling-window session for OPEN/CLOSED)
         long s = createDraftSession("IV2", Instant.now().minusSeconds(3600), Instant.now().plusSeconds(3600));
-        sessionService.scheduleSession(teacherUserId, s);
-        sessionService.openSession(teacherUserId, s);
+        sessionService.scheduleSession(teacherUserId, null, s);
+        sessionService.openSession(teacherUserId, null, s);
         assertDbState(s, "OPEN", notNull(), null);
-        sessionService.closeSession(teacherUserId, s);
+        sessionService.closeSession(teacherUserId, null, s);
         assertDbState(s, "CLOSED", notNull(), notNull());
         // CANCELLED
         long c = createDraftSession("IV3", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        sessionService.cancelSession(teacherUserId, c);
+        sessionService.cancelSession(teacherUserId, null, c);
         assertDbState(c, "CANCELLED", null, null);
     }
 
@@ -302,9 +302,9 @@ class ExamSessionLifecycleServiceIntegrationTests {
         // block one participant before lifecycle runs
         jdbc.update("UPDATE exam_session_participants SET status='BLOCKED', blocked_at=now() WHERE id=?", sp);
         entityManager.clear();
-        sessionService.scheduleSession(teacherUserId, sid);
-        sessionService.openSession(teacherUserId, sid);
-        sessionService.closeSession(teacherUserId, sid);
+        sessionService.scheduleSession(teacherUserId, null, sid);
+        sessionService.openSession(teacherUserId, null, sid);
+        sessionService.closeSession(teacherUserId, null, sid);
         // participant row count + status untouched by lifecycle
         assertThat(participantCount(sid)).isEqualTo(1);
         assertThat(participantStatus(sp)).isEqualTo("BLOCKED");
@@ -317,10 +317,10 @@ class ExamSessionLifecycleServiceIntegrationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
         insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'FOC')");
         for (Runnable call : new Runnable[]{
-                () -> sessionService.scheduleSession(other, sid),
-                () -> sessionService.openSession(other, sid),
-                () -> sessionService.closeSession(other, sid),
-                () -> sessionService.cancelSession(other, sid)
+                () -> sessionService.scheduleSession(other, null, sid),
+                () -> sessionService.openSession(other, null, sid),
+                () -> sessionService.closeSession(other, null, sid),
+                () -> sessionService.cancelSession(other, null, sid)
         }) {
             assertThatThrownBy(call::run)
                     .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED));
@@ -330,16 +330,16 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Test
     void notFoundAcrossEndpoints() {
         long missing = 999999L;
-        assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, missing))
+        assertThatThrownBy(() -> sessionService.scheduleSession(teacherUserId, null, missing))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
-        assertThatThrownBy(() -> sessionService.cancelSession(teacherUserId, missing))
+        assertThatThrownBy(() -> sessionService.cancelSession(teacherUserId, null, missing))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_NOT_FOUND));
     }
 
     @Test
     void responseHasNoAnswerLeak() {
         long sid = createDraftSession("NL1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
-        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, sid);
+        ExamSessionDetailResponse r = sessionService.scheduleSession(teacherUserId, null, sid);
         // ExamSessionDetailResponse carries no answer/isCorrect fields by construction.
         assertThat(r.status()).isEqualTo("SCHEDULED");
         assertThat(r.code()).isNotNull();
@@ -355,19 +355,17 @@ class ExamSessionLifecycleServiceIntegrationTests {
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long id = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "LCE", "T", null)).id();
-        examService.updateDraftComposition(teacherUserId, id, new UpdateDraftCompositionRequest(1, null, null, List.of(
+        Long id = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "LCE", "T", null)).id();
+        examService.updateDraftComposition(teacherUserId, id, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
-        long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, id);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", id);
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", id);
         entityManager.clear();
         return id;
     }
 
     private long createDraftSession(String code, Instant starts, Instant ends) {
-        long sid = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, code, "T", starts, ends, 1)).id();
+        long sid = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, code, "T", starts, ends, 1, null, null, null)).id();
         entityManager.clear();
         return sid;
     }

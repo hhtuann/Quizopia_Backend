@@ -55,23 +55,23 @@ class AttemptSnapshotRollbackIntegrationTests {
         long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
         long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
         long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
-        // Two distinct source questions (V8 uk_exam_questions_version_source requires unique source per version).
+        // Two distinct source questions (uk_exam_questions_exam_source requires unique source per exam).
         long q1 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q1'," + studentUserId + ")");
         long qv1 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q1 + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
         long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q2'," + studentUserId + ")");
         long qv2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','Q2',1,'{}'::jsonb," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam')");
-        long ver = insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',2,now()," + studentUserId + ")");
-        long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),2)");
+        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',2,now()," + studentUserId + ")");
+        long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         // First exam_question: valid (4 source options so the SINGLE_CHOICE cardinality invariant holds
         // and the snapshot reaches the 2nd attempt_questions INSERT where the test trigger fires).
-        long eq1 = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q1 + "," + qv1 + ",'QC1','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
+        long eq1 = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q1 + "," + qv1 + ",'QC1','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
         // Second exam_question: valid source data, but the test trigger below will fail on the 2nd attempt_questions INSERT.
-        long eq2 = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q2 + "," + qv2 + ",'QC2','SINGLE_CHOICE','Q2',1,1,'{}'::jsonb)");
+        long eq2 = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q2 + "," + qv2 + ",'QC2','SINGLE_CHOICE','Q2',1,1,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
                 + "VALUES (" + eq1 + ",'A','a',false,0),(" + eq1 + ",'B','b',false,1),(" + eq1 + ",'C','c',true,2),(" + eq1 + ",'D','d',false,3),"
                 + "(" + eq2 + ",'A','a',false,0),(" + eq2 + ",'B','b',false,1),(" + eq2 + ",'C','c',true,2),(" + eq2 + ",'D','d',false,3)");
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES (" + school + "," + ver + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',1," + studentUserId + ",'" + now.minusSeconds(3600) + "')");
+        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',1," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + studentUserId + ")");
         // Install test-only trigger: fail on 2nd attempt_questions INSERT per attempt.
         jdbc.execute("CREATE OR REPLACE FUNCTION test_fail_2nd_aq() RETURNS TRIGGER AS $$ "

@@ -2,13 +2,12 @@ package com.quizopia.backend.exam.api;
 
 import com.quizopia.backend.exam.application.ExamService;
 import com.quizopia.backend.exam.dto.CreateExamRequest;
-import com.quizopia.backend.exam.dto.CreateExamVersionRequest;
-import com.quizopia.backend.exam.dto.CreateExamVersionResponse;
 import com.quizopia.backend.exam.dto.ExamListItem;
 import com.quizopia.backend.exam.dto.PublishedExamSummary;
 import com.quizopia.backend.exam.dto.PublishExamRequest;
 import com.quizopia.backend.exam.dto.TeacherExamEditorResponse;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest;
+import com.quizopia.backend.exam.dto.UpdateExamMetadataRequest;
 import com.quizopia.backend.question.dto.PageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -17,6 +16,11 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * Exam management API — one exam = one immutable published content set
+ * (issue #2). {@code /api/exams/{examId}} is the management home; session
+ * routes are nested under it (ExamSessionNestedController).
+ */
 @RestController
 @RequestMapping("/api/exams")
 public class ExamController {
@@ -32,8 +36,7 @@ public class ExamController {
             @Valid @RequestBody CreateExamRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        ExamListItem response = examService.createExam(userId, request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(examService.createExam(userId, request));
     }
 
     @GetMapping("/my")
@@ -57,8 +60,17 @@ public class ExamController {
         return examService.getExamDetail(userId, examId);
     }
 
-    @PutMapping("/{examId}/draft/composition")
-    public TeacherExamEditorResponse updateDraftComposition(
+    @PutMapping("/{examId}")
+    public TeacherExamEditorResponse updateExamMetadata(
+            @PathVariable Long examId,
+            @Valid @RequestBody UpdateExamMetadataRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return examService.updateExamMetadata(userId, examId, request);
+    }
+
+    @PutMapping("/{examId}/composition")
+    public TeacherExamEditorResponse updateComposition(
             @PathVariable Long examId,
             @Valid @RequestBody UpdateDraftCompositionRequest request,
             @AuthenticationPrincipal Jwt jwt) {
@@ -66,15 +78,14 @@ public class ExamController {
         return examService.updateDraftComposition(userId, examId, request);
     }
 
-    @PostMapping("/{examId}/versions")
-    public ResponseEntity<CreateExamVersionResponse> createNextVersion(
+    /** Legacy alias retained during the frontend transition. */
+    @PutMapping("/{examId}/draft/composition")
+    public TeacherExamEditorResponse updateDraftCompositionLegacy(
             @PathVariable Long examId,
-            @Valid @RequestBody(required = false) CreateExamVersionRequest request,
+            @Valid @RequestBody UpdateDraftCompositionRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        CreateExamVersionResponse response = examService.createNextVersion(userId, examId,
-                request != null ? request : new CreateExamVersionRequest(null));
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return examService.updateDraftComposition(userId, examId, request);
     }
 
     @PostMapping("/{examId}/publish")
@@ -83,7 +94,23 @@ public class ExamController {
             @Valid @RequestBody(required = false) PublishExamRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return examService.publishExam(userId, examId,
-                request != null ? request : new PublishExamRequest(null));
+        return examService.publishExam(userId, examId, request);
+    }
+
+    @PostMapping("/{examId}/duplicate")
+    public ResponseEntity<ExamListItem> duplicateExam(
+            @PathVariable Long examId,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(examService.duplicateExam(userId, examId));
+    }
+
+    @PostMapping("/{examId}/archive")
+    public TeacherExamEditorResponse archiveExam(
+            @PathVariable Long examId,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return examService.archiveExam(userId, examId);
     }
 }

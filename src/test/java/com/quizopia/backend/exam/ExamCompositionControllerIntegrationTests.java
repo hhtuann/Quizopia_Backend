@@ -62,14 +62,14 @@ class ExamCompositionControllerIntegrationTests {
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"durationMinutes\":60,\"instructions\":\"Read\","
+                        .content("{\"expectedExamVersion\":0,\"durationMinutes\":60,\"instructions\":\"Read\","
                                 + "\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":"
                                 + "[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0,\"defaultPoints\":2.00}]}]}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currentDraftVersion.sections[0].questions[0].sourceQuestionId").value(sourceQuestionId))
-                .andExpect(jsonPath("$.currentDraftVersion.sections[0].questions[0].questionType").value("SINGLE_CHOICE"))
-                .andExpect(jsonPath("$.currentDraftVersion.durationMinutes").value(60))
-                .andExpect(jsonPath("$.currentDraftVersion.instructions").value("Read"))
+                .andExpect(jsonPath("$.composition[0].questions[0].sourceQuestionId").value(sourceQuestionId))
+                .andExpect(jsonPath("$.composition[0].questions[0].questionType").value("SINGLE_CHOICE"))
+                .andExpect(jsonPath("$.durationMinutes").value(60))
+                .andExpect(jsonPath("$.instructions").value("Read"))
                 // Editor response may expose answer (teacher editor); never exam.version.
                 .andExpect(jsonPath("$.version").doesNotExist());
     }
@@ -78,7 +78,7 @@ class ExamCompositionControllerIntegrationTests {
     void putCompositionUnauthenticatedReturns401() throws Exception {
         mockMvc.perform(put("/api/exams/1/draft/composition")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"sections\":[]}"))
+                        .content("{\"expectedExamVersion\":0,\"sections\":[]}"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -91,7 +91,7 @@ class ExamCompositionControllerIntegrationTests {
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(other))))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
+                        .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("EXAM_ACCESS_DENIED"));
     }
@@ -102,7 +102,7 @@ class ExamCompositionControllerIntegrationTests {
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"sections\":[{\"position\":0,\"title\":\"\",\"questions\":[]}]}"))
+                        .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"\",\"questions\":[]}]}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("EXAM_VALIDATION_ERROR"));
     }

@@ -7,7 +7,7 @@ import java.util.List;
 
 public interface ExamSectionRepository extends JpaRepository<ExamSection, Long> {
 
-    List<ExamSection> findAllByExamVersionIdOrderByPositionAsc(Long examVersionId);
+    List<ExamSection> findAllByExamIdOrderByPositionAsc(Long examId);
 
-    void deleteAllByExamVersionId(Long examVersionId);
+    void deleteAllByExamId(Long examId);
 }

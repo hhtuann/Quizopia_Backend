@@ -65,18 +65,16 @@ class ExamSessionParticipantServiceIntegrationTests {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
         // Published exam
-        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "PE", "T", null)).id();
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
+        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "PE", "T", null)).id();
+        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
-        long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
         entityManager.clear();
         // Session DRAFT
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
-        sessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, "PS1", "Part Session", starts, ends, 1)).id();
+        sessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, "PS1", "Part Session", starts, ends, 1, null, null, null)).id();
         // Students same school
         student1 = createStudent("HS001", "Alice");
         student2 = createStudent("HS002", "Bob");
@@ -236,8 +234,8 @@ class ExamSessionParticipantServiceIntegrationTests {
         participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
         // Create a different session + participant, then try to block in the wrong session
         Instant starts = Instant.now().plusSeconds(3600);
-        Long session2 = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(jdbc.queryForObject("SELECT exam_id FROM exam_versions WHERE id=(SELECT exam_version_id FROM exam_sessions WHERE id=?)", Long.class, sessionId), 1, "PS2", "S2", starts, starts.plusSeconds(3600), 1)).id();
+        Long session2 = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=?", Long.class, sessionId), "PS2", "S2", starts, starts.plusSeconds(3600), 1, null, null, null)).id();
         participantService.addParticipants(teacherUserId, session2, new AddParticipantsRequest(List.of(student2)));
         long pid2 = jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND student_profile_id=?", Long.class, session2, student2);
         assertThatThrownBy(() -> participantService.blockParticipant(teacherUserId, sessionId, pid2))

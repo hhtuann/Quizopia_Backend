@@ -38,6 +38,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WebSocketSendGuardIntegrationTests extends RealtimeStompTestBase {
 
+    /** CI-safe default; see WebSocketSubscribeIntegrationTests.AWAIT_SECONDS. */
+    private static final int AWAIT_SECONDS = Integer.getInteger("stomp.await-seconds", 15);
+
     @Autowired private ApplicationContext applicationContext;
 
     private String studentToken;
@@ -63,7 +66,7 @@ class WebSocketSendGuardIntegrationTests extends RealtimeStompTestBase {
         long attemptsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM attempts", Long.class);
         try (StompTestConnection conn = connect(studentToken)) {
             conn.send(destination, "spoof".getBytes(StandardCharsets.UTF_8));
-            String error = conn.awaitError(5); // actual ERROR frame received
+            String error = conn.awaitError(AWAIT_SECONDS); // actual ERROR frame received
             conn.awaitDisconnect();            // the attacker connection is closed
             assertErrorHasNoLeak(error, destination);
             // No broker routing: the guard threw in inbound preSend, so no outbound MESSAGE was sent.
@@ -87,7 +90,7 @@ class WebSocketSendGuardIntegrationTests extends RealtimeStompTestBase {
     private String captureSendRejectionError(String destination) {
         try (StompTestConnection conn = connect(studentToken)) {
             conn.send(destination, "spoof".getBytes(StandardCharsets.UTF_8));
-            String error = conn.awaitError(5);
+            String error = conn.awaitError(AWAIT_SECONDS);
             conn.awaitDisconnect();
             return error;
         }

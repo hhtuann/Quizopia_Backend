@@ -95,13 +95,13 @@ public class AttemptGradingService {
         // Batch 1: answers keyed by attempt_question_id.
         Map<Long, AttemptAnswer> answerByQuestion = attemptAnswerRepo.findByAttemptId(attemptId).stream()
                 .collect(Collectors.toMap(AttemptAnswer::getAttemptQuestionId, a -> a, (a, b) -> b));
-        // Batch 2: exam questions for the attempt's pinned version (cross-version-safe
-        // snapshot source).
-        Map<Long, ExamQuestion> examQuestionById = examQuestionRepo.findAllByExamVersionId(attempt.getExamVersionId())
+        // Batch 2: exam questions referenced by this attempt's snapshot (loaded
+        // by id — no version hop since the one-exam-one-content redesign).
+        List<Long> examQuestionIds = questions.stream().map(AttemptQuestion::getExamQuestionId).toList();
+        Map<Long, ExamQuestion> examQuestionById = examQuestionRepo.findAllById(examQuestionIds)
                 .stream()
                 .collect(Collectors.toMap(ExamQuestion::getId, e -> e));
         // Batch 3: options for the attempt's exam-question ids.
-        List<Long> examQuestionIds = questions.stream().map(AttemptQuestion::getExamQuestionId).toList();
         Map<Long, List<ExamQuestionOption>> optionsByExamQuestion = examQuestionOptionRepo
                 .findAllByExamQuestionIdInOrderByExamQuestionIdAscPositionAsc(examQuestionIds).stream()
                 .collect(Collectors.groupingBy(ExamQuestionOption::getExamQuestionId));

@@ -30,10 +30,10 @@ public class RealtimePublisher {
 
     /** Sends a session-scoped event to {@code /topic/exam-sessions/{sessionId}}. */
     public void sendToSessionTopic(Long sessionId, RealtimeEventType type, Long attemptId,
-                                   Long studentProfileId, Instant occurredAt, Long activeCount) {
+                                   Long userId, Long studentProfileId, Instant occurredAt, Long activeCount) {
         Instant serverTime = Instant.now(clock);
         messaging.convertAndSend("/topic/exam-sessions/" + sessionId,
-                RealtimeEventEnvelope.of(type, sessionId, attemptId, studentProfileId, occurredAt, serverTime, activeCount));
+                RealtimeEventEnvelope.of(type, sessionId, attemptId, userId, studentProfileId, occurredAt, serverTime, activeCount));
     }
 
     /**
@@ -61,7 +61,7 @@ public class RealtimePublisher {
         headers.setSessionId(simpSessionId);
         headers.setLeaveMutable(true);
         messaging.convertAndSendToUser(simpSessionId, "/queue/attempt",
-                RealtimeEventEnvelope.of(RealtimeEventType.SERVER_TIME_SYNC, null, null, null, now, now, null),
+                RealtimeEventEnvelope.of(RealtimeEventType.SERVER_TIME_SYNC, null, null, null, null, now, now, null),
                 headers.getMessageHeaders());
     }
 }

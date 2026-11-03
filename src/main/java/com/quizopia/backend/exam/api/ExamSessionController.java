@@ -16,8 +16,18 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
+/**
+ * LEGACY flat session routes — retained temporarily for existing teacher
+ * clients, student entry points and mobile/external consumers. Every handler
+ * delegates to the same {@link ExamSessionService} as the canonical nested
+ * routes ({@code /api/exams/{examId}/sessions/...}); there is no duplicated
+ * business logic. Deprecate after a usage audit (issue #2 §4).
+ */
 @RestController
 @RequestMapping("/api/exam-sessions")
+@Deprecated
 public class ExamSessionController {
 
     private final ExamSessionService sessionService;
@@ -31,7 +41,8 @@ public class ExamSessionController {
             @Valid @RequestBody CreateExamSessionRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return ResponseEntity.status(HttpStatus.CREATED).body(sessionService.createSession(userId, request));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(sessionService.createSession(userId, null, request));
     }
 
     @GetMapping("/my")
@@ -44,7 +55,7 @@ public class ExamSessionController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) Long examId) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.listMySessions(userId, search, status, examId, page, size, sort);
+        return sessionService.listSessions(userId, search, status, examId, page, size, sort);
     }
 
     @GetMapping("/{sessionId}")
@@ -52,7 +63,7 @@ public class ExamSessionController {
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.getSessionDetail(userId, sessionId);
+        return sessionService.getSessionDetail(userId, null, sessionId);
     }
 
     @PutMapping("/{sessionId}")
@@ -61,39 +72,35 @@ public class ExamSessionController {
             @Valid @RequestBody UpdateExamSessionRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.updateSession(userId, sessionId, request);
+        return sessionService.updateSession(userId, null, sessionId, request);
     }
 
     @PostMapping("/{sessionId}/schedule")
     public ExamSessionDetailResponse scheduleSession(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.scheduleSession(userId, sessionId);
+        return sessionService.scheduleSession(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 
     @PostMapping("/{sessionId}/open")
     public ExamSessionDetailResponse openSession(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.openSession(userId, sessionId);
+        return sessionService.openSession(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 
     @PostMapping("/{sessionId}/close")
     public ExamSessionDetailResponse closeSession(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.closeSession(userId, sessionId);
+        return sessionService.closeSession(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 
     @PostMapping("/{sessionId}/cancel")
     public ExamSessionDetailResponse cancelSession(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.cancelSession(userId, sessionId);
+        return sessionService.cancelSession(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 
     @PutMapping("/{sessionId}/classes")
@@ -101,23 +108,21 @@ public class ExamSessionController {
             @PathVariable Long sessionId,
             @RequestBody AssignSessionClassesRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.assignClasses(userId, sessionId, request.classroomIds());
+        return sessionService.assignClasses(Long.valueOf(jwt.getSubject()), null, sessionId,
+                request.classroomIds());
     }
 
     @GetMapping("/{sessionId}/classes")
     public SessionClassesResponse listClasses(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.listClasses(userId, sessionId);
+        return sessionService.listClasses(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 
     @GetMapping("/{sessionId}/roster")
-    public java.util.List<SessionRosterItem> listRoster(
+    public List<SessionRosterItem> listRoster(
             @PathVariable Long sessionId,
             @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return sessionService.listRoster(userId, sessionId);
+        return sessionService.listRoster(Long.valueOf(jwt.getSubject()), null, sessionId);
     }
 }

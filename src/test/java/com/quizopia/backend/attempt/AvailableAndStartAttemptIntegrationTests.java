@@ -20,6 +20,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,10 +49,11 @@ class AvailableAndStartAttemptIntegrationTests {
         private long studentUserId;
         private long schoolId;
         private long studentProfileId;
-        private long examVersionId;
+        private long examId;
         private long sessionId;
         private long subjectId;
         private long teacherId;
+        private long clsSeq;
 
         @BeforeEach
         void setUp() {
@@ -86,25 +88,27 @@ class AvailableAndStartAttemptIntegrationTests {
                                 + "default_points, metadata, created_by) VALUES (" + q2
                                 + ",1,'SINGLE_CHOICE','Question 2',3,'{}'::jsonb,"
                                 + studentUserId + ")");
-                long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                                + "VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam')");
-                examVersionId = insert(
+                examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
+                                + "published_at, total_points) "
+                                + "VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam','PUBLISHED',now(),5)");
+                // Legacy provenance row (exam_versions is an audit table).
+                insert(
                                 "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
                                                 + "published_at, created_by) VALUES (" + schoolId + "," + examId
                                                 + ",1,'PUBLISHED',5,now(),"
                                                 + studentUserId + ")");
-                long sec1 = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES ("
-                                + examVersionId + ",'S1',0)");
-                long sec2 = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES ("
-                                + examVersionId + ",'S2',1)");
-                long eq1 = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+                long sec1 = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES ("
+                                + examId + ",'S1',0)");
+                long sec2 = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES ("
+                                + examId + ",'S2',1)");
+                long eq1 = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                                + "VALUES (" + examVersionId + "," + sec1 + "," + q + "," + qv
+                                + "VALUES (" + examId + "," + sec1 + "," + q + "," + qv
                                 + ",'QC1','SINGLE_CHOICE','Question 1',2,0,"
                                 + "'{}'::jsonb)");
-                long eq2 = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+                long eq2 = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                                + "VALUES (" + examVersionId + "," + sec2 + "," + q2 + "," + qv2
+                                + "VALUES (" + examId + "," + sec2 + "," + q2 + "," + qv2
                                 + ",'QC2','SINGLE_CHOICE','Question 2',3,0,"
                                 + "'{}'::jsonb)");
                 jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
@@ -113,17 +117,22 @@ class AvailableAndStartAttemptIntegrationTests {
                 jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
                                 + "VALUES (" + eq2 + ",'A','Opt C',false,0),(" + eq2 + ",'B','Opt D',false,1),(" + eq2
                                 + ",'C','Opt E',true,2),(" + eq2 + ",'D','Opt F',false,3)");
-                // Session OPEN with window around baseTime.
+                // Session OPEN with window around baseTime. CLASS_RESTRICTED + assigned
+                // class so exact-count assertions only see this fixture's session (the
+                // shared test container accumulates committed PUBLIC sessions from other,
+                // non-transactional test classes that are platform-wide visible).
                 sessionId = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                                                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                                                + schoolId + "," + examVersionId + ","
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
+                                                + schoolId + "," + examId + ","
                                                 + teacher + ",'S1','Session 1','OPEN','" + baseTime.minusSeconds(3600)
                                                 + "','" + baseTime.plusSeconds(7200)
-                                                + "',2," + studentUserId + ",'" + baseTime.minusSeconds(3600) + "')");
+                                                + "',2," + studentUserId + ",'" + baseTime.minusSeconds(3600)
+                                                + "','CLASS_RESTRICTED',60)");
                 insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + schoolId + "," + sessionId + "," + studentProfileId + "," + studentUserId
                                 + ")");
+                restrictSessionToClass(sessionId, teacherId, studentUserId, studentProfileId);
         }
 
         // ============================================================
@@ -133,8 +142,10 @@ class AvailableAndStartAttemptIntegrationTests {
         @Test
         void availableReturnsEligibleSession() {
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-                assertThat(resp.items()).hasSize(1);
-                AvailableSessionItem item = resp.items().get(0);
+                List<AvailableSessionItem> mine = resp.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId)).toList();
+                assertThat(mine).hasSize(1);
+                AvailableSessionItem item = mine.get(0);
                 assertThat(item.sessionId()).isEqualTo(sessionId);
                 assertThat(item.sessionStatus()).isEqualTo("OPEN");
                 assertThat(item.attemptsUsed()).isZero();
@@ -148,7 +159,8 @@ class AvailableAndStartAttemptIntegrationTests {
         @Test
         void availableHidesClosedSession() {
                 jdbc.update("UPDATE exam_sessions SET status='CLOSED', closed_at=now() WHERE id=" + sessionId);
-                assertThat(attemptService.getAvailableSessions(studentUserId).items()).isEmpty();
+                assertThat(attemptService.getAvailableSessions(studentUserId).items())
+                                .filteredOn(i -> i.sessionId().equals(sessionId)).isEmpty();
         }
 
         @Test
@@ -156,8 +168,10 @@ class AvailableAndStartAttemptIntegrationTests {
                 // Create one IN_PROGRESS attempt.
                 attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null));
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-                assertThat(resp.items()).hasSize(1);
-                AvailableSessionItem item = resp.items().get(0);
+                List<AvailableSessionItem> mine = resp.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId)).toList();
+                assertThat(mine).hasSize(1);
+                AvailableSessionItem item = mine.get(0);
                 assertThat(item.attemptsUsed()).isEqualTo(1);
                 assertThat(item.remainingAttempts()).isEqualTo(1);
                 assertThat(item.activeAttemptId()).isNotNull();
@@ -229,8 +243,7 @@ class AvailableAndStartAttemptIntegrationTests {
 
         @Test
         void startDeadlineIsMinOfSessionEndAndDuration() {
-                // duration_minutes defaults to 60 in exam_versions. Session ends_at =
-                // baseTime+2h.
+                // Session duration_minutes=60. Session ends_at = baseTime+2h.
                 // So deadline = min(baseTime+2h, startedAt+1h) = startedAt+1h (duration is
                 // shorter).
                 StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
@@ -272,12 +285,14 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsMissingStudentRole() {
+        void startAllowsTeacherRole() {
+                // Dual capability (V16): TEACHER role carries ATTEMPT_START — the same
+                // account can be creator and learner.
                 long teacherRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("UPDATE user_roles SET role_id=" + teacherRole + " WHERE user_id=" + studentUserId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class);
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         // ============================================================
@@ -308,43 +323,41 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void availableRejectsInactiveProfile() {
+        void availableIgnoresInactiveProfile() {
+                // Profile enrollment status no longer gates availability (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.getAvailableSessions(studentUserId))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
+                assertThat(resp.items().stream().anyMatch(i -> i.sessionId().equals(sessionId))).isTrue();
         }
 
         @Test
-        void startRejectsGraduatedProfile() {
+        void startAllowsGraduatedProfile() {
+                // Profile enrollment status no longer gates PUBLIC attempts (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='GRADUATED' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         @Test
         void startRejectsEmptyExam() {
                 // Create a session with a version that has no exam_questions.
                 long emptyExam = insert(
-                                "INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                                                + schoolId + "," + subjectId + "," + teacherId + ",'EE','Empty')");
+                                "INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES ("
+                                                + schoolId + "," + subjectId + "," + teacherId + ",'EE','Empty','PUBLISHED',now(),10)");
                 long emptyVersion = insert(
                                 "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
                                                 + "published_at, created_by) VALUES (" + schoolId + "," + emptyExam
                                                 + ",1,'PUBLISHED',10,now(),"
                                                 + studentUserId + ")");
                 long emptySession = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                                                + "status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
+                                                + "status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
                                                 + schoolId + ","
-                                                + emptyVersion + "," + teacherId + ",'ES','ES','OPEN','"
+                                                + emptyExam + "," + teacherId + ",'ES','ES','OPEN','"
                                                 + clock.instant().minusSeconds(3600) + "','"
                                                 + clock.instant().plusSeconds(7200) + "',1," + studentUserId + ",'"
-                                                + clock.instant().minusSeconds(3600) + "')");
+                                                + clock.instant().minusSeconds(3600) + "',60)");
                 jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + schoolId + "," + emptySession + "," + studentProfileId + ","
                                 + studentUserId + ")");
@@ -379,9 +392,11 @@ class AvailableAndStartAttemptIntegrationTests {
                 // Lazy-open: SCHEDULED within window → canStartNow is true (auto-opened on start).
                 jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', opened_at=NULL WHERE id=" + sessionId);
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-                assertThat(resp.items()).hasSize(1);
-                assertThat(resp.items().get(0).canStartNow()).isTrue();
-                assertThat(resp.items().get(0).sessionStatus()).isEqualTo("SCHEDULED");
+                List<AvailableSessionItem> mine = resp.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId)).toList();
+                assertThat(mine).hasSize(1);
+                assertThat(mine.get(0).canStartNow()).isTrue();
+                assertThat(mine.get(0).sessionStatus()).isEqualTo("SCHEDULED");
         }
 
         @Test
@@ -391,7 +406,8 @@ class AvailableAndStartAttemptIntegrationTests {
                                 new StartAttemptRequest(null));
                 clock.setInstant(resp.deadlineAt().plusSeconds(60));
                 AvailableSessionsResponse available = attemptService.getAvailableSessions(studentUserId);
-                AvailableSessionItem item = available.items().get(0);
+                AvailableSessionItem item = available.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId)).toList().get(0);
                 assertThat(item.activeAttemptId()).isEqualTo(resp.attemptId());
                 assertThat(item.activeAttemptDeadlineAt()).isNotNull();
                 assertThat(item.canResume()).isFalse();
@@ -400,10 +416,10 @@ class AvailableAndStartAttemptIntegrationTests {
 
         @Test
         void startDeadlineCappedBySessionEnd() {
-                // Set session ends_at close to now; duration is 60min (default).
+                // Set session ends_at close to now; session duration is 60min.
                 // deadline = min(endsAt, startedAt+60min). If endsAt < startedAt+60min,
                 // deadline=endsAt.
-                jdbc.update("UPDATE exam_versions SET duration_minutes=120 WHERE id=" + examVersionId);
+                jdbc.update("UPDATE exam_sessions SET duration_minutes=120 WHERE id=" + sessionId);
                 // duration=120min but session ends in 30min → deadline=endsAt.
                 Instant nearEnd = clock.instant().plusSeconds(1800);
                 jdbc.update("UPDATE exam_sessions SET ends_at='" + nearEnd + "' WHERE id=" + sessionId);
@@ -444,13 +460,12 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsWithdrawnProfile() {
+        void startAllowsWithdrawnProfile() {
+                // Profile enrollment status no longer gates PUBLIC attempts (issue #4 P0-1).
                 jdbc.update("UPDATE student_profiles SET enrollment_status='WITHDRAWN' WHERE id=" + studentProfileId);
-                assertThatThrownBy(() -> attemptService.startAttempt(studentUserId, sessionId,
-                                new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_ACCESS_DENIED"));
+                StartAttemptResponse resp = attemptService.startAttempt(studentUserId, sessionId,
+                                new StartAttemptRequest(null));
+                assertThat(resp.attemptId()).isNotNull();
         }
 
         @Test
@@ -485,21 +500,25 @@ class AvailableAndStartAttemptIntegrationTests {
         void availableDeterministicStartsAtThenSessionIdOrder() {
                 // Create a second session with the same startsAt.
                 long session2 = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                                                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                                                + schoolId + "," + examVersionId + ","
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
+                                                + schoolId + "," + examId + ","
                                                 + teacherId + ",'S2','S2','OPEN','" + clock.instant().minusSeconds(3600)
                                                 + "','"
                                                 + clock.instant().plusSeconds(7200) + "',1," + studentUserId + ",'"
-                                                + clock.instant().minusSeconds(3600) + "')");
+                                                + clock.instant().minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
                 insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + schoolId + "," + session2 + "," + studentProfileId + "," + studentUserId
                                 + ")");
+                restrictSessionToClass(session2, teacherId, studentUserId, studentProfileId);
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-                assertThat(resp.items()).hasSize(2);
+                List<AvailableSessionItem> mine = resp.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId) || i.sessionId().equals(session2))
+                                .toList();
+                assertThat(mine).hasSize(2);
                 // Both have same startsAt; order by sessionId ASC.
-                assertThat(resp.items().get(0).sessionId()).isLessThan(resp.items().get(1).sessionId());
-                assertThat(resp.items().get(0).startsAt()).isEqualTo(resp.items().get(1).startsAt());
+                assertThat(mine.get(0).sessionId()).isLessThan(mine.get(1).sessionId());
+                assertThat(mine.get(0).startsAt()).isEqualTo(mine.get(1).startsAt());
         }
 
         @Test
@@ -514,14 +533,16 @@ class AvailableAndStartAttemptIntegrationTests {
         @Test
         void availableDRAFTHidden() {
                 jdbc.update("UPDATE exam_sessions SET status='DRAFT', opened_at=NULL WHERE id=" + sessionId);
-                assertThat(attemptService.getAvailableSessions(studentUserId).items()).isEmpty();
+                assertThat(attemptService.getAvailableSessions(studentUserId).items())
+                                .filteredOn(i -> i.sessionId().equals(sessionId)).isEmpty();
         }
 
         @Test
         void availableCANCELLEDHidden() {
                 jdbc.update("UPDATE exam_sessions SET status='CANCELLED', opened_at=NULL, closed_at=NULL WHERE id="
                                 + sessionId);
-                assertThat(attemptService.getAvailableSessions(studentUserId).items()).isEmpty();
+                assertThat(attemptService.getAvailableSessions(studentUserId).items())
+                                .filteredOn(i -> i.sessionId().equals(sessionId)).isEmpty();
         }
 
         @Test
@@ -531,8 +552,10 @@ class AvailableAndStartAttemptIntegrationTests {
                 submitAttempt(attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null))
                                 .attemptId());
                 AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
-                assertThat(resp.items().get(0).remainingAttempts()).isZero();
-                assertThat(resp.items().get(0).canStartNow()).isFalse();
+                List<AvailableSessionItem> mine = resp.items().stream()
+                                .filter(i -> i.sessionId().equals(sessionId)).toList();
+                assertThat(mine.get(0).remainingAttempts()).isZero();
+                assertThat(mine.get(0).canStartNow()).isFalse();
         }
 
         // ============================================================
@@ -562,8 +585,8 @@ class AvailableAndStartAttemptIntegrationTests {
                 assertThat(r.questions().get(0).options()).extracting(o -> o.optionKey()).containsExactly("A", "B", "C",
                                 "D");
                 Long eq1 = jdbc.queryForObject(
-                                "SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_version_id="
-                                                + examVersionId,
+                                "SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_id="
+                                                + examId,
                                 Long.class);
                 // Reverse all 4 source positions after start via a two-step shift (avoids a
                 // transient
@@ -697,8 +720,8 @@ class AvailableAndStartAttemptIntegrationTests {
                 // SINGLE_CHOICE → mismatch.
                 attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null));
                 Long eq1 = jdbc.queryForObject(
-                                "SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_version_id="
-                                                + examVersionId,
+                                "SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_id="
+                                                + examId,
                                 Long.class);
                 jdbc.update("DELETE FROM exam_question_options WHERE exam_question_id=" + eq1);
                 em.clear();
@@ -733,14 +756,14 @@ class AvailableAndStartAttemptIntegrationTests {
                                 "INSERT INTO grade_levels (school_id, code, name) VALUES (" + bigSchool + ",'GL','G')");
                 long bigSubject = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES ("
                                 + bigSchool + "," + gl + ",'M','Math')");
-                long ver = createVersionInSchool(bigSchool, bigSubject, tp, u, "SINGLE_CHOICE");
+                long exam = createVersionInSchool(bigSchool, bigSubject, tp, u, "SINGLE_CHOICE");
                 long session = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                                                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                                                + bigSchool + "," + ver + "," + tp
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                                                + bigSchool + "," + exam + "," + tp
                                                 + ",'BS','Big','OPEN','" + clock.instant().minusSeconds(3600) + "','"
                                                 + clock.instant().plusSeconds(7200)
-                                                + "',2," + u + ",'" + clock.instant().minusSeconds(3600) + "')");
+                                                + "',2," + u + ",'" + clock.instant().minusSeconds(3600) + "',60)");
                 insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + bigSchool + "," + session + "," + sp + "," + u + ")");
                 StartAttemptResponse r = attemptService.startAttempt(u, session, new StartAttemptRequest(null));
@@ -749,9 +772,19 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         @Test
-        void startRejectsCrossSchoolProfileMismatch() {
-                // A student from a DIFFERENT school must be denied — visibility check requires
-                // student.schoolId == session.schoolId, even when the session is PUBLIC.
+        void startAllowsCrossSchoolPublicSession() {
+                // PUBLIC sessions are platform-wide (ADR-001 §2.3): a student from a
+                // DIFFERENT school may start even though the session belongs to another school.
+                // Dedicated PUBLIC session (the main fixture session is CLASS_RESTRICTED).
+                long publicSession = insert(
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
+                                                + schoolId + "," + examId + ","
+                                                + teacherId + ",'PUBX','PublicX','OPEN','"
+                                                + clock.instant().minusSeconds(3600) + "','"
+                                                + clock.instant().plusSeconds(7200)
+                                                + "',2," + studentUserId + ",'" + clock.instant().minusSeconds(3600)
+                                                + "','PUBLIC',60)");
                 long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS','Other School')");
                 long u2 = insert(
                                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('os','os@t.com','h','OS')");
@@ -759,10 +792,9 @@ class AvailableAndStartAttemptIntegrationTests {
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u2 + "," + roleId + ")");
                 insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u2 + ","
                                 + otherSchool + ",'OS')");
-                assertThatThrownBy(() -> attemptService.startAttempt(u2, sessionId, new StartAttemptRequest(null)))
-                                .isInstanceOf(AttemptException.class)
-                                .satisfies(e -> assertThat(((AttemptException) e).getErrorCode().code())
-                                                .isEqualTo("ATTEMPT_NOT_ELIGIBLE"));
+                StartAttemptResponse r = attemptService.startAttempt(u2, publicSession, new StartAttemptRequest(null));
+                assertThat(r.resumed()).isFalse();
+                assertThat(r.status()).isEqualTo("IN_PROGRESS");
         }
 
         @Test
@@ -775,8 +807,8 @@ class AvailableAndStartAttemptIntegrationTests {
                 // final tiebreaker
                 // (an exact position tie is impossible under V8 and therefore not exercised
                 // here).
-                long ver = createBareVersion(schoolId, teacherId, studentUserId);
-                long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver
+                long exam = createBareVersion(schoolId, teacherId, studentUserId);
+                long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam
                                 + ",'S',0)");
                 long[] eqs = new long[3];
                 int[] positions = { 2, 0, 1 };
@@ -788,9 +820,9 @@ class AvailableAndStartAttemptIntegrationTests {
                                         "INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) "
                                                         + "VALUES (" + q + ",1,'SINGLE_CHOICE','Q" + i
                                                         + "',1,'{}'::jsonb," + studentUserId + ")");
-                        eqs[i] = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, "
+                        eqs[i] = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
                                         + "question_code, question_type, content, default_points, position, metadata) VALUES ("
-                                        + ver + "," + sec + "," + q + "," + qv
+                                        + exam + "," + sec + "," + q + "," + qv
                                         + ",'OC" + i + "','SINGLE_CHOICE','Q" + i + "',1," + positions[i]
                                         + ",'{}'::jsonb)");
                         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
@@ -798,13 +830,13 @@ class AvailableAndStartAttemptIntegrationTests {
                                         + eqs[i] + ",'C','c',true,2),(" + eqs[i] + ",'D','d',false,3)");
                 }
                 long session = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                                                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                                                + schoolId + "," + ver + "," + teacherId
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                                                + schoolId + "," + exam + "," + teacherId
                                                 + ",'ORD','Ord','OPEN','" + clock.instant().minusSeconds(3600) + "','"
                                                 + clock.instant().plusSeconds(7200)
                                                 + "',2," + studentUserId + ",'" + clock.instant().minusSeconds(3600)
-                                                + "')");
+                                                + "',60)");
                 insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + schoolId + "," + session + "," + studentProfileId + "," + studentUserId
                                 + ")");
@@ -820,22 +852,43 @@ class AvailableAndStartAttemptIntegrationTests {
         // Helpers
         // ============================================================
 
+        /**
+         * Makes the given student eligible for a CLASS_RESTRICTED session: creates a
+         * classroom in the fixture school (owner = the given teacher), adds the student
+         * as a member, and assigns the classroom to the session.
+         */
+        private void restrictSessionToClass(long session, long teacher, long memberUserId, long memberProfileId) {
+                long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, code, name) "
+                                + "VALUES (quizopia_org_workspace_for_school(" + schoolId + ")," + schoolId + ","
+                                + teacher + ",'CLS" + (++clsSeq) + "','C')");
+                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id) "
+                                + "VALUES (" + cls + "," + memberUserId + "," + schoolId + "," + memberProfileId + ")");
+                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
+                                + "VALUES (" + session + "," + cls + "," + schoolId + ")");
+                // P0-R2: the exam lives in an ORGANIZATION workspace, so the class member
+                // additionally needs an ACTIVE workspace membership.
+                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                                + "SELECT e.workspace_id, " + memberUserId + ", 'MEMBER', 'ACTIVE' FROM exams e "
+                                + "WHERE e.id=(SELECT exam_id FROM exam_sessions WHERE id=" + session
+                                + ") ON CONFLICT DO NOTHING");
+        }
+
         private Long aqIdForQc1(Long attemptId) {
                 return jdbc.queryForObject("SELECT id FROM attempt_questions WHERE attempt_id=" + attemptId
-                                + " AND exam_question_id=(SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_version_id="
-                                + examVersionId + ")", Long.class);
+                                + " AND exam_question_id=(SELECT id FROM exam_questions WHERE question_code='QC1' AND exam_id="
+                                + examId + ")", Long.class);
         }
 
         private long createNumericFillSession() {
-                long ver = createVersionInSchool(schoolId, subjectId, teacherId, studentUserId, "NUMERIC_FILL");
+                long exam = createVersionInSchool(schoolId, subjectId, teacherId, studentUserId, "NUMERIC_FILL");
                 long session = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                                                + "starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                                                + schoolId + "," + ver + "," + teacherId
+                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                                                + "starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                                                + schoolId + "," + exam + "," + teacherId
                                                 + ",'NF','NumFill','OPEN','" + clock.instant().minusSeconds(3600)
                                                 + "','" + clock.instant().plusSeconds(7200)
                                                 + "',2," + studentUserId + ",'" + clock.instant().minusSeconds(3600)
-                                                + "')");
+                                                + "',60)");
                 insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
                                 + "VALUES (" + schoolId + "," + session + "," + studentProfileId + "," + studentUserId
                                 + ")");
@@ -843,8 +896,8 @@ class AvailableAndStartAttemptIntegrationTests {
         }
 
         /**
-         * Creates a PUBLISHED exam version with one section + one exam_question of the
-         * given type (no options).
+         * Creates a PUBLISHED exam (plus a legacy provenance exam_versions row) with one
+         * section + one exam_question of the given type (no options). Returns the exam id.
          */
         private long createVersionInSchool(long school, long subject, long teacher, long user, String questionType) {
                 long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
@@ -862,17 +915,18 @@ class AvailableAndStartAttemptIntegrationTests {
                                 "INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, answer_key, created_by) "
                                                 + "VALUES (" + q + ",1,'" + questionType + "','NFQ',1,'{}'::jsonb,"
                                                 + answerKey + "," + user + ")");
-                long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                                + school + "," + subject + "," + teacher + ",'E" + questionType + "','Exam')");
-                long ver = insert(
+                long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES ("
+                                + school + "," + subject + "," + teacher + ",'E" + questionType + "','Exam','PUBLISHED',now(),1)");
+                // Legacy provenance row (exam_versions is an audit table).
+                insert(
                                 "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
                                                 + school + "," + exam + ",1,'PUBLISHED',1,now()," + user + ")");
-                long sec = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver
+                long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam
                                 + ",'S',0)");
                 long eq = insert(
-                                "INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, "
+                                "INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
                                                 + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES ("
-                                                + ver + "," + sec + "," + q + "," + qv
+                                                + exam + "," + sec + "," + q + "," + qv
                                                 + ",'QC','" + questionType + "','NFQ',1,0,'{}'::jsonb," + answerKey
                                                 + ")");
                 // Option-based types require 4 source options
@@ -882,18 +936,19 @@ class AvailableAndStartAttemptIntegrationTests {
                                         + "VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq
                                         + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
                 }
-                return ver;
+                return exam;
         }
 
         /**
-         * Creates a bare PUBLISHED exam version (no sections/questions) for ordering
-         * tests that add their own.
+         * Creates a bare PUBLISHED exam (plus a legacy provenance exam_versions row; no
+         * sections/questions) for ordering tests that add their own. Returns the exam id.
          */
         private long createBareVersion(long school, long teacher, long user) {
-                long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                                + school + "," + subjectId + "," + teacher + ",'ORD','Ord')");
-                return insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
+                long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES ("
+                                + school + "," + subjectId + "," + teacher + ",'ORD','Ord','PUBLISHED',now(),3)");
+                insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
                                 + school + "," + exam + ",1,'PUBLISHED',3,now()," + user + ")");
+                return exam;
         }
 
         // ============================================================

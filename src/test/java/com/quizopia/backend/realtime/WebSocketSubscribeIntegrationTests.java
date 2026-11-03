@@ -36,6 +36,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
 
+    /**
+     * Generous default (15s, overridable via -Dstomp.await-seconds=N): negative-path ERROR
+     * frames require a DB-backed authorization round-trip; 5s proved flaky-margin-of-error
+     * on loaded CI runners (observed failures at 5.03-5.06s), while genuine negative paths
+     * return in well under a second.
+     */
+    private static final int AWAIT_SECONDS = Integer.getInteger("stomp.await-seconds", 15);
+
     private static final String[] PERSONAL_REJECTED = {
             "/user/queue/attempt/extra",
             "/user/queue",
@@ -93,7 +101,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
             assertThat(received).hasSize(1);
             assertThat(received.get(0)).contains("SERVER_TIME_SYNC").contains("serverTime")
                     .doesNotContain("sessionId").doesNotContain("attemptId")
-                    .doesNotContain("studentProfileId").doesNotContain("activeCount")
+                    .doesNotContain("userId").doesNotContain("studentProfileId").doesNotContain("activeCount")
                     .doesNotContain("answerKey").doesNotContain("score");
         }
     }
@@ -136,7 +144,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     void personalDestinationIsRejected(String destination) {
         try (StompTestConnection conn = connect(studentToken)) {
             conn.subscribe(destination, noopHandler(new CountDownLatch(1)));
-            String error = conn.awaitError(5);          // client-side ERROR frame received
+            String error = conn.awaitError(AWAIT_SECONDS);          // client-side ERROR frame received
             conn.awaitDisconnect();                       // the right connection is closed
             assertErrorHasNoLeak(error, studentToken, destination);
             assertNoOutbound(serverTimeSyncMessage(), 1);  // zero SERVER_TIME_SYNC for this session
@@ -175,7 +183,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
             try (StompTestConnection conn = connectWith(connectHeaders)) {
                 assertThat(conn.isConnected()).isTrue(); // CONNECT succeeds — spoofed headers ignored
                 conn.subscribe("/topic/exam-sessions/" + sessionId, noopHandler(new CountDownLatch(1)));
-                String error = conn.awaitError(5);
+                String error = conn.awaitError(AWAIT_SECONDS);
                 conn.awaitDisconnect();
                 assertErrorHasNoLeak(error, token, "/topic/exam-sessions/" + sessionId);
                 assertThat(error).doesNotContain("EXAM_SESSION_MONITOR").doesNotContain("TEACHER");
@@ -270,7 +278,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     private void assertTopicSubscribeRejected(String token, String destination) {
         try (StompTestConnection conn = connect(token)) {
             conn.subscribe(destination, noopHandler(new CountDownLatch(1)));
-            String error = conn.awaitError(5);
+            String error = conn.awaitError(AWAIT_SECONDS);
             conn.awaitDisconnect();
             assertErrorHasNoLeak(error, token, destination);
             assertNoAccepted(acceptedDestination(destination), 1); // zero inbound-accepted SUBSCRIBE
@@ -280,7 +288,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     private String captureTopicRejectionError(String token, String destination) {
         try (StompTestConnection conn = connect(token)) {
             conn.subscribe(destination, noopHandler(new CountDownLatch(1)));
-            String error = conn.awaitError(5);
+            String error = conn.awaitError(AWAIT_SECONDS);
             conn.awaitDisconnect();
             return error;
         }
@@ -289,7 +297,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     private String capturePersonalRejectionError(String destination) {
         try (StompTestConnection conn = connect(studentToken)) {
             conn.subscribe(destination, noopHandler(new CountDownLatch(1)));
-            String error = conn.awaitError(5);
+            String error = conn.awaitError(AWAIT_SECONDS);
             conn.awaitDisconnect();
             return error;
         }

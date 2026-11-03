@@ -322,13 +322,13 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
     @Test
     void actualSqlSessionOpenIsZero() {
         long sched = newScheduledSession();
-        long n = captureActiveCountSqlDuring(() -> examSessionService.openSession(teacherId, sched));
+        long n = captureActiveCountSqlDuring(() -> examSessionService.openSession(teacherId, null, sched));
         assertThat(n).as("session open → 0 matching active-count SQL").isZero();
     }
 
     @Test
     void actualSqlSessionCloseIsZero() {
-        long n = captureActiveCountSqlDuring(() -> examSessionService.closeSession(teacherId, sessionId));
+        long n = captureActiveCountSqlDuring(() -> examSessionService.closeSession(teacherId, null, sessionId));
         assertThat(n).as("session close → 0 matching active-count SQL").isZero();
     }
 
@@ -336,7 +336,7 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
     void actualSqlBulkLazyCloseIsZero() {
         jdbc.update("UPDATE exam_sessions SET ends_at = now() WHERE id=" + sessionId);
         long n = captureActiveCountSqlDuring(
-                () -> examSessionService.listMySessions(teacherId, null, null, null, 0, 20, null));
+                () -> examSessionService.listSessions(teacherId, null, null, null, 0, 20, null));
         assertThat(n).as("bulk lazy-close → 0 matching active-count SQL").isZero();
     }
 
@@ -362,14 +362,14 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
 
     private long newScheduledSession() {
         long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long ver = jdbc.queryForObject("SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
+        long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         long owner = jdbc.queryForObject("SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId,
                 Long.class);
         return ins(
-                "INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by) VALUES ("
-                        + school + "," + ver + "," + owner + ",'SQLSCH','t','SCHEDULED','"
+                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                        + school + "," + exam + "," + owner + ",'SQLSCH','t','SCHEDULED','"
                         + java.time.Instant.now().minusSeconds(3600) + "','" + java.time.Instant.now().plusSeconds(7200)
-                        + "',2," + teacherId + ")");
+                        + "',2,60," + teacherId + ")");
     }
 
     // --- DELIVERY_ORDER_UNSPECIFIED helpers (B1R4-B2 §1) ---

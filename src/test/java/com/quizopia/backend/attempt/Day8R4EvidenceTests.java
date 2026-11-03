@@ -66,14 +66,19 @@ class Day8R4EvidenceTests {
         long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'M','Math')");
         ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'TC" + tag + "')");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + schoolId + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam')");
-        long ver = ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
-        long sec = ins("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + schoolId + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam','PUBLISHED',now(),1)");
+        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
+        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT workspace_id, " + teacherUserId + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
+                + " ON CONFLICT DO NOTHING");
+        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
+        long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + tag + "'," + teacherUserId + ")");
         ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherUserId + ")");
-        examQuestionId = ins("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
+        examQuestionId = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + examQuestionId + ",'A','a',false,0),(" + examQuestionId + ",'B','b',false,1),(" + examQuestionId + ",'C','c',true,2),(" + examQuestionId + ",'D','d',false,3)");
-        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES (" + schoolId + "," + ver + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "')");
+        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
     }
 
     // C. correctRate = 50.00 (1 correct + 1 incorrect + 2 unanswered)
@@ -161,13 +166,13 @@ class Day8R4EvidenceTests {
     // C. Multi-question statistics ordered by examQuestionId ascending
     @Test
     void perQuestionStatisticsOrderedByExamQuestionIdAscending() {
-        // Add a SECOND question to the same exam version (its exam_question_id > the first's)
-        long verId = jdbc.queryForObject("SELECT exam_version_id FROM exam_questions WHERE id = " + examQuestionId, Long.class);
+        // Add a SECOND question to the same exam (its exam_question_id > the first's)
+        long examId2 = jdbc.queryForObject("SELECT exam_id FROM exam_questions WHERE id = " + examQuestionId, Long.class);
         long secId = jdbc.queryForObject("SELECT exam_section_id FROM exam_questions WHERE id = " + examQuestionId, Long.class);
         long bankId = jdbc.queryForObject("SELECT q.question_bank_id FROM questions q JOIN exam_questions eq ON eq.source_question_id = q.id WHERE eq.id = " + examQuestionId, Long.class);
         long q2 = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'Q2" + tag + "'," + teacherUserId + ")");
         ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c2',1,'{}'::jsonb," + teacherUserId + ")");
-        long eq2 = ins("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + verId + "," + secId + "," + q2 + ",(SELECT id FROM question_versions WHERE question_id=" + q2 + "),'QC2','SINGLE_CHOICE','c2',1,1,'{}'::jsonb)");
+        long eq2 = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + examId2 + "," + secId + "," + q2 + ",(SELECT id FROM question_versions WHERE question_id=" + q2 + "),'QC2','SINGLE_CHOICE','c2',1,1,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq2 + ",'A','a',false,0),(" + eq2 + ",'B','b',false,1),(" + eq2 + ",'C','c',true,2),(" + eq2 + ",'D','d',false,3)");
         createStudentAndSubmit();
         em.flush(); em.clear();
