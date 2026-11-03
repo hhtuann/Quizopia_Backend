@@ -594,3 +594,12 @@ Run history: 41640341335 (mvnw exec bit, fixed + `mode 100755`),
 `stomp.await-seconds` default 15s, plus transparent surefire
 `rerunFailingTestsCount=2`; tracked in Quizopia_Backend issue #4 with full
 evidence; reruns are reported as explicit flakes, never silent).
+
+### Gate 1 final addendum
+Post-green hardening runs surfaced two more CI-order-dependent test bugs, both fixed:
+V9AttemptPersistenceIntegrationTests.newOpenSession used the USER id where the
+owner FK requires the teacher_profiles id (passed locally only by sequence
+alignment). Final CI on Task-B HEAD `7af1629`, run 41653026068: SUCCESS -
+`Tests run: 1526, Failures: 0, Errors: 0, Skipped: 4, Flakes: 2` (the 2 flakes
+are the tracked STOMP ERROR-vs-CLOSE race, transparently retried; see
+Quizopia_Backend issue #4).
