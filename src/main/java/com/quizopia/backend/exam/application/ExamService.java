@@ -256,7 +256,7 @@ public class ExamService {
         List<ExamListItem> items = exams.getContent().stream()
                 .map(e -> new ExamListItem(
                         e.getId(), e.getCode(), e.getTitle(),
-                        subjectMap.get(e.getSubjectId()),
+                        e.getSubjectId() != null ? subjectMap.get(e.getSubjectId()) : null,
                         e.getPurposeId() != null ? purposeMap.get(e.getPurposeId()) : null,
                         e.getStatus().name(),
                         questionCounts.getOrDefault(e.getId(), 0L),
@@ -488,9 +488,12 @@ public class ExamService {
 
         Subject subject = source.getSubjectId() != null
                 ? subjectRepository.findById(source.getSubjectId()).orElse(null) : null;
+        ExamPurpose purpose = copy.getPurposeId() != null
+                ? purposeRepository.findById(copy.getPurposeId()).orElse(null) : null;
         return new ExamListItem(copy.getId(), copy.getCode(), copy.getTitle(),
                 subject != null ? new SubjectSummary(subject.getId(), subject.getCode(), subject.getName()) : null,
-                null, copy.getStatus().name(), 0L, copy.getTotalPoints(), copy.getPublishedAt(),
+                purpose != null ? new ExamPurposeSummary(purpose.getId(), purpose.getCode(), purpose.getTitle()) : null,
+                copy.getStatus().name(), 0L, copy.getTotalPoints(), copy.getPublishedAt(),
                 copy.getCreatedAt());
     }
 

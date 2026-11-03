@@ -43,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -171,6 +172,32 @@ class P1CheckpointAIntegrationTests {
                 + "VALUES (8100110, ?, ?, 1, 'SUBMITTED', TIMESTAMPTZ '2030-01-01 01:00:00Z', "
                 + "TIMESTAMPTZ '2030-01-01 01:45:00Z', TIMESTAMPTZ '2030-01-01 01:20:00Z', 'p1a-submit')",
                 DELTA, MEMBER);
+    }
+
+    @Test
+    void duplicateReturnsPersistedPurposeSummary() throws Exception {
+        grant(CREATOR, "TEACHER");
+        Long schoolId = jdbc.queryForObject(
+                "INSERT INTO schools (code, name) VALUES ('P1A-PURPOSE', 'Purpose school') RETURNING id",
+                Long.class);
+        Long purposeId = jdbc.queryForObject(
+                "INSERT INTO exam_purposes (school_id, code, title) VALUES (?, 'MIDTERM', 'Midterm exam') RETURNING id",
+                Long.class, schoolId);
+        jdbc.update("UPDATE exams SET school_id = ?, purpose_id = ? WHERE id = ?",
+                schoolId, purposeId, SOURCE_EXAM);
+
+        var response = mvc.perform(post("/api/exams/{examId}/duplicate", SOURCE_EXAM)
+                        .with(jwt().jwt(token -> token.subject(String.valueOf(CREATOR)))))
+                .andExpect(status().isCreated());
+        long copyId = mapper.readTree(response.andReturn().getResponse().getContentAsString()).path("id").asLong();
+        assertThat(copyId).isPositive().isNotEqualTo(SOURCE_EXAM);
+        em.flush();
+        em.clear();
+        assertThat(jdbc.queryForObject("SELECT purpose_id FROM exams WHERE id = ?", Long.class, copyId))
+                .isEqualTo(purposeId);
+        response.andExpect(jsonPath("$.purpose.id").value(purposeId))
+                .andExpect(jsonPath("$.purpose.code").value("MIDTERM"))
+                .andExpect(jsonPath("$.purpose.title").value("Midterm exam"));
     }
 
     @Test

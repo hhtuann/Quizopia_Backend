@@ -95,6 +95,28 @@ class ExamControllerIntegrationTests {
     }
 
     @Test
+    void getMyExamsWithSubjectlessPersonalExamReturns200AndNullSubject() throws Exception {
+        // P1-C E2E regression: a personal-workspace exam carries no subject; the list
+        // mapping must not NPE on the null key lookup into an empty subject map.
+        long workspaceId = insert("INSERT INTO workspaces (workspace_type, name, owner_user_id) "
+                + "VALUES ('PERSONAL', 'CT personal', " + teacherUserId + ")");
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "VALUES (" + workspaceId + "," + teacherUserId + ",'OWNER','ACTIVE')");
+
+        mockMvc.perform(post("/api/exams")
+                .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"workspaceId\":" + workspaceId + ",\"code\":\"PEX1\",\"title\":\"Personal exam\"}"))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/exams/my").with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items[0].code").value("PEX1"))
+                .andExpect(jsonPath("$.items[0].subject").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
     void getExamDetailReturns200() throws Exception {
         String created = mockMvc.perform(post("/api/exams")
                 .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))

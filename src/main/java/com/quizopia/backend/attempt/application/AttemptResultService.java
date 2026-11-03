@@ -51,11 +51,13 @@ public class AttemptResultService {
         private final AttemptQuestionRepository attemptQuestionRepo;
         private final AttemptAnswerRepository attemptAnswerRepo;
         private final JdbcTemplate jdbc;
+        private final SystemAdminResultAccessPolicy adminAccess;
 
         public AttemptResultService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                         GradeRepository gradeRepo, GradeItemRepository gradeItemRepo,
                         AttemptQuestionRepository attemptQuestionRepo,
-                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc) {
+                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc,
+                        SystemAdminResultAccessPolicy adminAccess) {
                 this.auth = auth;
                 this.attemptRepo = attemptRepo;
                 this.gradeRepo = gradeRepo;
@@ -63,6 +65,7 @@ public class AttemptResultService {
                 this.attemptQuestionRepo = attemptQuestionRepo;
                 this.attemptAnswerRepo = attemptAnswerRepo;
                 this.jdbc = jdbc;
+                this.adminAccess = adminAccess;
         }
 
          /**
@@ -84,7 +87,7 @@ public class AttemptResultService {
                                  .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
                  if (attempt.getUserId().equals(userId)) {
                          auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
-                 } else if (isSystemAdmin(userId)) {
+                  } else if (adminAccess.grantRead(userId, "ATTEMPT_RESULT", attemptId)) {
                          // Explicit break-glass: platform operator, DB-verified.
                  } else {
                          authorizeOrganizerOwnsSession(userId, attempt.getExamSessionId());
@@ -95,16 +98,6 @@ public class AttemptResultService {
                  Grade grade = gradeRepo.findByAttemptId(attemptId)
                                  .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
                  return buildResponse(attempt, grade, attempt.getUserId());
-         }
-
-         /** DB-verified active SYSTEM_ADMIN role (not caller-supplied). */
-         private boolean isSystemAdmin(Long userId) {
-                 Integer count = jdbc.queryForObject(
-                                 "SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
-                                                 + "WHERE ur.user_id = ? AND r.code = 'SYSTEM_ADMIN' "
-                                                 + "AND (ur.expires_at IS NULL OR ur.expires_at > now())",
-                                 Integer.class, userId);
-                 return count != null && count > 0;
          }
 
          private void authorizeOrganizerOwnsSession(Long userId, Long sessionId) {

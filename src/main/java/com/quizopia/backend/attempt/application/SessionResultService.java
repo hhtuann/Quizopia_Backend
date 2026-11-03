@@ -32,9 +32,11 @@ public class SessionResultService {
     private static final int MAX_PAGE_SIZE = 100;
 
     private final JdbcTemplate jdbc;
+    private final SystemAdminResultAccessPolicy adminAccess;
 
-    public SessionResultService(JdbcTemplate jdbc) {
+    public SessionResultService(JdbcTemplate jdbc, SystemAdminResultAccessPolicy adminAccess) {
         this.jdbc = jdbc;
+        this.adminAccess = adminAccess;
     }
 
     private static final Map<String, String> SORT_SQL = Map.of(
@@ -169,7 +171,7 @@ public class SessionResultService {
      * </ol>
      */
     void authorizeSessionAccess(Long userId, String primaryRole, Long sessionId) {
-        if (isSystemAdmin(userId)) {
+        if (adminAccess.grantRead(userId, "SESSION_RESULTS", sessionId)) {
             return;
         }
         Integer owns = jdbc.queryForObject(
@@ -185,16 +187,6 @@ public class SessionResultService {
         if (owns == null || owns == 0) {
             throw new AttemptException(AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
         }
-    }
-
-    /** DB-verified active SYSTEM_ADMIN role (not caller-supplied). */
-    private boolean isSystemAdmin(Long userId) {
-        Integer count = jdbc.queryForObject(
-                "SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
-                        + "WHERE ur.user_id = ? AND r.code = 'SYSTEM_ADMIN' "
-                        + "AND (ur.expires_at IS NULL OR ur.expires_at > now())",
-                Integer.class, userId);
-        return count != null && count > 0;
     }
 
     /**

@@ -433,3 +433,89 @@ test passed (1/1), including existing fail-fast, score-drift and lineage asserti
 isolated post-fix staged run also passed 1/1. Mutation probes are assertions within that one
 test, not extra test cases. No V1–V17 migration or checkpoint-A implementation was edited.
 Independent re-review is pending; this is not a new READY verdict or production-data proof.
+
+## 15. Release follow-up — duplicate purpose response (2026-11-03)
+
+Tech Lead-approved follow-up to [Issue #4 review comment 6594324419](https://github.com/hhtuann/Quizopia_System/issues/4#issuecomment-6594324419):
+`duplicateExam` already persisted the source `purposeId`, but its immediate HTTP response
+hard-coded `ExamListItem.purpose` to null. It now resolves the copied purpose and uses the
+existing nullable `ExamPurposeSummary(id, code, title)` mapping pattern.
+
+The focused MockMvc regression `P1CheckpointAIntegrationTests#duplicateReturnsPersistedPurposeSummary`
+seeds a non-null purpose, calls `POST /api/exams/{examId}/duplicate`, verifies HTTP 201,
+flushes/clears persistence state, checks the duplicate's stored `purpose_id` through SQL,
+and asserts the response purpose ID, code and title.
+
+Executed once with a 180000 ms command timeout:
+
+```powershell
+.\mvnw.cmd test "-Dtest=P1CheckpointAIntegrationTests#duplicateReturnsPersistedPurposeSummary" "-Dspring.jpa.show-sql=false" "-Dlogging.level.org.hibernate.SQL=INFO"
+```
+
+**BUILD SUCCESS — 1 test, 1 passed, 0 failures, 0 errors, 0 skipped** (Maven 01:06;
+Surefire 22.22 s). Evidence: `target/surefire-reports/com.quizopia.backend.exam.P1CheckpointAIntegrationTests.txt`.
+This is the tiny release-response correction only: composition/grading, A/B decisions,
+controller and migrations are unchanged. Existing uncommitted C files and user-managed
+servers were preserved; the prior four concurrency / three admin test evidence was not
+rerun or replaced. This follow-up does not change the outstanding integrated release gates.
+
+## 16. Issue #4 P1 checkpoint C - completion evidence
+
+Scope: user-based moderation concurrency, explicit SYSTEM_ADMIN result-access policy
+with audit, frontend moderation UI, integrated browser E2E, full-suite regression
+and release-gate reconciliation. All on Task B branch atop B commit `f804c92`.
+
+### Production changes
+- `attempt/application/SystemAdminResultAccessPolicy.java` (new): explicit DB-backed
+  policy - active account + unexpired DB `SYSTEM_ADMIN` grant required for break-glass
+  result reads; application clock; publishes a grant-audit event on each allowed read.
+- `AttemptResultService`, `SessionResultService`: SYSTEM_ADMIN reads delegate to the
+  policy; no role-authority bypass remains.
+- `exam/application/ExamService.listMyExams`: null-guard on subject lookup - a
+  subjectless personal-workspace exam previously NPE'd (`Map.of().get(null)`) making
+  `GET /api/exams/my` 500 (found by browser E2E; regression test in
+  `ExamControllerIntegrationTests.getMyExamsWithSubjectlessPersonalExamReturns200AndNullSubject`).
+- Frontend `components/teacher/ParticipantModeration.tsx` (new) wired into
+  `LiveMonitor.tsx`: explicit by-user Block/Unblock (DRAFT/SCHEDULED/OPEN), roster/
+  participant query invalidation, status chip (ELIGIBLE / BLOCKED with preservation note).
+- Frontend personal-workspace form fixes: `exams/new` and `question-banks/new`
+  default `subjectId: undefined` (was `NaN` which failed zod `.positive()` with the
+  field hidden - silent no-op submit; found by browser E2E).
+
+### Test evidence (fresh, on final source)
+- Targeted C suites: `UserModerationConcurrencyIntegrationTests` 4/4,
+  `SystemAdminResultAccessPolicyIntegrationTests` 3/3, `ExamControllerIntegrationTests`
+  16/16 (incl. new D1 regression) - 23/23, BUILD SUCCESS.
+- Checkpoint A suites re-run after all edits: 76/76 (P1CheckpointA 22 incl. purpose
+  regression, ExamService 21, ExamSessionService 21, Concurrency 1, RevokedMembership 11).
+- Full backend suite: **1526 run, 2 failures, 0 errors, 4 skipped** - the only failures
+  are the two documented pre-P0 baselines (StudentOnboarding auto-code pattern,
+  QuestionBank xlsx template row count); 1480->1526 growth is A/B/C test additions;
+  no new regressions.
+- Frontend: `tsc --noEmit` clean, `eslint` clean, production build green,
+  `smoke-realtime-identity` 12/12 PASS.
+
+### Integrated browser E2E (real servers :3100 frontend standalone / :8181 backend JAR,
+real JWT auth via form login, no MockMvc, no mocks)
+- Build identity verified: standalone chunks contain `NEXT_PUBLIC_API_URL=http://localhost:8181`
+  (2 files); backend PID/JAR confirmed; static assets 58/58 byte-identical.
+- Teacher2: exam list (D1 live proof), bank + question authoring via UI, composition,
+  publish, session create + schedule. Learner: available sessions -> start attempt ->
+  answer -> submit (autosave Live/Saved observed, `/attempts/1` submitted).
+- Moderation: `POST /api/exam-sessions/3/participants/by-user/3/block` 200 then
+  roster refetch; UI status "User 3: BLOCKED. Existing attempts may still be
+  completed."; learner Available-sessions list became empty (block prevents discovery);
+  `POST .../unblock` 200 -> "User 3: ELIGIBLE", session reappeared for learner.
+- Authorization negative: outsider teacher direct-navigating the session detail got
+  `GET /api/exam-sessions/3` 403 with an empty denial page - no moderation controls,
+  no roster, no data leak.
+- Screenshots/network logs: `C:\Users\GIGABYTE\AppData\Local\Temp\opencode\p1c-e2e\`.
+
+### Release-gate reconciliation (honest status)
+- Backend repo has NO CI workflow configured (`gh pr checks` -> none; `gh run list`
+  empty). Required before merge approval: add and pass CI on PR #2.
+- Frontend Vercel deployment on PR #1: PASS.
+- Migration rehearsal on a production backup (freeze writers, restore, preflight/
+  postflight SQL equality) is documented in the runbook but NOT yet executed - required
+  before production cutover approval.
+- The two baseline test failures above remain accepted-known (pre-existing).
