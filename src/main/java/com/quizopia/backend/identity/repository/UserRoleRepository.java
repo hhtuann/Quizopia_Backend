@@ -55,4 +55,22 @@ public interface UserRoleRepository extends JpaRepository<UserRole, UserRoleId> 
             @Param("roleCode") String roleCode,
             @Param("now") Instant now
     );
+
+    /**
+     * Inserts a role assignment only when absent. Returns 1 when this call
+     * created the row, 0 when it already existed. Used by the teacher
+     * self-upgrade (Identity-M2): unlike a JPA save that violates the
+     * (user_id, role_id) primary key under concurrency, this never throws —
+     * concurrent upgraders converge on exactly one row without marking any
+     * transaction rollback-only.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query(value = """
+            INSERT INTO user_roles (user_id, role_id, assigned_by, assigned_at)
+            VALUES (:userId, :roleId, :userId, now())
+            ON CONFLICT (user_id, role_id) DO NOTHING
+            """, nativeQuery = true)
+    int insertAssignmentIfAbsent(
+            @Param("userId") Long userId,
+            @Param("roleId") Long roleId);
 }

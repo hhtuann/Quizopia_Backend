@@ -131,6 +131,10 @@ public class SecurityFilterChainConfig {
                         // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
                         .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        // Identity-M2: teacher self-upgrade — authenticated only;
+                        // ACTIVE + verified-email + TEACHER-only grant enforced in
+                        // the service (deny-by-default otherwise).
+                        .requestMatchers(HttpMethod.POST, "/api/auth/upgrade-teacher").authenticated()
                         // Workspace API (active-workspace switcher). Membership checks are
                         // enforced in WorkspaceService (deny-by-default); this rule only lets
                         // an authenticated JWT reach the controller (default is denyAll).
