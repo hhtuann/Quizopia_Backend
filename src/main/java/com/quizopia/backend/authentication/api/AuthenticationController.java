@@ -145,6 +145,7 @@ public class AuthenticationController {
         return ResponseEntity.ok(Map.of("roles", roles));
     }
 
+    /**
      * Review M1-06: starts the authenticated Google LINKING flow. Requires a
      * valid JWT AND the account password (re-authentication); the response is
      * the browser-facing Google authorization URL bound (state/PKCE/nonce)
