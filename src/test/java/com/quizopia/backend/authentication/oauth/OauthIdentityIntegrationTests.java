@@ -109,14 +109,18 @@ class OauthIdentityIntegrationTests {
     void existingPasswordAccountEmailIsNeverAutoLinked() {
         ValidatedOidcIdentity identity = identity();
         // A pre-existing password account with the same email…
-        userRepository.saveAndFlush(new com.quizopia.backend.identity.domain.model.User(
-                "pwduser", identity.email(), "$argon2id$stub", "Pwd User"));
+        com.quizopia.backend.identity.domain.model.User user = userRepository.saveAndFlush(
+                new com.quizopia.backend.identity.domain.model.User(
+                        "pwduser", identity.email(), "$argon2id$stub", "Pwd User"));
 
         AuthenticationException ex = catchThrowableOfType(
                 () -> identityService.resolveGoogleUser(identity), AuthenticationException.class);
         assertThat(ex.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
-        // …and no external identity row was created.
-        assertThat(externalIdentityRepository.findAll()).isEmpty();
+        // …and no external identity row was created FOR THIS ACCOUNT (other
+        // classes in the shared context may have committed their own).
+        assertThat(externalIdentityRepository.existsByUserIdAndProvider(
+                user.getId(), com.quizopia.backend.identity.domain.model.ExternalProvider.GOOGLE))
+                .isFalse();
     }
 
     @Test
