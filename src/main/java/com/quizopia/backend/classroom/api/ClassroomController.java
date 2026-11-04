@@ -1,6 +1,9 @@
 package com.quizopia.backend.classroom.api;
 
+import com.quizopia.backend.classroom.application.ClassroomRosterService;
 import com.quizopia.backend.classroom.application.ClassroomService;
+import com.quizopia.backend.classroom.dto.CreateRosterEntryRequest;
+import com.quizopia.backend.classroom.dto.RosterEntryResponse;
 import com.quizopia.backend.classroom.dto.AddMembersRequest;
 import com.quizopia.backend.classroom.dto.AddMembersResponse;
 import com.quizopia.backend.classroom.dto.ClassroomDetailView;
@@ -25,14 +28,65 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/classrooms")
 public class ClassroomController {
 
     private final ClassroomService classroomService;
+    private final ClassroomRosterService rosterService;
 
-    public ClassroomController(ClassroomService classroomService) {
+    public ClassroomController(ClassroomService classroomService, ClassroomRosterService rosterService) {
         this.classroomService = classroomService;
+        this.rosterService = rosterService;
+    }
+
+    // ============================================================
+    // Identity-M3 roster (issue #15)
+    // ============================================================
+
+    @PostMapping("/{id}/roster")
+    public ResponseEntity<RosterEntryResponse> addRosterEntry(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
+            @Valid @RequestBody CreateRosterEntryRequest request) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(rosterService.addRosterEntry(userId, id, request));
+    }
+
+    @GetMapping("/{id}/roster")
+    public PageResponse<RosterEntryResponse> listRoster(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        var rosterPage = rosterService.listRoster(userId, id, page, size);
+        return new PageResponse<>(rosterPage.getContent(), rosterPage.getNumber(),
+                rosterPage.getSize(), rosterPage.getTotalElements(), rosterPage.getTotalPages(),
+                "createdAt,desc");
+    }
+
+    @DeleteMapping("/{id}/roster/{entryId}")
+    public ResponseEntity<Void> revokeRosterEntry(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id, @PathVariable Long entryId) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        rosterService.revokeRosterEntry(userId, id, entryId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/roster/my")
+    public List<RosterEntryResponse> myRosterEntries(@AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return rosterService.myLinkedEntries(userId);
+    }
+
+    @PostMapping("/roster/{entryId}/decline")
+    public ResponseEntity<Void> declineRosterEntry(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long entryId) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        rosterService.declineEntry(userId, entryId);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping

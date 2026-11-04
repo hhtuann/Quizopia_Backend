@@ -20,6 +20,12 @@ public interface ClassroomRepository extends JpaRepository<Classroom, Long> {
     /** List classrooms owned by a teacher, newest first (GET /api/classrooms/my). */
     Page<Classroom> findByOwnerTeacherIdOrderByCreatedAtDescIdDesc(Long ownerTeacherId, Pageable pageable);
 
+    /** Identity-M3: classrooms owned by a USER (both modes), newest first. */
+    Page<Classroom> findByOwnerUserIdOrderByCreatedAtDescIdDesc(Long ownerUserId, Pageable pageable);
+
+    /** Identity-M3: owner-user-scoped case-insensitive code conflict pre-check. */
+    boolean existsByOwnerUserIdAndCodeIgnoreCase(Long ownerUserId, String code);
+
     /** Owner-scoped case-insensitive code conflict pre-check. */
     boolean existsByOwnerTeacherIdAndCodeIgnoreCase(Long ownerTeacherId, String code);
 

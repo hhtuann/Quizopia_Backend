@@ -258,6 +258,7 @@ public class DemoDataSeeder implements ApplicationRunner {
                 .findByOwnerTeacherIdAndCodeIgnoreCase(teacherProfileId, DEMO_CLASSROOM_CODE)
                 .orElseGet(() -> classroomRepository.saveAndFlush(
                         new Classroom(workspaceId, schoolId, teacherProfileId,
+                                teacherProfile.getUserId(),
                                 DEMO_CLASSROOM_CODE, "Demo Classroom")));
 
         // Demo students + memberships (user-based, V12).

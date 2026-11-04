@@ -34,13 +34,31 @@ public class WorkspaceAccessService {
     private final WorkspaceService workspaceService;
     private final WorkspaceRepository workspaceRepository;
     private final WorkspaceMembershipRepository membershipRepository;
+    private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
+    private final com.quizopia.backend.identity.repository.UserRepository userRepository;
 
     public WorkspaceAccessService(WorkspaceService workspaceService,
-                                  WorkspaceRepository workspaceRepository,
-                                  WorkspaceMembershipRepository membershipRepository) {
+            com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
+            com.quizopia.backend.identity.repository.UserRepository userRepository,
+            WorkspaceRepository workspaceRepository,
+            WorkspaceMembershipRepository membershipRepository) {
         this.workspaceService = workspaceService;
         this.workspaceRepository = workspaceRepository;
         this.membershipRepository = membershipRepository;
+        this.workspaceProvisioningService = workspaceProvisioningService;
+        this.userRepository = userRepository;
+    }
+
+    /**
+     * Identity-M3: resolves (or idempotently provisions) the caller's
+     * PERSONAL workspace and returns its id. Used by independent-teacher
+     * content ownership.
+     */
+    public Long requirePersonalWorkspaceId(Long userId) {
+        return workspaceProvisioningService.ensurePersonalWorkspace(
+                userRepository.findById(userId)
+                        .orElseThrow(() -> new IllegalArgumentException("user " + userId + " not found")))
+                .getId();
     }
 
     /**
@@ -48,6 +66,7 @@ public class WorkspaceAccessService {
      * membership (403). Returns the workspace id for chaining.
      */
     @Transactional(readOnly = true)
+
     public Long requireActiveMember(Long userId, Long workspaceId) {
         workspaceService.requireWorkspace(workspaceId);
         workspaceService.requireActiveMembership(userId, workspaceId);

@@ -230,9 +230,9 @@ class ReviewRound2P0IntegrationTests {
                 jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
                                 + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
                 Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "code, name) VALUES (" + wsId + "," + schoolId
+                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
                                 + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + "),'R2C','C')");
+                                + ")," + organizer + ",'R2C','C')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
                                 + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
                                 + "," + sp + ")");
@@ -284,9 +284,9 @@ class ReviewRound2P0IntegrationTests {
                 jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
                                 + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
                 Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "code, name) VALUES (" + wsId + "," + schoolId
+                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
                                 + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + "),'R2S','C')");
+                                + ")," + organizer + ",'R2S','C')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
                                 + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
                                 + "," + sp + ")");
@@ -318,9 +318,9 @@ class ReviewRound2P0IntegrationTests {
                 jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
                                 + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
                 Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "code, name) VALUES (" + wsId + "," + schoolId
+                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
                                 + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + "),'R2A','C')");
+                                + ")," + organizer + ",'R2A','C')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
                                 + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
                                 + "," + sp + ")");

@@ -28,12 +28,15 @@ public class OauthLoginSuccessHandler implements AuthenticationSuccessHandler {
     private final GoogleIdTokenValidator tokenValidator;
     private final OauthIdentityService identityService;
     private final OAuthProperties properties;
+    private final com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation;
 
     public OauthLoginSuccessHandler(GoogleIdTokenValidator tokenValidator,
-            OauthIdentityService identityService, OAuthProperties properties) {
+            OauthIdentityService identityService, OAuthProperties properties,
+            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation) {
         this.tokenValidator = tokenValidator;
         this.identityService = identityService;
         this.properties = properties;
+        this.rosterReconciliation = rosterReconciliation;
     }
 
     @Override
@@ -47,6 +50,14 @@ public class OauthLoginSuccessHandler implements AuthenticationSuccessHandler {
             ValidatedOidcIdentity identity = tokenValidator.validate(
                     oidcUser.getIdToken().getTokenValue(), null);
             User user = identityService.resolveGoogleUser(identity);
+            // Identity-M3: Google asserted email_verified — reconcile pending
+            // roster entries AFTER the login transaction (non-fatal).
+            try {
+                rosterReconciliation.reconcile(user.getId(), user.getEmail());
+            } catch (RuntimeException ex) {
+                log.error("Roster reconciliation failed for Google user {} (non-fatal)",
+                        user.getId(), ex);
+            }
             String code = identityService.mintExchangeCode(user);
             log.info("Google login succeeded for user {}", user.getId());
             response.sendRedirect(appendParam(properties.getFrontendRedirectUrl(), "code", code));

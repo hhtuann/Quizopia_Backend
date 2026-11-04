@@ -64,6 +64,7 @@ public class GoogleLinkService {
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation;
 
     public GoogleLinkService(OauthLinkRequestRepository linkRequestRepository,
             UserRepository userRepository,
@@ -75,8 +76,10 @@ public class GoogleLinkService {
             OAuthProperties properties,
             com.quizopia.backend.security.config.SecurityProperties securityProperties,
             Clock clock,
-            TransactionTemplate tx) {
+            TransactionTemplate tx,
+            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation) {
         this.linkRequestRepository = linkRequestRepository;
+        this.rosterReconciliation = rosterReconciliation;
         this.userRepository = userRepository;
         this.passwordHasher = passwordHasher;
         this.sha256Hasher = sha256Hasher;
@@ -205,6 +208,14 @@ public class GoogleLinkService {
 
         User linked = identityService.linkGoogleIdentityToUser(user, identity);
         log.info("Google identity linked to user {}", linked.getId());
+        // Identity-M3: linking sets email_verified_at for legacy accounts —
+        // reconcile pending roster entries AFTER the link commit (non-fatal).
+        try {
+            rosterReconciliation.reconcile(linked.getId(), linked.getEmail());
+        } catch (RuntimeException ex) {
+            log.error("Roster reconciliation failed for linked user {} (non-fatal)",
+                    linked.getId(), ex);
+        }
         return linked;
     }
 

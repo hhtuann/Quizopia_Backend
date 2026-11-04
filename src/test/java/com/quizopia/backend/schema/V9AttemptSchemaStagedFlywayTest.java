@@ -78,7 +78,7 @@ class V9AttemptSchemaStagedFlywayTest {
                  ResultSet rs = st.executeQuery(
                          "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("19");
+                assertThat(rs.getString(1)).isEqualTo("20");
             }
 
             // 5b. The staged legacy version row was mapped by the V14 backfill.

@@ -9,7 +9,12 @@ public enum ClassroomErrorCode {
     CLASSROOM_CODE_CONFLICT(HttpStatus.CONFLICT, "Classroom code already exists for this owner"),
     CLASSROOM_MEMBER_DUPLICATE(HttpStatus.CONFLICT, "Student is already a member of this classroom"),
     CLASSROOM_TEACHER_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "Teacher profile not found for the current user"),
-    CLASSROOM_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Classroom request validation failed");
+    CLASSROOM_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Classroom request validation failed"),
+
+    // ---------- Identity-M3 roster (issue #15) ----------
+    ROSTER_NOT_FOUND(HttpStatus.NOT_FOUND, "Roster entry not found"),
+    ROSTER_DUPLICATE_PENDING(HttpStatus.CONFLICT, "A pending roster entry already exists for this email in this classroom"),
+    ROSTER_INVALID_STATE(HttpStatus.CONFLICT, "Roster entry is not in a state that allows this operation");
 
     private final HttpStatusCode status;
     private final String defaultMessage;

@@ -32,10 +32,20 @@ public class Classroom {
     @Column(name = "workspace_id", nullable = false)
     private Long workspaceId;
 
-    @Column(name = "school_id", nullable = false)
+    /**
+     * Identity-M3: user-based ownership. EVERY classroom has an owner user —
+     * legacy rows backfilled from their teacher profile, independent
+     * classrooms created directly for the user. Authorization checks use
+     * this column; {@link #ownerTeacherId}/{@link #schoolId} remain for
+     * legacy academic scoping only (NULL for independent classrooms).
+     */
+    @Column(name = "owner_user_id", nullable = false)
+    private Long ownerUserId;
+
+    @Column(name = "school_id")
     private Long schoolId;
 
-    @Column(name = "owner_teacher_id", nullable = false)
+    @Column(name = "owner_teacher_id")
     private Long ownerTeacherId;
 
     @Column(name = "code", nullable = false, length = 30)
@@ -62,10 +72,16 @@ public class Classroom {
     protected Classroom() {
     }
 
-    public Classroom(Long workspaceId, Long schoolId, Long ownerTeacherId, String code, String name) {
+    public Classroom(Long workspaceId, Long schoolId, Long ownerTeacherId,
+            Long ownerUserId, String code, String name) {
         this.workspaceId = requireNonNullId(workspaceId, "workspaceId");
-        this.schoolId = requireNonNullId(schoolId, "schoolId");
-        this.ownerTeacherId = requireNonNullId(ownerTeacherId, "ownerTeacherId");
+        if (schoolId == null && ownerTeacherId != null || schoolId != null && ownerTeacherId == null) {
+            throw new IllegalArgumentException(
+                    "Legacy ownership requires BOTH schoolId and ownerTeacherId");
+        }
+        this.schoolId = schoolId;
+        this.ownerTeacherId = ownerTeacherId;
+        this.ownerUserId = requireNonNullId(ownerUserId, "ownerUserId");
         this.code = requireNonBlank("code", code);
         this.name = requireNonBlank("name", name);
     }
@@ -152,5 +168,28 @@ public class Classroom {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
+    }
+
+    /**
+     * Identity-M3: independent classroom (no school, no teacher profile) —
+     * lives in the owner's PERSONAL workspace.
+     */
+    public static Classroom independent(Long workspaceId, Long ownerUserId, String code, String name) {
+        Classroom classroom = new Classroom(workspaceId, null, null, ownerUserId, code, name);
+        return classroom;
+    }
+
+    /** Legacy constructor companion: school-scoped with the owner user. */
+    public static Classroom legacy(Long workspaceId, Long schoolId, Long ownerTeacherId,
+            Long ownerUserId, String code, String name) {
+        return new Classroom(workspaceId, schoolId, ownerTeacherId, ownerUserId, code, name);
+    }
+
+    public Long getOwnerUserId() {
+        return ownerUserId;
+    }
+
+    public boolean isIndependent() {
+        return schoolId == null && ownerTeacherId == null;
     }
 }

@@ -1,0 +1,406 @@
+package com.quizopia.backend.classroom;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry;
+import com.quizopia.backend.classroom.repository.ClassroomMemberRepository;
+import com.quizopia.backend.classroom.repository.ClassroomRosterEntryRepository;
+import com.quizopia.backend.testsupport.AbstractAuthenticationIntegrationTests;
+import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import com.quizopia.backend.testsupport.TestClockConfig;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+
+/**
+ * Identity-M3 integration tests (System issue #15): independent-teacher
+ * classrooms, pending roster entries, verified-email linking, lifecycle,
+ * authorization, and concurrency. Legacy compatibility lives in
+ * {@code V20IndependentClassroomsMigrationMatrixTest} +
+ * {@code ClassroomIntegrationTests}.
+ */
+@SpringBootTest
+@Import({ PostgresTestContainerConfiguration.class, TestClockConfig.class })
+@ActiveProfiles("test")
+class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationTests {
+
+    @Autowired
+    private ClassroomRosterEntryRepository rosterRepository;
+
+    @Autowired
+    private ClassroomMemberRepository memberRepository;
+
+    @Autowired
+    private com.quizopia.backend.classroom.application.RosterReconciliationService reconciliationService;
+
+    @Autowired
+    private com.quizopia.backend.testsupport.MutableClock clock;
+
+    @org.junit.jupiter.api.BeforeEach
+    void resetSharedClock() {
+        // The context's MutableClock is shared with attempt suites that pin it
+        // to fixed instants; roster flows do real logins, so the clock must be
+        // real before each test (refresh-session CHECK uses created_at).
+        clock.setInstant(java.time.Instant.now());
+    }
+
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    // ---------- helpers ----------
+
+    private static String unique(String base) {
+        return base + java.util.UUID.randomUUID().toString().substring(0, 8);
+    }
+
+    private static String emailFor(String username) {
+        return username + "@example.com";
+    }
+
+    private String teacherWithClassroom(String code) throws Exception {
+        String username = unique("t3");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String token = extractAccessToken(login(username, "Passw0rd!"));
+        mockMvc.perform(post("/api/auth/upgrade-teacher")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        MvcResult created = mockMvc.perform(post("/api/classrooms")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"code\":\"%s\",\"name\":\"Independent %s\"}".formatted(code, code)))
+                .andReturn();
+        assertThat(created.getResponse().getStatus())
+                .as("independent classroom create: %s", created.getResponse().getContentAsString())
+                .isEqualTo(201);
+        return token;
+    }
+
+    private String rosterJson(String fullName, String email, String dob, String parentPhone) {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("fullName", fullName);
+        body.put("email", email);
+        if (dob != null) {
+            body.put("dob", dob);
+        }
+        if (parentPhone != null) {
+            body.put("parentPhone", parentPhone);
+        }
+        body.put("gender", "MALE");
+        body.put("studentNumber", "HS001");
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private JsonNode addRoster(String token, Long classroomId, String fullName,
+            String email, String dob, String parentPhone) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(rosterJson(fullName, email, dob, parentPhone)))
+                .andReturn();
+        assertThat(result.getResponse().getStatus())
+                .as("add roster entry: %s", result.getResponse().getContentAsString())
+                .isEqualTo(201);
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+
+    private Long createIndependentClassroom(String token, String code) throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/classrooms")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"code\":\"%s\",\"name\":\"Class %s\"}".formatted(code, code)))
+                .andReturn();
+        return objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asLong();
+    }
+
+    // ---------- independent classroom ----------
+
+    @Test
+    void selfUpgradedTeacherWithoutProfileCreatesAndListsIndependentClassroom() throws Exception {
+        String token = teacherWithClassroom("IND1");
+
+        // Listed under /my
+        MvcResult my = mockMvc.perform(get("/api/classrooms/my")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(my.getResponse().getStatus()).isEqualTo(200);
+        JsonNode items = objectMapper.readTree(my.getResponse().getContentAsString()).get("items");
+        assertThat(items.size()).isGreaterThanOrEqualTo(1);
+        assertThat(items.get(0).get("code").asText()).isEqualTo("IND1");
+
+        // Editable (name update)
+        Long id = items.get(0).get("id").asLong();
+        MvcResult updated = mockMvc.perform(put("/api/classrooms/" + id)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"name\":\"Renamed\"}"))
+                .andReturn();
+        assertThat(updated.getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void plainStudentCannotCreateClassroom() throws Exception {
+        String username = unique("s3");
+        registerAndVerify(username, emailFor(username), "Passw0rd!");
+        String token = extractAccessToken(login(username, "Passw0rd!"));
+        MvcResult denied = mockMvc.perform(post("/api/classrooms")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"code\":\"X1\",\"name\":\"Nope\"}"))
+                .andReturn();
+        assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+    }
+
+    // ---------- pending roster lifecycle ----------
+
+    @Test
+    void pendingEntryCreatesNoUserAndNoMembership() throws Exception {
+        String token = teacherWithClassroom("ROST1");
+        Long classroomId = firstClassroomId(token);
+        JsonNode entry = addRoster(token, classroomId, "Nguyen Van A",
+                "roster-a@example.com", "2010-05-01", "+84991234567");
+
+        assertThat(entry.get("status").asText()).isEqualTo("PENDING");
+        assertThat(entry.get("userId").isNull()).isTrue();
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        // No fabricated user with that email.
+        MvcResult loginAttempt = login("roster-a@example.com", "anything");
+        assertThat(loginAttempt.getResponse().getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void duplicatePendingEmailRejectedThenAllowedAfterRevoke() throws Exception {
+        String token = teacherWithClassroom("ROST2");
+        Long classroomId = firstClassroomId(token);
+        addRoster(token, classroomId, "Nguyen Van B", "roster-b@example.com", null, null);
+
+        MvcResult dup = mockMvc.perform(post("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content(rosterJson("Nguyen Van B", "roster-b@example.com", null, null)))
+                .andReturn();
+        assertThat(dup.getResponse().getStatus()).isEqualTo(409);
+        assertThat(dup.getResponse().getContentAsString()).contains("ROSTER_DUPLICATE_PENDING");
+
+        // Listed + revocable, then re-invitable.
+        MvcResult list = mockMvc.perform(get("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        JsonNode items = objectMapper.readTree(list.getResponse().getContentAsString()).get("items");
+        assertThat(items.size()).isEqualTo(1);
+        Long entryId = items.get(0).get("id").asLong();
+
+        MvcResult revoked = mockMvc.perform(delete(
+                        "/api/classrooms/" + classroomId + "/roster/" + entryId)
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(revoked.getResponse().getStatus()).isEqualTo(204);
+
+        // Re-invite after revoke succeeds (new PENDING row).
+        JsonNode reinvited = addRoster(token, classroomId, "Nguyen Van B",
+                "roster-b@example.com", null, null);
+        assertThat(reinvited.get("status").asText()).isEqualTo("PENDING");
+    }
+
+    // ---------- verified-email linking ----------
+
+    @Test
+    void registrationWithVerificationAutoLinksPendingEntryExactlyOnce() throws Exception {
+        String teacherToken = teacherWithClassroom("LINK1");
+        Long classroomId = firstClassroomId(teacherToken);
+        addRoster(teacherToken, classroomId, "Tran Thi C", "link-c@example.com",
+                "2009-01-15", "+84988877766");
+
+        // The invited person registers + verifies → auto membership + LINKED.
+        registerAndVerify(unique("linkc"), "link-c@example.com", "Passw0rd!");
+        String learnerToken = extractAccessToken(login("link-c@example.com", "Passw0rd!"));
+
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+        List<ClassroomRosterEntry> linked = rosterRepository.findAllByEmailNormalizedAndStatus(
+                "link-c@example.com", ClassroomRosterEntry.RosterStatus.LINKED);
+        assertThat(linked).hasSize(1);
+        assertThat(linked.get(0).getLinkedAt()).isNotNull();
+        assertThat(linked.get(0).getDobEncrypted()).startsWith("v1:");
+        assertThat(linked.get(0).getParentPhoneEncrypted()).startsWith("v1:");
+
+        // Learner sees the linked entry and can decline (leaves class).
+        MvcResult mine = mockMvc.perform(get("/api/classrooms/roster/my")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode myEntries = objectMapper.readTree(mine.getResponse().getContentAsString());
+        assertThat(myEntries.size()).isEqualTo(1);
+        Long entryId = myEntries.get(0).get("id").asLong();
+
+        MvcResult declined = mockMvc.perform(post("/api/classrooms/roster/" + entryId + "/decline")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        assertThat(declined.getResponse().getStatus()).isEqualTo(204);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        assertThat(rosterRepository.findById(entryId))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.DECLINED));
+    }
+
+    @Test
+    void unverifiedRegistrationDoesNotLink() throws Exception {
+        String teacherToken = teacherWithClassroom("LINK2");
+        Long classroomId = firstClassroomId(teacherToken);
+        addRoster(teacherToken, classroomId, "Pham Van D", "link-d@example.com", null, null);
+
+        // Register WITHOUT verifying the OTP.
+        register(studentRegisterJson(unique("linkd"), "link-d@example.com",
+                "Passw0rd!", "Pham Van D", "+84991234568"));
+
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        assertThat(rosterRepository.findAllByEmailNormalizedAndStatus(
+                "link-d@example.com", ClassroomRosterEntry.RosterStatus.LINKED)).isEmpty();
+
+        // Verify LATER → link happens then.
+        MvcResult verified = verifyEmail("link-d@example.com");
+        assertThat(verified.getResponse().getStatus()).isEqualTo(200);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+    }
+
+    @Test
+    void rosterEntryForAlreadyVerifiedUserLinksImmediately() throws Exception {
+        // Learner exists and is verified FIRST.
+        String username = unique("pre");
+        registerAndVerify(username, emailFor(username), "Passw0rd!");
+        String verifiedEmail = emailFor(username);
+
+        String teacherToken = teacherWithClassroom("LINK3");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode entry = addRoster(teacherToken, classroomId, "Existing Learner",
+                verifiedEmail, null, null);
+        // Response reflects the immediate reconciliation.
+        assertThat(entry.get("status").asText()).isEqualTo("LINKED");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+    }
+
+    // ---------- concurrency ----------
+
+    @Test
+    void concurrentReconciliationsLinkExactlyOnce() throws Exception {
+        String teacherToken = teacherWithClassroom("CONC1");
+        Long classroomId = firstClassroomId(teacherToken);
+        addRoster(teacherToken, classroomId, "Racer E", "conc-e@example.com", null, null);
+
+        MvcResult reg = register(studentRegisterJson(unique("conc_e"), "conc-e@example.com",
+                "Passw0rd!", "Racer E", "+84991234569"));
+        assertThat(reg.getResponse().getStatus()).isEqualTo(201);
+        Long userId = objectMapper.readTree(reg.getResponse().getContentAsString()).get("id").asLong();
+
+        // Mark verified (the OTP auto-link path is covered by other tests).
+        jdbcVerifyUser(userId);
+
+        // Two CONCURRENT reconciliations must converge to exactly one
+        // membership + one LINKED entry (row lock + partial unique state).
+        int threads = 2;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Boolean>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    reconciliationService.reconcile(userId, "conc-e@example.com");
+                    return true;
+                }));
+            }
+            start.countDown();
+            for (Future<Boolean> f : futures) {
+                assertThat(f.get(20, TimeUnit.SECONDS)).isTrue();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+        assertThat(rosterRepository.findAllByEmailNormalizedAndStatus(
+                "conc-e@example.com", ClassroomRosterEntry.RosterStatus.LINKED)).hasSize(1);
+    }
+
+    // ---------- authorization ----------
+
+    @Test
+    void otherTeacherCannotAccessForeignRoster() throws Exception {
+        String ownerToken = teacherWithClassroom("AUTH1");
+        Long classroomId = firstClassroomId(ownerToken);
+        addRoster(ownerToken, classroomId, "Secret F", "auth-f@example.com", null, null);
+
+        String otherToken = teacherWithClassroom("AUTH2");
+        MvcResult list = mockMvc.perform(get("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + otherToken))
+                .andReturn();
+        assertThat(list.getResponse().getStatus()).isEqualTo(403);
+
+        MvcResult addDenied = mockMvc.perform(post("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + otherToken)
+                        .contentType("application/json")
+                        .content(rosterJson("X", "x@example.com", null, null)))
+                .andReturn();
+        assertThat(addDenied.getResponse().getStatus()).isEqualTo(403);
+
+        // A learner cannot list a roster either.
+        String username = unique("l3");
+        registerAndVerify(username, emailFor(username), "Passw0rd!");
+        String learnerToken = extractAccessToken(login(username, "Passw0rd!"));
+        MvcResult learnerList = mockMvc.perform(get("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        assertThat(learnerList.getResponse().getStatus()).isIn(403);
+    }
+
+    @Test
+    void rosterEntryOfAnotherClassroomNotFound() throws Exception {
+        String ownerToken = teacherWithClassroom("AUTH3");
+        Long classroomId = firstClassroomId(ownerToken);
+        JsonNode entry = addRoster(ownerToken, classroomId, "Cross G", "cross-g@example.com", null, null);
+
+        String otherToken = teacherWithClassroom("AUTH4");
+        Long otherClassroom = firstClassroomId(otherToken);
+        MvcResult cross = mockMvc.perform(delete(
+                        "/api/classrooms/" + otherClassroom + "/roster/" + entry.get("id").asLong())
+                        .header("Authorization", "Bearer " + otherToken))
+                .andReturn();
+        assertThat(cross.getResponse().getStatus()).isEqualTo(404);
+    }
+
+    // ---------- utils ----------
+
+    /** Marks the user's email verified directly (OTP path covered elsewhere). */
+    private void jdbcVerifyUser(Long userId) {
+        jdbcTemplate.update("UPDATE users SET email_verified_at = now() WHERE id = ?", userId);
+    }
+
+    private Long firstClassroomId(String token) throws Exception {
+        MvcResult my = mockMvc.perform(get("/api/classrooms/my")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        return objectMapper.readTree(my.getResponse().getContentAsString())
+                .get("items").get(0).get("id").asLong();
+    }
+}

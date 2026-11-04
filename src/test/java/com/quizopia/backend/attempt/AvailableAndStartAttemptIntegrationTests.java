@@ -858,9 +858,10 @@ class AvailableAndStartAttemptIntegrationTests {
          * as a member, and assigns the classroom to the session.
          */
         private void restrictSessionToClass(long session, long teacher, long memberUserId, long memberProfileId) {
-                long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, code, name) "
+                long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, owner_user_id, code, name) "
                                 + "VALUES (quizopia_org_workspace_for_school(" + schoolId + ")," + schoolId + ","
-                                + teacher + ",'CLS" + (++clsSeq) + "','C')");
+                                + teacher + ",(SELECT user_id FROM teacher_profiles WHERE id=" + teacher
+                                + "),'CLS" + (++clsSeq) + "','C')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id) "
                                 + "VALUES (" + cls + "," + memberUserId + "," + schoolId + "," + memberProfileId + ")");
                 jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
