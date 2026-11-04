@@ -176,38 +176,37 @@ public class EmailVerificationService {
 
     /** Atomic consume + email-proof write under the challenge row lock. */
     private void consumeChallenge(User user, EmailVerificationChallenge challenge, Instant now) {
-        try {
-            tx.executeWithoutResult(status -> {
-                EmailVerificationChallenge locked = challengeRepository
-                        .findPendingForUpdate(user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                        .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OTP_NOT_FOUND));
-                if (!locked.getId().equals(challenge.getId())) {
-                    // Superseded between the read and the lock.
-                    throw new AuthenticationException(AuthErrorCode.AUTH_OTP_NOT_FOUND);
-                }
-                if (locked.isExpired(Instant.now(clock))) {
-                    throw new AuthenticationException(AuthErrorCode.AUTH_OTP_EXPIRED);
-                }
-                locked.markConsumed(Instant.now(clock));
-                challengeRepository.saveAndFlush(locked);
-                if (user.getEmailVerifiedAt() == null) {
-                    user.setEmailVerifiedAt(Instant.now(clock));
-                    userRepository.saveAndFlush(user);
-                }
-            });
-            log.info("Email verified for user {}", user.getId());
-        } catch (org.springframework.dao.OptimisticLockingFailureException race) {
-            // Two concurrent verifications of the same OTP: the loser sees the
-            // winner's committed CONSUMED row on re-read — a success.
-            EmailVerificationChallenge settled = challengeRepository
-                    .findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
-                            user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                    .orElse(challenge);
-            if (settled.getStatus() == EmailChallengeStatus.CONSUMED) {
-                return;
+        // Outcome is decided INSIDE the transaction (row lock) but converted
+        // to an error only AFTER it returns: throwing inside a template
+        // callback marks the (possibly joined) transaction rollback-only,
+        // which would poison any surrounding transaction — each HTTP request
+        // has its own in production, but tests share one.
+        Boolean consumed = tx.execute(status -> {
+            EmailVerificationChallenge locked = challengeRepository
+                    .findPendingForUpdate(user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
+                    .orElse(null);
+            if (locked == null || !locked.getId().equals(challenge.getId())) {
+                return Boolean.FALSE; // superseded in-flight → NOT_FOUND after commit decision
             }
-            throw race;
+            if (locked.isExpired(Instant.now(clock))) {
+                return null; // expired → EXPIRED error after the transaction
+            }
+            locked.markConsumed(Instant.now(clock));
+            challengeRepository.saveAndFlush(locked);
+            if (user.getEmailVerifiedAt() == null) {
+                user.setEmailVerifiedAt(Instant.now(clock));
+                userRepository.saveAndFlush(user);
+            }
+            return Boolean.TRUE;
+        });
+        if (Boolean.TRUE.equals(consumed)) {
+            log.info("Email verified for user {}", user.getId());
+            return;
         }
+        if (consumed == null) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_OTP_EXPIRED);
+        }
+        throw new AuthenticationException(AuthErrorCode.AUTH_OTP_NOT_FOUND);
     }
 
     /**
