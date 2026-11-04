@@ -33,9 +33,32 @@ class LegacyEmailTrustIntegrationTests extends AbstractAuthenticationIntegration
 
     private static final String LEGACY_PASSWORD = "LegacyPassw0rd!";
 
+    @Autowired
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    /**
+     * Seeds the legacy account in a REQUIRES_NEW transaction so the row is
+     * COMMITTED immediately — the async resend worker runs on its own
+     * connection and only sees committed state.
+     */
+    private String seedLegacyUserCommitted(String username) {
+        String email = username + "@legacy.example.com";
+        org.springframework.transaction.support.TransactionTemplate requiresNew =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        requiresNew.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        requiresNew.executeWithoutResult(tx -> seedLegacyUserRow(username, email));
+        return email;
+    }
+
     /** Inserts a Phase-1-style legacy account exactly like pre-V18 data. */
     private String seedLegacyUser(String username) {
         String email = username + "@legacy.example.com";
+        seedLegacyUserRow(username, email);
+        return email;
+    }
+
+    private void seedLegacyUserRow(String username, String email) {
         entityManager.clear();
         //noinspection SqlInsertValues
         entityManager.createNativeQuery("""
@@ -48,7 +71,6 @@ class LegacyEmailTrustIntegrationTests extends AbstractAuthenticationIntegration
                 .setParameter("e", email)
                 .setParameter("h", passwordHasher.hash(LEGACY_PASSWORD))
                 .executeUpdate();
-        return email;
     }
 
     @Test
@@ -73,7 +95,7 @@ class LegacyEmailTrustIntegrationTests extends AbstractAuthenticationIntegration
     @Test
     void legacyAccountEmailStaysUnprovenUntilRealOtp() throws Exception {
         String username = "legacy-otp-" + UUID.randomUUID().toString().substring(0, 8);
-        String email = seedLegacyUser(username);
+        String email = seedLegacyUserCommitted(username);
 
         entityManager.clear();
         Object verifiedAt = entityManager.createNativeQuery(

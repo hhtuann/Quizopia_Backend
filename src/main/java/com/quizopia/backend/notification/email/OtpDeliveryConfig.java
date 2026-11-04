@@ -1,49 +1,55 @@
 package com.quizopia.backend.notification.email;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Background executor for OTP mail dispatch (review R3-M1-03).
+ * Bounded background worker for the OTP RESEND flow (reviews R3-M1-03 /
+ * round-4). The public resend endpoint performs NO account-specific work: it
+ * runs one constant HMAC and enqueues the request here. This executor is the
+ * single bounded intake/processing path for resend.
  *
- * <p>The RESEND endpoint is enumeration-sensitive: if the eligible path
- * performed synchronous SMTP while unknown/verified paths returned
- * immediately, response LATENCY would leak email state despite identical
- * bodies. Resend delivery therefore runs on this small background executor —
- * the HTTP path for every state performs only short, similar work (an HMAC
- * comparison and at most one small transaction), and the dominating SMTP
- * latency never sits on the request path. Registration keeps synchronous
- * delivery: its response reports {@code emailSent}, and it is a
- * self-inflicted call (the caller just proved the state by registering).
+ * <h2>Bounded capacity & rejection (documented tradeoff)</h2>
+ * The queue is bounded ({@code quizopia.email-verification.resend-intake-capacity},
+ * default 200). When the queue is full the intake is DROPPED with a WARN log
+ * (no PII) and a metric-friendly message; the HTTP response stays uniform
+ * 200. This is deliberate: an unbounded queue would allow memory growth under
+ * public abuse, and blocking the HTTP thread would reintroduce state-dependent
+ * latency. Recovery: the resend endpoint IS the recovery flow — a user whose
+ * request was dropped simply retries after the cooldown window. Mail delivery
+ * itself remains best-effort with the same recovery semantics (challenge row
+ * exists, {@code delivered=false}; a later resend issues a fresh challenge).
  *
- * <p>Delivery remains best-effort with the resend endpoint as the recovery
- * flow; a lost task is equivalent to an SMTP outage (challenge exists,
- * undelivered, user may resend after the cooldown).
+ * <h2>Shutdown</h2>
+ * {@code shutdown()} + up to 30s drain on context close; tasks not drained
+ * are lost with the same recovery semantics as an SMTP outage. Tasks are not
+ * durable across restarts (documented; a restart mid-cooldown costs the user
+ * one resend — the challenge row and cooldown state live in PostgreSQL and
+ * survive).
  */
 @Configuration
 public class OtpDeliveryConfig {
 
-    private static final int POOL_SIZE = 2;
+    private static final int WORKER_THREADS = 2;
 
     @Bean(destroyMethod = "shutdown")
-    public ExecutorService otpDeliveryExecutor() {
-        ExecutorService executor = Executors.newFixedThreadPool(POOL_SIZE, runnable -> {
-            Thread thread = new Thread(runnable, "otp-mail-delivery");
-            thread.setDaemon(true);
-            return thread;
-        });
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            executor.shutdown();
-            try {
-                executor.awaitTermination(5, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-        }));
-        return executor;
+    public ExecutorService otpDeliveryExecutor(
+            @Value("${quizopia.email-verification.resend-intake-capacity:200}")
+            int intakeCapacity) {
+        return new ThreadPoolExecutor(
+                WORKER_THREADS, WORKER_THREADS,
+                0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(Math.max(1, intakeCapacity)),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "otp-resend-worker");
+                    thread.setDaemon(true);
+                    return thread;
+                });
     }
 }
