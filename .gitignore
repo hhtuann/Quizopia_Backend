@@ -32,3 +32,6 @@ build/
 ### VS Code ###
 .vscode/
 *.log
+
+# Runtime logs never belong in git.
+logs/

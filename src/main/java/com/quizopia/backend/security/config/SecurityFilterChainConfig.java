@@ -132,6 +132,10 @@ public class SecurityFilterChainConfig {
                         // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
                         .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        // Identity-M2: teacher self-upgrade — authenticated only;
+                        // ACTIVE + verified-email + TEACHER-only grant enforced in
+                        // the service (deny-by-default otherwise).
+                        .requestMatchers(HttpMethod.POST, "/api/auth/upgrade-teacher").authenticated()
                         // Review M1-06: linking start requires an authenticated JWT plus the
                         // account password (re-authentication) at the service layer.
                         .requestMatchers(HttpMethod.POST, "/api/auth/oauth/google/link").authenticated()

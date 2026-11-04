@@ -62,6 +62,7 @@ public class AuthenticationController {
     private final EmailVerificationService emailVerificationService;
     private final OauthExchangeService oauthExchangeService;
     private final OAuthProperties oauthProperties;
+    private final com.quizopia.backend.authentication.application.TeacherSelfUpgradeService teacherSelfUpgradeService;
     private final com.quizopia.backend.identity.repository.UserRepository userRepository;
     private final com.quizopia.backend.authentication.oauth.GoogleLinkService googleLinkService;
 
@@ -74,6 +75,7 @@ public class AuthenticationController {
                                     EmailVerificationService emailVerificationService,
                                     OauthExchangeService oauthExchangeService,
                                     OAuthProperties oauthProperties,
+                                    com.quizopia.backend.authentication.application.TeacherSelfUpgradeService teacherSelfUpgradeService,
                                     com.quizopia.backend.identity.repository.UserRepository userRepository,
                                     com.quizopia.backend.authentication.oauth.GoogleLinkService googleLinkService) {
         this.registrationService = registrationService;
@@ -85,6 +87,7 @@ public class AuthenticationController {
         this.emailVerificationService = emailVerificationService;
         this.oauthExchangeService = oauthExchangeService;
         this.oauthProperties = oauthProperties;
+        this.teacherSelfUpgradeService = teacherSelfUpgradeService;
         this.userRepository = userRepository;
         this.googleLinkService = googleLinkService;
     }
@@ -123,6 +126,23 @@ public class AuthenticationController {
     @GetMapping("/providers")
     public AuthProvidersResponse providers() {
         return new AuthProvidersResponse(oauthProperties.getGoogle().isConfigured());
+    }
+
+    /**
+     * Identity-M2: authenticated self-service TEACHER grant. Accepts no body
+     * — no role can be chosen; only TEACHER is ever granted. Idempotent;
+     * effective immediately (authorities are DB-loaded per request), so no
+     * logout/login or token reissue is needed.
+     */
+    @PostMapping("/upgrade-teacher")
+    public ResponseEntity<Map<String, Object>> upgradeTeacher(
+            @AuthenticationPrincipal Jwt jwt,
+            HttpServletRequest httpRequest) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        ClientContext client = clientContext(httpRequest);
+        java.util.List<String> roles = teacherSelfUpgradeService.upgradeToTeacher(
+                userId, client.remoteAddress(), client.userAgent());
+        return ResponseEntity.ok(Map.of("roles", roles));
     }
 
     /**
