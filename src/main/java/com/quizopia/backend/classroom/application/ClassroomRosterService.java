@@ -147,8 +147,17 @@ public class ClassroomRosterService {
     @org.springframework.transaction.annotation.Transactional
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        String email = requireEntry(classroomId, entryId).getEmailNormalized();
-        ClassroomRosterEntry locked = lockEntry(classroomId, entryId, email);
+        // Existence pre-check via SCALAR read — no managed entity that could
+        // go stale before the locking read (review R2 P1: lock on first load).
+        rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
+        ClassroomRosterEntry locked = tx.execute(status -> rosterRepository
+                .findByIdAndClassroomIdForUpdate(entryId, classroomId)
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND)));
+        if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.REVOKED
+                || locked.getStatus() == ClassroomRosterEntry.RosterStatus.DECLINED) {
+            throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
+        }
         if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
             // Remove the user-based membership first (same transaction).
             memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
@@ -156,18 +165,6 @@ public class ClassroomRosterService {
         }
         locked.revoke(Instant.now(clock));
         rosterRepository.saveAndFlush(locked);
-    }
-
-    /** PESSIMISTIC_WRITE on the entry in its CURRENT (non-terminal) state. */
-    private ClassroomRosterEntry lockEntry(Long classroomId, Long entryId, String email) {
-        ClassroomRosterEntry entry = tx.execute(status -> rosterRepository
-                .findByIdAndClassroomIdForUpdate(entryId, classroomId)
-                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND)));
-        if (entry.getStatus() == ClassroomRosterEntry.RosterStatus.REVOKED
-                || entry.getStatus() == ClassroomRosterEntry.RosterStatus.DECLINED) {
-            throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
-        }
-        return entry;
     }
 
     private void notifyRemovedMember(ClassroomRosterEntry entry) {
@@ -199,7 +196,14 @@ public class ClassroomRosterService {
      */
     @org.springframework.transaction.annotation.Transactional
     public void declineEntry(Long userId, Long entryId) {
-        ClassroomRosterEntry entry = rosterRepository.findById(entryId)
+        // Review R2 P1: user lock FIRST (shared ordering with accept and
+        // reconciliation) so a concurrent auto-link for the same learner
+        // cannot interleave with this opt-out.
+        classroomService.lockUserRow(userId);
+        ClassroomRosterEntry entry = rosterRepository.findByIdAndClassroomIdForUpdate(
+                        entryId, rosterRepository.findClassroomIdById(entryId)
+                                .orElseThrow(() -> new ClassroomException(
+                                        ClassroomErrorCode.ROSTER_NOT_FOUND)))
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
         if (entry.getStatus() != ClassroomRosterEntry.RosterStatus.LINKED
                 || !userId.equals(entry.getUserId())) {
@@ -220,13 +224,15 @@ public class ClassroomRosterService {
      */
     @org.springframework.transaction.annotation.Transactional
     public RosterEntryResponse acceptEntry(Long userId, Long entryId) {
-        ClassroomRosterEntry entry = tx.execute(status -> {
+        // Review R2 P1: COMMON lock ordering (user row FIRST, entry second)
+        // shared with decline + reconciliation; the entry is loaded ONLY via
+        // the locking query so its state is committed-fresh.
+        classroomService.lockUserRow(userId);
+        RosterEntryResponse result = tx.execute(status -> {
+            Long classroomId = rosterRepository.findClassroomIdById(entryId)
+                    .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
             ClassroomRosterEntry locked = rosterRepository
-                    .findByIdAndClassroomIdForUpdate(entryId,
-                            rosterRepository.findById(entryId)
-                                    .orElseThrow(() -> new ClassroomException(
-                                            ClassroomErrorCode.ROSTER_NOT_FOUND))
-                                    .getClassroomId())
+                    .findByIdAndClassroomIdForUpdate(entryId, classroomId)
                     .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
             if (locked.getStatus() != ClassroomRosterEntry.RosterStatus.PENDING) {
                 throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
@@ -239,12 +245,12 @@ public class ClassroomRosterService {
             if (user == null) {
                 throw new ClassroomException(ClassroomErrorCode.ROSTER_ACCESS_DENIED);
             }
-            memberRepository.insertMembershipIfAbsent(locked.getClassroomId(), userId);
+            memberRepository.insertMembershipIfAbsent(classroomId, userId);
             locked.linkTo(userId, Instant.now(clock));
             rosterRepository.saveAndFlush(locked);
-            return locked;
+            return toResponse(locked, null);
         });
-        return toResponse(entry, null);
+        return result;
     }
 
     /**
@@ -292,17 +298,19 @@ public class ClassroomRosterService {
                     : candidate.getClassroom().getId();
             record LinkOutcome(boolean linked, String classroomName) {}
             LinkOutcome outcome = tx.execute(status -> {
+                // Review R2 P1: user-row lock FIRST (same ordering as decline/
+                // accept) — a concurrent decline of an older entry for this
+                // (classroom, email) commits-or-blocks BEFORE this history
+                // check, so a completed opt-out can never be raced into a link.
+                com.quizopia.backend.identity.domain.model.User proof =
+                        classroomService.findUserByIdWithVerifiedEmail(userId, canonical);
+                if (proof == null) {
+                    return new LinkOutcome(false, null);
+                }
                 ClassroomRosterEntry locked = rosterRepository
                         .findPendingForUpdate(classroomId, canonical).orElse(null);
                 if (locked == null) {
                     return new LinkOutcome(false, null); // concurrently linked/revoked
-                }
-                // Defense in depth: re-check the verified proof INSIDE the
-                // transaction — an unverified email can never link.
-                com.quizopia.backend.identity.domain.model.User user =
-                        classroomService.findUserByIdWithVerifiedEmail(userId, canonical);
-                if (user == null) {
-                    return new LinkOutcome(false, null);
                 }
                 Classroom classroom = classroomRepository.findById(classroomId).orElse(null);
                 if (classroom == null) {

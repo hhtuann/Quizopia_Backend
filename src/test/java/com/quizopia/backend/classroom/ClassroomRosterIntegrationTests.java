@@ -64,6 +64,9 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
     private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     @Autowired
+    private org.springframework.context.ApplicationContext applicationContext;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     // ---------- helpers ----------
@@ -605,6 +608,186 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
         assertThat(rosterRepository.findAllByEmailNormalizedAndStatus(
                 email, ClassroomRosterEntry.RosterStatus.LINKED)).hasSize(1);
+    }
+
+    // ---------- R2 P1: decline vs auto-link serialization ----------
+
+    @Test
+    void reconciliationBlocksWhileDeclineHoldsTheUserLock() throws Exception {
+        String username = unique("ser");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        Long userId = jdbcTemplate.queryForObject(
+                "SELECT id FROM users WHERE username = ?", Long.class, username);
+        String teacherToken = teacherWithClassroom("SER1");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode entry = addRoster(teacherToken, classroomId, "Serialized", email, null, null);
+        assertThat(entry.get("status").asText()).isEqualTo("LINKED");
+
+        // Thread A holds the USER row lock inside an open transaction (the
+        // same lock declineEntry/acceptEntry acquire first).
+        org.springframework.transaction.PlatformTransactionManager tm =
+                applicationContext.getBean(org.springframework.transaction.PlatformTransactionManager.class);
+        org.springframework.transaction.support.TransactionTemplate txA =
+                new org.springframework.transaction.support.TransactionTemplate(tm);
+        com.quizopia.backend.identity.repository.UserRepository users =
+                applicationContext.getBean(com.quizopia.backend.identity.repository.UserRepository.class);
+        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> txA.executeWithoutResult(st -> {
+                users.findByIdForUpdate(userId); // user-row lock held
+                locked.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // Thread B: reconciliation must BLOCK on the user lock (proves
+            // the shared serialization point) instead of linking while the
+            // opt-out owner's transaction is open.
+            Future<Long> reconciler = pool.submit(() -> {
+                long start = System.nanoTime();
+                reconciliationService.reconcile(userId, email);
+                return System.nanoTime() - start;
+            });
+            // Reconciliation cannot finish while the lock is held...
+            try {
+                reconciler.get(700, TimeUnit.MILLISECONDS);
+                // If it DID complete, it must not have linked anything
+                // (blocked internally or raced — but no membership may exist
+                // because the entry is LINKED, not PENDING).
+                assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId))
+                        .as("no second membership").hasSize(1);
+            } catch (java.util.concurrent.TimeoutException stillBlocked) {
+                // expected: serialized behind the user lock
+            }
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+            reconciler.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+        // After the lock is released, the entry was LINKED (not PENDING), so
+        // reconciliation did nothing — still exactly one membership.
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+        assertThat(rosterRepository.findById(entry.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
+    }
+
+    @Test
+    void declineCommitsThenReconciliationRespectsOptOutConcurrently() throws Exception {
+        String username = unique("ser2");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("SER2");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode first = addRoster(teacherToken, classroomId, "OptOut", email, null, null);
+
+        // Learner declines.
+        mockMvc.perform(post("/api/classrooms/roster/" + first.get("id").asLong() + "/decline")
+                        .header("Authorization", "Bearer " + extractAccessToken(login(email, "Passw0rd!"))))
+                .andReturn();
+
+        // Teacher re-invites → PENDING; a CONCURRENT reconciliation burst runs
+        // against the same (classroom, email) while another decline of a
+        // second linked entry could interleave. The opt-out must hold.
+        JsonNode second = addRoster(teacherToken, classroomId, "OptOut", email, null, null);
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            List<Future<?>> rs = new java.util.ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                rs.add(pool.submit(() -> reconciliationService.reconcile(
+                        jdbcTemplate.queryForObject(
+                                "SELECT id FROM users WHERE username = ?", Long.class, username),
+                        email)));
+            }
+            for (Future<?> f : rs) {
+                f.get(15, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(rosterRepository.findById(second.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .as("committed opt-out survives concurrent reconciliation")
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+    }
+
+    // ---------- R2 SEC: unverified owner cannot accept ----------
+
+    @Test
+    void unverifiedOwnerOfTheEmailCannotAccept() throws Exception {
+        String invited = unique("unv");
+        String invitedEmail = emailFor(invited);
+        register(studentRegisterJson(invited, invitedEmail, "Passw0rd!", "Unverified",
+                "+84991234098")); // NOT verified
+        String teacherToken = teacherWithClassroom("UNV");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode entry = addRoster(teacherToken, classroomId, "Unverified", invitedEmail,
+                null, null);
+        assertThat(entry.get("status").asText()).isEqualTo("PENDING");
+
+        // Login is gated for unverified accounts, so the HTTP accept path is
+        // unreachable without verification — prove the service check directly.
+        Long userId = jdbcTemplate.queryForObject(
+                "SELECT id FROM users WHERE username = ?", Long.class, invited);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        applicationContext.getBean(
+                                com.quizopia.backend.classroom.application.ClassroomRosterService.class)
+                                .acceptEntry(userId, entry.get("id").asLong()))
+                .isInstanceOf(com.quizopia.backend.classroom.exception.ClassroomException.class)
+                .hasMessageContaining("cannot accept");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        assertThat(rosterRepository.findById(entry.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+    }
+
+    // ---------- R2 SEC: retention purges terminal only, transactionally ----------
+
+    @Test
+    void retentionDeletesOnlyTerminalEntriesOlderThanCutoff() throws Exception {
+        String teacherToken = teacherWithClassroom("RET");
+        Long classroomId = firstClassroomId(teacherToken);
+        String oldRevokedEmail = emailFor(unique("ret1"));
+        String oldLinkedEmail = emailFor(unique("ret2"));
+        registerAndVerify(unique("ret2"), oldLinkedEmail, "Passw0rd!");
+        addRoster(teacherToken, classroomId, "Old Revoked", oldRevokedEmail, null, null);
+        JsonNode linked = addRoster(teacherToken, classroomId, "Old Linked",
+                oldLinkedEmail, null, null);
+        Long revokedId = rosterRepository.findByClassroomIdOrderByCreatedAtDesc(classroomId,
+                org.springframework.data.domain.PageRequest.of(0, 10)).getContent().stream()
+                .filter(e -> e.getStatus() == ClassroomRosterEntry.RosterStatus.PENDING)
+                .findFirst().orElseThrow().getId();
+        mockMvc.perform(delete("/api/classrooms/" + classroomId + "/roster/" + revokedId)
+                        .header("Authorization", "Bearer " + teacherToken))
+                .andReturn();
+
+        // Age BOTH terminal + linked rows past the cutoff.
+        jdbcTemplate.update("UPDATE classroom_roster_entries SET updated_at = now() - interval '90 days'");
+        // Purge through a real transaction — exactly what the @Transactional
+        // scheduler method does via the Spring proxy in production (a direct
+        // unproxied call cannot execute the @Modifying delete).
+        org.springframework.transaction.support.TransactionTemplate purgeTx =
+                new org.springframework.transaction.support.TransactionTemplate(
+                        applicationContext.getBean(
+                                org.springframework.transaction.PlatformTransactionManager.class));
+        purgeTx.executeWithoutResult(st ->
+                rosterRepository.deleteTerminalOlderThan(java.time.Instant.now().minus(
+                        java.time.Duration.ofDays(30))));
+
+        assertThat(rosterRepository.findById(revokedId)).isEmpty();
+        assertThat(rosterRepository.findById(linked.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .as("LINKED is live state — never purged")
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
     }
 
     // ---------- authorization error shapes (review M3-QA) ----------

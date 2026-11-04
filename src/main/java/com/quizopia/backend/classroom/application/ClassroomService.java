@@ -418,6 +418,17 @@ public class ClassroomService {
         return requireOwnedClassroom(userId, classroomId);
     }
 
+    /**
+     * Review R2 P1 serialization: PESSIMISTIC_WRITE on the user row — the
+     * COMMON lock ordering point (user → entry) shared by decline, accept and
+     * reconciliation so a learner's committed opt-out can never be raced by
+     * an automatic link.
+     */
+    public void lockUserRow(Long userId) {
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED));
+    }
+
     /** Identity-M3: the caller's user if the email is verified, else null. */
     public com.quizopia.backend.identity.domain.model.User findVerifiedUserById(Long userId) {
         return userRepository.findById(userId)
