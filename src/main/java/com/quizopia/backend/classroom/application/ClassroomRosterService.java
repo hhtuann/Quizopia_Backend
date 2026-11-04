@@ -147,10 +147,22 @@ public class ClassroomRosterService {
     @org.springframework.transaction.annotation.Transactional
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        // Existence pre-check via SCALAR read — no managed entity that could
+        // Existence pre-checks via SCALAR reads — no managed entity that could
         // go stale before the locking read (review R2 P1: lock on first load).
         rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
+        // Review R3 deadlock P1: a LINKED entry's removal inserts a
+        // notification (FK on users) which takes a key-share lock on the
+        // learner row — the SAME row decline/accept/reconcile lock FOR UPDATE.
+        // Acquire the user lock FIRST (scalar userId read; null for PENDING,
+        // which never notifies and needs no user lock) so every LINKED-row
+        // mutation follows the shared user → entry ordering and no cycle can
+        // form with a concurrent decline.
+        Long linkedUserId = rosterRepository.findUserIdByIdAndClassroomId(entryId, classroomId)
+                .orElse(null);
+        if (linkedUserId != null) {
+            classroomService.lockUserRow(linkedUserId);
+        }
         ClassroomRosterEntry locked = tx.execute(status -> rosterRepository
                 .findByIdAndClassroomIdForUpdate(entryId, classroomId)
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND)));
