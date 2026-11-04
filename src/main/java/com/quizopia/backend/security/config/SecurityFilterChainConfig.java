@@ -124,6 +124,7 @@ public class SecurityFilterChainConfig {
                                 "/api/auth/oauth/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 "/api/auth/providers",
+                                "/api/auth/oauth/google/link/callback",
                                 "/actuator/health",
                                 "/actuator/health/**").permitAll()
                         // WebSocket handshake upgrade: permitAll is only the HTTP upgrade; the STOMP
@@ -131,6 +132,9 @@ public class SecurityFilterChainConfig {
                         // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
                         .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        // Review M1-06: linking start requires an authenticated JWT plus the
+                        // account password (re-authentication) at the service layer.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/oauth/google/link").authenticated()
                         // Workspace API (active-workspace switcher). Membership checks are
                         // enforced in WorkspaceService (deny-by-default); this rule only lets
                         // an authenticated JWT reach the controller (default is denyAll).

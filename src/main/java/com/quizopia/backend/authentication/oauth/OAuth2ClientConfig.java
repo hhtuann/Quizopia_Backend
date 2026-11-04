@@ -53,7 +53,7 @@ public class OAuth2ClientConfig {
 
     @Bean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
-            "'${quizopia.oauth.google.client-id:}' != ''")
+            "'${quizopia.oauth.google.client-id:}' != '' and '${quizopia.oauth.google.client-secret:}' != ''")
     public ClientRegistrationRepository googleClientRegistrationRepository() {
         OAuthProperties.Google google = properties.getGoogle();
         ClientRegistration googleRegistration = ClientRegistration.withRegistrationId("google")
@@ -101,5 +101,38 @@ public class OAuth2ClientConfig {
         } catch (MalformedURLException ex) {
             throw new IllegalStateException("Invalid quizopia.oauth.google.jwks-uri", ex);
         }
+    }
+
+    /**
+     * Fail-fast configuration guard (review M1-07): the browser-facing OAuth
+     * redirects (login + linking) may only target an origin the deployment
+     * already trusts for CORS. A misconfigured redirect URL must abort
+     * startup instead of silently bouncing users (or one-time codes) to an
+     * untrusted origin.
+     */
+    @Bean
+    public String oauthRedirectOriginGuard(
+            com.quizopia.backend.security.config.SecurityProperties securityProperties) {
+        String redirectUrl = properties.getFrontendRedirectUrl();
+        try {
+            String origin = new URL(redirectUrl).toURI().resolve("/").toString();
+            String originNoSlash = origin.endsWith("/")
+                    ? origin.substring(0, origin.length() - 1) : origin;
+            boolean trusted = securityProperties.getCors().getAllowedOrigins().stream()
+                    .anyMatch(allowed -> allowed.equalsIgnoreCase(originNoSlash)
+                            || allowed.equalsIgnoreCase(origin));
+            if (!trusted) {
+                throw new IllegalStateException(
+                        "quizopia.oauth.frontend-redirect-url origin '" + originNoSlash
+                                + "' is not in quizopia.security.cors.allowed-origins; refusing to start");
+            }
+        } catch (IllegalStateException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "quizopia.oauth.frontend-redirect-url is not a valid absolute URL: "
+                            + redirectUrl, ex);
+        }
+        return redirectUrl;
     }
 }

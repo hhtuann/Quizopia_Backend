@@ -285,6 +285,9 @@ public class DemoDataSeeder implements ApplicationRunner {
             User u = new User(username, username + "@demo.quizopia.local", hash, displayName);
             // Operator-seeded demo accounts are trusted: verified by seeding.
             u.setEmailVerifiedAt(java.time.Instant.now());
+            // Demo accounts are operator-seeded and password-authenticated:
+            // no OTP gate, and seeding itself asserts the address.
+            u.setLoginRequiresEmailVerification(Boolean.FALSE);
             return userRepository.saveAndFlush(u);
         });
         // Role assignment (idempotent via find — user_roles PK is (user_id, role_id)).

@@ -29,17 +29,20 @@ public class CurrentUserService {
     private final RolePermissionRepository rolePermissionRepository;
     private final SensitiveDataEncryptor encryptor;
     private final Clock clock;
+    private final com.quizopia.backend.identity.repository.ExternalIdentityRepository externalIdentityRepository;
 
     public CurrentUserService(UserRepository userRepository,
                               UserRoleRepository userRoleRepository,
                               RolePermissionRepository rolePermissionRepository,
                               SensitiveDataEncryptor encryptor,
-                              Clock clock) {
+                              Clock clock,
+                              com.quizopia.backend.identity.repository.ExternalIdentityRepository externalIdentityRepository) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
         this.encryptor = encryptor;
         this.clock = clock;
+        this.externalIdentityRepository = externalIdentityRepository;
     }
 
     @Transactional(readOnly = true)
@@ -59,6 +62,8 @@ public class CurrentUserService {
                 decryptOrNull(user.getPhoneEncrypted()),
                 user.getStatus(),
                 user.getEmailVerifiedAt() != null,
+                externalIdentityRepository.existsByUserIdAndProvider(
+                        userId, com.quizopia.backend.identity.domain.model.ExternalProvider.GOOGLE),
                 roles,
                 permissions);
     }

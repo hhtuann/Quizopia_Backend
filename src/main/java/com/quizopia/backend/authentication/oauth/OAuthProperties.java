@@ -84,8 +84,16 @@ public class OAuthProperties {
             this.redirectBaseUri = redirectBaseUri;
         }
 
+        /**
+         * Fail closed on PARTIAL configuration (review M1-07): a client id
+         * without a secret cannot complete a confidential authorization-code
+         * exchange, so the provider is only "configured" when BOTH are set.
+         * The providers endpoint, the login chain and linking all gate on
+         * this — a half-configured deployment exposes no broken flow.
+         */
         public boolean isConfigured() {
-            return clientId != null && !clientId.isBlank();
+            return clientId != null && !clientId.isBlank()
+                    && clientSecret != null && !clientSecret.isBlank();
         }
     }
 

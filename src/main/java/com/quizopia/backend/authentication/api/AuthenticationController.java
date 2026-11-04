@@ -9,6 +9,7 @@ import com.quizopia.backend.authentication.application.RegistrationService;
 import com.quizopia.backend.authentication.application.SessionIssuanceService;
 import com.quizopia.backend.authentication.dto.AuthProvidersResponse;
 import com.quizopia.backend.authentication.dto.ClientContext;
+import com.quizopia.backend.authentication.dto.LinkGoogleRequest;
 import com.quizopia.backend.authentication.dto.CurrentUserResponse;
 import com.quizopia.backend.authentication.dto.LoginRequest;
 import com.quizopia.backend.authentication.dto.OauthExchangeRequest;
@@ -61,6 +62,8 @@ public class AuthenticationController {
     private final EmailVerificationService emailVerificationService;
     private final OauthExchangeService oauthExchangeService;
     private final OAuthProperties oauthProperties;
+    private final com.quizopia.backend.identity.repository.UserRepository userRepository;
+    private final com.quizopia.backend.authentication.oauth.GoogleLinkService googleLinkService;
 
     public AuthenticationController(RegistrationService registrationService,
                                     LoginService loginService,
@@ -70,7 +73,9 @@ public class AuthenticationController {
                                     RefreshCookieService refreshCookieService,
                                     EmailVerificationService emailVerificationService,
                                     OauthExchangeService oauthExchangeService,
-                                    OAuthProperties oauthProperties) {
+                                    OAuthProperties oauthProperties,
+                                    com.quizopia.backend.identity.repository.UserRepository userRepository,
+                                    com.quizopia.backend.authentication.oauth.GoogleLinkService googleLinkService) {
         this.registrationService = registrationService;
         this.loginService = loginService;
         this.refreshService = refreshService;
@@ -80,6 +85,8 @@ public class AuthenticationController {
         this.emailVerificationService = emailVerificationService;
         this.oauthExchangeService = oauthExchangeService;
         this.oauthProperties = oauthProperties;
+        this.userRepository = userRepository;
+        this.googleLinkService = googleLinkService;
     }
 
     @PostMapping("/register")
@@ -117,6 +124,51 @@ public class AuthenticationController {
     public AuthProvidersResponse providers() {
         return new AuthProvidersResponse(oauthProperties.getGoogle().isConfigured());
     }
+
+    /**
+     * Review M1-06: starts the authenticated Google LINKING flow. Requires a
+     * valid JWT AND the account password (re-authentication); the response is
+     * the browser-facing Google authorization URL bound (state/PKCE/nonce)
+     * to this exact account.
+     */
+    @PostMapping("/oauth/google/link")
+    public ResponseEntity<Map<String, Object>> startGoogleLink(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody LinkGoogleRequest request) {
+        if (!oauthProperties.getGoogle().isConfigured()) {
+            throw new com.quizopia.backend.authentication.exception.AuthenticationException(
+                    com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_OAUTH_DISABLED);
+        }
+        com.quizopia.backend.identity.domain.model.User user = userRepository.findById(Long.valueOf(jwt.getSubject()))
+                .orElseThrow(() -> new com.quizopia.backend.authentication.exception.AuthenticationException(
+                        com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_ACCESS_TOKEN_INVALID));
+        String authorizationUrl = googleLinkService.startLink(user, request.password());
+        return ResponseEntity.ok(Map.of("authorizationUrl", authorizationUrl));
+    }
+
+    /**
+     * Review M1-06: browser redirect target completing the Google LINKING
+     * flow. Stateless errors never leak detail — the SPA receives only a
+     * status/error code. No tokens travel in URLs.
+     */
+    @GetMapping("/oauth/google/link/callback")
+    public void completeGoogleLink(
+            @org.springframework.web.bind.annotation.RequestParam(name = "code", required = false) String code,
+            @org.springframework.web.bind.annotation.RequestParam(name = "state", required = false) String state,
+            @org.springframework.web.bind.annotation.RequestParam(name = "error", required = false) String error,
+            HttpServletResponse httpResponse) throws java.io.IOException {
+        if (error != null && !error.isBlank()) {
+            httpResponse.sendRedirect(googleLinkService.linkResultUrl("error", "AUTH_OAUTH_FAILED"));
+            return;
+        }
+        try {
+            googleLinkService.completeLink(code, state);
+            httpResponse.sendRedirect(googleLinkService.linkResultUrl("success", null));
+        } catch (Exception ex) {
+            httpResponse.sendRedirect(googleLinkService.linkResultUrl("error", "AUTH_OAUTH_FAILED"));
+        }
+    }
+
 
     @PostMapping("/login")
     public ResponseEntity<TokenResponse> login(@Valid @RequestBody LoginRequest request,
