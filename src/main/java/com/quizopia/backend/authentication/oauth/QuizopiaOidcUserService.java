@@ -24,10 +24,11 @@ public class QuizopiaOidcUserService extends OidcUserService {
     @Override
     public OidcUser loadUser(OidcUserRequest userRequest) {
         OidcIdToken idToken = userRequest.getIdToken();
+        // No OidcUserInfo: an empty claims map is rejected by OidcUserInfo's
+        // constructor, and we never call the userinfo endpoint anyway.
         return new DefaultOidcUser(
                 List.of(new SimpleGrantedAuthority("ROLE_OAUTH_LOGIN")),
                 idToken,
-                org.springframework.security.oauth2.core.oidc.OidcUserInfo.builder().build(),
                 "sub");
     }
 }
