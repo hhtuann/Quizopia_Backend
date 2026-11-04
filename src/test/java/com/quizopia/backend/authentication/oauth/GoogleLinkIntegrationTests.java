@@ -26,7 +26,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -296,6 +299,83 @@ class GoogleLinkIntegrationTests extends AbstractAuthenticationIntegrationTests 
         return jdbc.queryForObject(
                 "SELECT count(*) FROM external_identities WHERE user_id = ?",
                 Integer.class, userId);
+    }
+
+    @Test
+    void repeatedWrongLinkPasswordsLockTheDurableAccount() throws Exception {
+        User user = verifiedStudent("link-lock-" + UUID.randomUUID().toString().substring(0, 6));
+        // Wrong re-authentications: durable counter increments each time and
+        // the lock engages AT the threshold (5, matching login policy).
+        for (int i = 1; i <= 5; i++) {
+            final String wrong = "WrongPass" + i + "!";
+            AuthenticationException ex = catchThrowableOfType(
+                    () -> googleLinkService.startLink(user, wrong),
+                    AuthenticationException.class);
+            assertThat(ex.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_INVALID_CREDENTIALS);
+            assertThat(jdbc.queryForObject(
+                    "SELECT failed_login_attempts FROM users WHERE id = ?",
+                    Integer.class, user.getId())).isEqualTo(i);
+        }
+        // Next attempt — even with the CORRECT password — is locked (423)
+        // and the lockout is committed for real (independent of any session).
+        AuthenticationException locked = catchThrowableOfType(
+                () -> googleLinkService.startLink(user, "Passw0rd!"),
+                AuthenticationException.class);
+        assertThat(locked.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_ACCOUNT_LOCKED);
+        assertThat(jdbc.queryForObject(
+                "SELECT locked_until FROM users WHERE id = ?", java.sql.Timestamp.class,
+                user.getId())).isNotNull();
+    }
+
+    @Test
+    void concurrentWrongLinkPasswordsCannotBypassTheLockout() throws Exception {
+        User user = verifiedStudent("link-conc-" + UUID.randomUUID().toString().substring(0, 6));
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Callable<AuthErrorCode>> calls = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            final String wrong = "Wrong" + i + "Password!";
+            calls.add(() -> catchThrowableOfType(
+                    () -> googleLinkService.startLink(user, wrong),
+                    AuthenticationException.class).getErrorCode());
+        }
+        List<Future<AuthErrorCode>> futures = new ArrayList<>();
+        calls.forEach(c -> futures.add(pool.submit(c)));
+        Set<AuthErrorCode> codes = new java.util.HashSet<>();
+        for (Future<AuthErrorCode> f : futures) {
+            codes.add(f.get());
+        }
+        pool.shutdownNow();
+
+        // Every attempt is a credentials failure or a lock rejection — never a
+        // success — and the committed counter is at least the threshold.
+        assertThat(codes).isSubsetOf(AuthErrorCode.AUTH_INVALID_CREDENTIALS,
+                AuthErrorCode.AUTH_ACCOUNT_LOCKED);
+        assertThat(jdbc.queryForObject(
+                "SELECT failed_login_attempts FROM users WHERE id = ?",
+                Integer.class, user.getId())).isGreaterThanOrEqualTo(5);
+        assertThat(jdbc.queryForObject(
+                "SELECT locked_until FROM users WHERE id = ?", java.sql.Timestamp.class,
+                user.getId())).isNotNull();
+    }
+
+    @Test
+    void correctLinkPasswordClearsTransientLockState() throws Exception {
+        User user = verifiedStudent("link-clear-" + UUID.randomUUID().toString().substring(0, 6));
+        catchThrowableOfType(() -> googleLinkService.startLink(user, "WrongPass1!"),
+                AuthenticationException.class);
+        assertThat(jdbc.queryForObject(
+                "SELECT failed_login_attempts FROM users WHERE id = ?",
+                Integer.class, user.getId())).isEqualTo(1);
+
+        String url = googleLinkService.startLink(user, "Passw0rd!");
+        assertThat(url).contains("state=");
+        assertThat(jdbc.queryForObject(
+                "SELECT failed_login_attempts FROM users WHERE id = ?",
+                Integer.class, user.getId())).isZero();
+        assertThat(jdbc.queryForObject(
+                "SELECT locked_until FROM users WHERE id = ?", java.sql.Timestamp.class,
+                user.getId())).isNull();
     }
 
     private static String queryParam(String url, String name) {

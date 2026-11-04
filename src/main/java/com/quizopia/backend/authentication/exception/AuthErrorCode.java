@@ -21,7 +21,6 @@ public enum AuthErrorCode {
     AUTH_OTP_EXPIRED(HttpStatus.BAD_REQUEST, "Verification code has expired"),
     AUTH_OTP_MAX_ATTEMPTS(HttpStatus.BAD_REQUEST, "Too many invalid attempts, request a new code"),
     AUTH_OTP_NOT_FOUND(HttpStatus.BAD_REQUEST, "No active verification code, request a new one"),
-    AUTH_OTP_RESEND_COOLDOWN(HttpStatus.TOO_MANY_REQUESTS, "Please wait before requesting a new code"),
     AUTH_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Too many requests"),
     AUTH_OAUTH_DISABLED(HttpStatus.NOT_FOUND, "OAuth login is not configured"),
     AUTH_OAUTH_EMAIL_CONFLICT(HttpStatus.CONFLICT, "An account with this email already exists"),

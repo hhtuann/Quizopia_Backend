@@ -44,6 +44,16 @@ public class OAuthProperties {
         /** Absolute base URI of this backend (redirect_uri = base + path). */
         private String redirectBaseUri = "http://localhost:8080";
 
+        /**
+         * Provider authorization endpoint. Defaults to Google; overridable so
+         * integration tests can point it at a simulated OIDC provider
+         * (review R2-M1-D).
+         */
+        private String authorizationUri = OAuth2ClientConfig.DEFAULT_AUTHORIZATION_URI;
+
+        /** Provider token endpoint (authorization-code + PKCE exchange). */
+        private String tokenUri = OAuth2ClientConfig.DEFAULT_TOKEN_URI;
+
         public String getClientId() {
             return clientId;
         }
@@ -91,6 +101,22 @@ public class OAuthProperties {
          * The providers endpoint, the login chain and linking all gate on
          * this — a half-configured deployment exposes no broken flow.
          */
+        public String getAuthorizationUri() {
+            return authorizationUri;
+        }
+
+        public void setAuthorizationUri(String authorizationUri) {
+            this.authorizationUri = authorizationUri;
+        }
+
+        public String getTokenUri() {
+            return tokenUri;
+        }
+
+        public void setTokenUri(String tokenUri) {
+            this.tokenUri = tokenUri;
+        }
+
         public boolean isConfigured() {
             return clientId != null && !clientId.isBlank()
                     && clientSecret != null && !clientSecret.isBlank();

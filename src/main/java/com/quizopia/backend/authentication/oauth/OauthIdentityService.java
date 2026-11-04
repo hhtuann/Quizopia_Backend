@@ -105,8 +105,22 @@ public class OauthIdentityService {
             if (existing != null) {
                 return recordExistingLogin(existing);
             }
-            if (userRepository.existsByEmailIgnoreCase(identity.email())) {
-                log.info("Google login rejected: email already belongs to a password account");
+            if (emailExists(identity.email())) {
+                // Review R2-M1-A: this read pair (identity absent → email
+                // present) is NOT a conflict proof. A concurrent login for
+                // the SAME issuer+sub may have committed between the two
+                // reads. Recheck the stable identity key BEFORE rejecting;
+                // only a genuinely foreign owner of the address conflicts.
+                User concurrentWinner = resolveEmailCollisionByIdentity(identity);
+                if (concurrentWinner != null) {
+                    log.info("Concurrent same-identity Google login resolved to user {}",
+                            concurrentWinner.getId());
+                    return recordExistingLogin(
+                            externalIdentityRepository.findByProviderAndIssuerAndSubject(
+                                            ExternalProvider.GOOGLE, identity.issuer(), identity.subject())
+                                    .orElseThrow());
+                }
+                log.info("Google login rejected: email already belongs to a different account");
                 throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
             }
             try {
@@ -117,12 +131,12 @@ public class OauthIdentityService {
             } catch (DataIntegrityViolationException race) {
                 // The provision transaction is aborted; NEVER query it again.
                 // Resolve the race in a FRESH transaction.
-                User winner = findByIdentity(identity).map(ExternalIdentity::getUser).orElse(null);
+                User winner = resolveEmailCollisionByIdentity(identity);
                 if (winner != null) {
                     log.info("Concurrent Google login for subject resolved to user {}", winner.getId());
                     return winner;
                 }
-                if (userRepository.existsByEmailIgnoreCase(identity.email())) {
+                if (emailExists(identity.email())) {
                     // A concurrent password registration claimed the address.
                     throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
                 }
@@ -132,6 +146,23 @@ public class OauthIdentityService {
             }
         }
         throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
+    }
+
+    /**
+     * Review R2-M1-A: resolves an observed email collision by re-reading the
+     * STABLE identity key in a fresh transaction. Returns the winner's user
+     * when the address was claimed by a concurrent login for the SAME
+     * (provider, issuer, subject); returns {@code null} only when the address
+     * genuinely belongs to a different subject or a password account, which
+     * is the only legitimate conflict. Package-private for deterministic
+     * interleaving tests.
+     */
+    User resolveEmailCollisionByIdentity(ValidatedOidcIdentity identity) {
+        return externalIdentityRepository
+                .findByProviderAndIssuerAndSubject(
+                        ExternalProvider.GOOGLE, identity.issuer(), identity.subject())
+                .map(ExternalIdentity::getUser)
+                .orElse(null);
     }
 
     /** Login bookkeeping for an already-linked identity (fresh short tx). */
@@ -162,7 +193,7 @@ public class OauthIdentityService {
         if (existing != null) {
             return existing.getUser();
         }
-        if (userRepository.existsByEmailIgnoreCase(identity.email())) {
+        if (emailExists(identity.email())) {
             throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
         }
 
@@ -269,6 +300,11 @@ public class OauthIdentityService {
     }
 
     // ---------- internals ----------
+
+    /** Seam for deterministic interleaving tests (review R2-M1-A). */
+    protected boolean emailExists(String email) {
+        return userRepository.existsByEmailIgnoreCase(email);
+    }
 
     private java.util.Optional<ExternalIdentity> findByIdentity(ValidatedOidcIdentity identity) {
         return externalIdentityRepository.findByProviderAndIssuerAndSubject(

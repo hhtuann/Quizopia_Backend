@@ -155,6 +155,103 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
         assertThat(submitOtp(email, otpMailbox.latestOtpFor(email))).isEqualTo(200);
     }
 
+    @Test
+    void resendResponsesAreUniformAcrossAccountStates() throws Exception {
+        // R2-M1-C: unknown / verified / unverified-cooling-down must be
+        // indistinguishable in status AND body, while only the eligible
+        // account actually receives a code.
+        String unknownEmail = "ghost-" + UUID.randomUUID() + "@example.com";
+
+        // Unknown email → 200 with cooldown payload.
+        MvcResult unknown = mockMvc.perform(post("/api/auth/verify-email/resend")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"%s\"}".formatted(unknownEmail)))
+                .andReturn();
+        assertThat(unknown.getResponse().getStatus()).isEqualTo(200);
+        assertThat(unknown.getResponse().getContentAsString())
+                .contains("resendCooldownSeconds");
+
+        // Verified account → identical 200, no new mail.
+        String username = unique("uni");
+        String email = emailFor(username);
+        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+        assertThat(submitOtp(email, otpMailbox.latestOtpFor(email))).isEqualTo(200);
+        int mailsBefore = otpMailbox.sendCountFor(email);
+        MvcResult verified = mockMvc.perform(post("/api/auth/verify-email/resend")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"%s\"}".formatted(email)))
+                .andReturn();
+        assertThat(verified.getResponse().getStatus()).isEqualTo(200);
+        assertThat(verified.getResponse().getContentAsString())
+                .isEqualTo(unknown.getResponse().getContentAsString());
+        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(mailsBefore);
+
+        // Unverified account inside cooldown → STILL the identical 200 body,
+        // and the counts prove no issuance happened.
+        String username2 = unique("unic");
+        String email2 = emailFor(username2);
+        register(studentRegisterJson(username2, email2, "Passw0rd!", username2 + " Name", "+84991234567"));
+        MvcResult throttled = mockMvc.perform(post("/api/auth/verify-email/resend")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"%s\"}".formatted(email2)))
+                .andReturn();
+        assertThat(throttled.getResponse().getStatus()).isEqualTo(200);
+        assertThat(throttled.getResponse().getContentAsString())
+                .isEqualTo(unknown.getResponse().getContentAsString());
+        assertThat(challengeCount(username2)).isEqualTo(1);
+        assertThat(otpMailbox.sendCountFor(email2)).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentResendsSerializeToOneChallengePerEligibleWindow() throws Exception {
+        // R2-M1-C atomicity: 8 parallel resends right after registration are
+        // all cooled down → zero new challenges; after the cooldown, 8 more
+        // parallel resends produce EXACTLY one new challenge and one mail.
+        String username = unique("conc2");
+        String email = emailFor(username);
+        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+
+        int threads = 8;
+        runConcurrentResends(threads, email); // cooldown active → all no-ops
+        entityManager.clear();
+        assertThat(challengeCount(username)).isEqualTo(1);
+        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(1);
+
+        Thread.sleep(1100); // pass the 1s test cooldown
+
+        runConcurrentResends(threads, email); // exactly one winner issues
+        entityManager.clear();
+        assertThat(challengeCount(username)).isEqualTo(2);
+        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(2);
+    }
+
+    private void runConcurrentResends(int threads, String email) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Callable<Integer>> calls = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            calls.add(() -> mockMvc.perform(post("/api/auth/verify-email/resend")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"email\":\"%s\"}".formatted(email)))
+                    .andReturn().getResponse().getStatus());
+        }
+        List<Future<Integer>> futures = new ArrayList<>();
+        calls.forEach(c -> futures.add(pool.submit(c)));
+        for (Future<Integer> f : futures) {
+            // Uniform contract: every resend answers 200, no matter which
+            // internal branch handled it.
+            assertThat(f.get()).isEqualTo(200);
+        }
+        pool.shutdownNow();
+    }
+
+    private int challengeCount(String username) {
+        return ((Number) entityManager.createNativeQuery(
+                "SELECT count(*) FROM email_verification_challenges c"
+                        + " JOIN users u ON u.id = c.user_id WHERE u.username = :u")
+                .setParameter("u", username)
+                .getSingleResult()).intValue();
+    }
+
     private int submitOtp(String email, String otp) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)
