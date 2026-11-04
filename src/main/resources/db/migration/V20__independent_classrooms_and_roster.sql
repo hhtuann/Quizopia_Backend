@@ -31,10 +31,9 @@ ALTER TABLE classrooms
 CREATE INDEX idx_classrooms_owner_user
     ON classrooms (owner_user_id, created_at);
 
--- Relax the legacy composite FKs: independent classrooms have neither a
--- school nor a teacher_profile.
-ALTER TABLE classrooms DROP CONSTRAINT fk_classrooms_teacher_school;
-ALTER TABLE classrooms DROP CONSTRAINT fk_classrooms_school;
+-- Relax the legacy composite FK to NOT NULL-drop only: independent
+-- classrooms (both columns NULL) are exempt by MATCH SIMPLE semantics,
+-- while legacy rows KEEP their referential protection (review M3-DB).
 ALTER TABLE classrooms ALTER COLUMN school_id DROP NOT NULL;
 ALTER TABLE classrooms ALTER COLUMN owner_teacher_id DROP NOT NULL;
 
@@ -46,10 +45,10 @@ ALTER TABLE classrooms ADD CONSTRAINT chk_classrooms_ownership_mode CHECK (
     (school_id IS NULL AND owner_teacher_id IS NULL)
 );
 
--- Owner-scoped unique code across BOTH modes (replaces the school-scoped
--- legacy index; NULL school rows never collide with legacy rows because
--- NULLs are distinct in unique indexes and the lower(code) column is
--- shared per owner_user_id).
+-- Owner-scoped unique code across BOTH modes, replacing the legacy
+-- teacher-scoped index (school_id, owner_teacher_id, LOWER(code)). Because
+-- teacher_profiles.user_id is UNIQUE, per-user scoping preserves the exact
+-- legacy uniqueness boundary (review M3-ARCH).
 DROP INDEX IF EXISTS uk_classrooms_owner_code_ci;
 CREATE UNIQUE INDEX uk_classrooms_owner_user_code_ci
     ON classrooms (owner_user_id, LOWER(code));

@@ -14,7 +14,13 @@ public enum ClassroomErrorCode {
     // ---------- Identity-M3 roster (issue #15) ----------
     ROSTER_NOT_FOUND(HttpStatus.NOT_FOUND, "Roster entry not found"),
     ROSTER_DUPLICATE_PENDING(HttpStatus.CONFLICT, "A pending roster entry already exists for this email in this classroom"),
-    ROSTER_INVALID_STATE(HttpStatus.CONFLICT, "Roster entry is not in a state that allows this operation");
+    ROSTER_INVALID_STATE(HttpStatus.CONFLICT, "Roster entry is not in a state that allows this operation"),
+
+    // ---------- Identity-M4 roster import (issue #16) ----------
+    ROSTER_IMPORT_FILE_INVALID(HttpStatus.BAD_REQUEST, "Invalid roster import file"),
+    ROSTER_IMPORT_FILE_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "Roster import file exceeds 2 MB"),
+    ROSTER_IMPORT_TEMPLATE_INVALID(HttpStatus.BAD_REQUEST, "Workbook does not match the roster import template"),
+    ROSTER_IMPORT_TOO_MANY_ROWS(HttpStatus.PAYLOAD_TOO_LARGE, "Roster import exceeds the 500-row limit");
 
     private final HttpStatusCode status;
     private final String defaultMessage;

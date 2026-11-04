@@ -132,13 +132,20 @@ public class ClassroomRosterService {
         return entries.map(this::toResponse);
     }
 
-    /** Teacher withdraws a pending invitation (PENDING → REVOKED). */
+    /**
+     * Teacher withdraws a pending invitation (PENDING → REVOKED). Takes the
+     * SAME pessimistic lock as reconciliation (review M3-DB P1): without it,
+     * a stale PENDING read could overwrite a concurrently-committed LINKED
+     * row (membership would survive a "successful" withdrawal).
+     */
     @org.springframework.transaction.annotation.Transactional
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        ClassroomRosterEntry entry = requireEntry(classroomId, entryId);
-        if (entry.getStatus() != ClassroomRosterEntry.RosterStatus.PENDING) {
-            throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
+        ClassroomRosterEntry entry = rosterRepository
+                .findPendingForUpdate(classroomId, requireEntry(classroomId, entryId).getEmailNormalized())
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE));
+        if (!entry.getId().equals(entryId)) {
+            throw new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND);
         }
         entry.revoke(Instant.now(clock));
         rosterRepository.saveAndFlush(entry);
@@ -229,11 +236,14 @@ public class ClassroomRosterService {
         }
     }
 
+    /**
+     * Atomic dedupe (review M3-DB P1): a caught constraint violation would
+     * abort the enclosing PostgreSQL transaction; ON CONFLICT DO NOTHING
+     * stays valid and is a true no-op for existing members.
+     */
     private void insertMembershipDeduped(Long classroomId, Long userId) {
-        try {
-            memberRepository.saveAndFlush(new ClassroomMember(classroomId, userId, null, null));
-        } catch (DataIntegrityViolationException dedupe) {
-            // Already a member (uk_classroom_members_classroom_user) — fine.
+        int inserted = memberRepository.insertMembershipIfAbsent(classroomId, userId);
+        if (inserted == 0) {
             log.debug("User {} already a member of classroom {}", userId, classroomId);
         }
     }

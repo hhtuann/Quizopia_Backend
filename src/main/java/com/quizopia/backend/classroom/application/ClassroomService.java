@@ -47,7 +47,7 @@ public class ClassroomService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt");
-    private static final String CODE_CONFLICT_INDEX = "uk_classrooms_owner_code_ci";
+    private static final String CODE_CONFLICT_INDEX = "uk_classrooms_owner_user_code_ci";
     private static final String MEMBER_DUPLICATE_CONSTRAINT = "uk_classroom_members_classroom_";
 
     private final TeacherProfileRepository teacherProfileRepository;
@@ -442,7 +442,10 @@ public class ClassroomService {
      */
     public com.quizopia.backend.identity.domain.model.User findUserByIdWithVerifiedEmail(
             Long userId, String canonicalEmail) {
-        return userRepository.findById(userId)
+        // Review M3-SEC: locking read — fresh committed state (a stale managed
+        // instance from the same transaction must not satisfy the check) and
+        // serialized against concurrent email reassignment.
+        return userRepository.findByIdForUpdate(userId)
                 .filter(u -> u.getEmailVerifiedAt() != null)
                 .filter(u -> canonicalEmail.equals(u.getEmail() == null ? "" : u.getEmail().trim().toLowerCase()))
                 .orElse(null);
