@@ -613,73 +613,83 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
     // ---------- R2 P1: decline vs auto-link serialization ----------
 
     @Test
-    void reconciliationBlocksWhileDeclineHoldsTheUserLock() throws Exception {
-        String username = unique("ser");
+    void overlappingDeclineBlocksReconciliationUntilCommit() throws Exception {
+        String username = unique("ovl");
         String email = emailFor(username);
         registerAndVerify(username, email, "Passw0rd!");
         Long userId = jdbcTemplate.queryForObject(
                 "SELECT id FROM users WHERE username = ?", Long.class, username);
-        String teacherToken = teacherWithClassroom("SER1");
+        String teacherToken = teacherWithClassroom("OVL");
         Long classroomId = firstClassroomId(teacherToken);
-        JsonNode entry = addRoster(teacherToken, classroomId, "Serialized", email, null, null);
-        assertThat(entry.get("status").asText()).isEqualTo("LINKED");
 
-        // Thread A holds the USER row lock inside an open transaction (the
-        // same lock declineEntry/acceptEntry acquire first).
+        // OLD entry: invite → auto-LINK (verified learner, no history).
+        JsonNode old = addRoster(teacherToken, classroomId, "Overlapped", email, null, null);
+        assertThat(old.get("status").asText()).isEqualTo("LINKED");
+        // NEW PENDING entry for the same (classroom, email): manufactured
+        // directly (the sequential add-path would auto-link it instantly).
+        // This mirrors the reachable crash window between insert and
+        // immediate-reconcile in addRosterEntry.
+        Long freshId = txInsertPending(classroomId, email, userId);
+        assertThat(rosterRepository.findById(freshId))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+
         org.springframework.transaction.PlatformTransactionManager tm =
-                applicationContext.getBean(org.springframework.transaction.PlatformTransactionManager.class);
+                applicationContext.getBean(
+                        org.springframework.transaction.PlatformTransactionManager.class);
         org.springframework.transaction.support.TransactionTemplate txA =
                 new org.springframework.transaction.support.TransactionTemplate(tm);
-        com.quizopia.backend.identity.repository.UserRepository users =
-                applicationContext.getBean(com.quizopia.backend.identity.repository.UserRepository.class);
-        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
+        com.quizopia.backend.classroom.application.ClassroomRosterService rosterSvc =
+                applicationContext.getBean(
+                        com.quizopia.backend.classroom.application.ClassroomRosterService.class);
+
+        java.util.concurrent.CountDownLatch declineReady = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<?> holder = pool.submit(() -> txA.executeWithoutResult(st -> {
-                users.findByIdForUpdate(userId); // user-row lock held
-                locked.countDown();
+            // Thread A: the REAL decline runs inside an open transaction —
+            // user+entry locks held, membership deleted, DECLINED uncommitted.
+            Future<?> decliner = pool.submit(() -> txA.executeWithoutResult(st -> {
+                rosterSvc.declineEntry(userId, old.get("id").asLong());
+                declineReady.countDown();
                 try {
-                    release.await(10, TimeUnit.SECONDS);
+                    release.await(15, TimeUnit.SECONDS);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                 }
             }));
-            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(declineReady.await(15, TimeUnit.SECONDS))
+                    .as("decline reached its locks").isTrue();
 
-            // Thread B: reconciliation must BLOCK on the user lock (proves
-            // the shared serialization point) instead of linking while the
-            // opt-out owner's transaction is open.
-            Future<Long> reconciler = pool.submit(() -> {
-                long start = System.nanoTime();
+            // Thread B: reconciliation targeting the NEW PENDING entry. With
+            // the shared user-lock serialization it MUST block behind the
+            // uncommitted decline — early completion here means the opt-out
+            // could be raced (regression signal, not success).
+            Future<Boolean> reconciler = pool.submit(() -> {
                 reconciliationService.reconcile(userId, email);
-                return System.nanoTime() - start;
+                return true;
             });
-            // Reconciliation cannot finish while the lock is held...
-            try {
-                reconciler.get(700, TimeUnit.MILLISECONDS);
-                // If it DID complete, it must not have linked anything
-                // (blocked internally or raced — but no membership may exist
-                // because the entry is LINKED, not PENDING).
-                assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId))
-                        .as("no second membership").hasSize(1);
-            } catch (java.util.concurrent.TimeoutException stillBlocked) {
-                // expected: serialized behind the user lock
-            }
+            org.assertj.core.api.Assertions
+                    .assertThatThrownBy(() -> reconciler.get(700, TimeUnit.MILLISECONDS))
+                    .as("reconciliation must serialize behind the open decline")
+                    .isInstanceOf(java.util.concurrent.TimeoutException.class);
+
             release.countDown();
-            holder.get(10, TimeUnit.SECONDS);
-            reconciler.get(10, TimeUnit.SECONDS);
+            decliner.get(15, TimeUnit.SECONDS);
+            assertThat(reconciler.get(15, TimeUnit.SECONDS)).isTrue();
         } finally {
+            release.countDown();
             pool.shutdownNow();
         }
-        // After the lock is released, the entry was LINKED (not PENDING), so
-        // reconciliation did nothing — still exactly one membership.
-        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
-        assertThat(rosterRepository.findById(entry.get("id").asLong()))
-                .hasValueSatisfying(e -> assertThat(e.getStatus())
-                        .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
-    }
 
+        // After both commit: decline won the race window, the NEW invitation
+        // must NOT have been linked without consent.
+        assertThat(rosterRepository.findById(freshId))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId))
+                .as("no membership without learner consent").isEmpty();
+    }
     @Test
     void declineCommitsThenReconciliationRespectsOptOutConcurrently() throws Exception {
         String username = unique("ser2");
@@ -888,6 +898,20 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
     /** Marks the user's email verified directly (OTP path covered elsewhere). */
     private void jdbcVerifyUser(Long userId) {
         jdbcTemplate.update("UPDATE users SET email_verified_at = now() WHERE id = ?", userId);
+    }
+
+    /** Inserts a PENDING entry directly — the crash-window state the overlap
+     *  test needs (addRosterEntry would auto-link a verified email). */
+    private Long txInsertPending(Long classroomId, String email, Long createdBy) {
+        return txInsertPendingViaRepo(classroomId, email, createdBy);
+    }
+
+    private Long txInsertPendingViaRepo(Long classroomId, String email, Long createdBy) {
+        com.quizopia.backend.classroom.domain.model.Classroom classroom =
+                applicationContext.getBean(com.quizopia.backend.classroom.repository.ClassroomRepository.class)
+                        .findById(classroomId).orElseThrow();
+        ClassroomRosterEntry entry = new ClassroomRosterEntry(classroom, email, "Overlapped", createdBy);
+        return applicationContext.getBean(ClassroomRosterEntryRepository.class).saveAndFlush(entry).getId();
     }
 
     private Long firstClassroomId(String token) throws Exception {

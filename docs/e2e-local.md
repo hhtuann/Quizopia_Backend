@@ -73,4 +73,7 @@ docker network rm e2enet
 Roster terminal entries (REVOKED/DECLINED) and their encrypted sensitive
 fields are purged by `ClassroomRosterRetentionScheduler` after
 `quizopia.roster.retention.days` days (default `0` = disabled). Policy owner:
-platform operator, set per environment.
+platform operator, set per environment. LINKED entries are never purged.
+**Consent consequence:** deleting a DECLINED row ends that classroom's
+standing opt-out for the address — the opt-out window equals the retention
+window, after which a teacher re-invitation can auto-link again.

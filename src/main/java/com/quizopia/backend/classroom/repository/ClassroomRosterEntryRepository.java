@@ -104,6 +104,16 @@ public interface ClassroomRosterEntryRepository extends JpaRepository<ClassroomR
     Optional<String> findEmailByIdAndClassroomId(
             @Param("id") Long id, @Param("classroomId") Long classroomId);
 
+    /**
+     * Scalar user-id read (no entity load) — LINKED/DECLINED rows carry the
+     * linked user; PENDING/REVOKED return null. Lets teacher-removal take the
+     * user-row lock BEFORE the entry lock (review R3 deadlock P1).
+     */
+    @Query("select e.userId from ClassroomRosterEntry e "
+            + "where e.id = :id and e.classroom.id = :classroomId")
+    Optional<Long> findUserIdByIdAndClassroomId(
+            @Param("id") Long id, @Param("classroomId") Long classroomId);
+
     /** Scalar classroom-id read (no entity load) for lock-on-first-load flows. */
     @Query("select e.classroom.id from ClassroomRosterEntry e where e.id = :id")
     Optional<Long> findClassroomIdById(@Param("id") Long id);
