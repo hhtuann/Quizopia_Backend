@@ -146,6 +146,63 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
     }
 
     @Test
+    void verifiedAccountWithRandomOtpIsRejectedNotLeaked() throws Exception {
+        // Review M1-02: success may ONLY come from knowing the code. A
+        // verified account + arbitrary OTP must look exactly like a wrong
+        // code, so the endpoint cannot be used to enumerate registered emails.
+        String username = unique("otp-enum");
+        String email = emailFor(username);
+        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+        String realOtp = otpMailbox.latestOtpFor(email);
+        assertThat(verifyEmail(email).getResponse().getStatus()).isEqualTo(200); // verified now
+
+        String randomOtp = realOtp.equals("123456") ? "654321" : "123456";
+        MvcResult probe = mockMvc.perform(post("/api/auth/verify-email")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(verifyEmailJson(email, randomOtp)))
+                .andReturn();
+        assertThat(probe.getResponse().getStatus()).isEqualTo(400);
+        assertThat(probe.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
+
+        // The idempotent retry with the CONSUMED CORRECT code still succeeds:
+        // idempotency is proof-bound, not account-existence-bound.
+        MvcResult retry = mockMvc.perform(post("/api/auth/verify-email")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(verifyEmailJson(email, realOtp)))
+                .andReturn();
+        assertThat(retry.getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void supersededOldCodeWithWrongGuessStaysInvalid() throws Exception {
+        String username = unique("otp-supw");
+        String email = emailFor(username);
+        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+        String firstOtp = otpMailbox.latestOtpFor(email);
+
+        clock.advance(java.time.Duration.ofSeconds(2));
+        mockMvc.perform(post("/api/auth/verify-email/resend")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"%s\"}".formatted(email)));
+
+        // Wrong guess against the superseded challenge: plain invalid.
+        MvcResult wrong = mockMvc.perform(post("/api/auth/verify-email")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(verifyEmailJson(email, "000000")))
+                .andReturn();
+        assertThat(wrong.getResponse().getStatus()).isEqualTo(400);
+        assertThat(wrong.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
+
+        // The superseded CORRECT code points the user at a resend.
+        MvcResult oldCode = mockMvc.perform(post("/api/auth/verify-email")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content(verifyEmailJson(email, firstOtp)))
+                .andReturn();
+        assertThat(oldCode.getResponse().getStatus()).isEqualTo(400);
+        assertThat(oldCode.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
+    }
+
+    @Test
     void resendSupersedesOldOtp() throws Exception {
         String username = unique("otp-sup");
         String email = emailFor(username);
@@ -196,18 +253,28 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         String username = unique("otp-rate");
         String email = emailFor(username);
         register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        // Test cooldown is 1s; the per-email cap is 5 challenges/hour — the
-        // registration already created one, so four more resends hit the cap.
-        int lastStatus = 0;
+        // The mutable clock is shared by every test in this class (and by
+        // rerun attempts), so pin it just AHEAD of real time before each
+        // resend: the cooldown check compares against the challenge's
+        // @CreationTimestamp (real time), and pinning makes "cooldown
+        // elapsed" deterministic regardless of accumulated clock state.
+        // The per-email cap is 5 challenges/hour; the registration already
+        // created one, so exactly four resends succeed before the 429.
+        int[] statuses = new int[5];
         for (int i = 0; i < 5; i++) {
-            clock.advance(java.time.Duration.ofSeconds(2));
+            clock.setInstant(java.time.Instant.now().plusSeconds(2));
             MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content("{\"email\":\"%s\"}".formatted(email)))
                     .andReturn();
-            lastStatus = result.getResponse().getStatus();
+            statuses[i] = result.getResponse().getStatus();
         }
-        assertThat(lastStatus).isEqualTo(429);
+        // Fail fast on unexpected outcomes instead of only checking the last.
+        assertThat(statuses[0]).isEqualTo(200);
+        assertThat(statuses[1]).isEqualTo(200);
+        assertThat(statuses[2]).isEqualTo(200);
+        assertThat(statuses[3]).isEqualTo(200);
+        assertThat(statuses[4]).isEqualTo(429);
     }
 
     @Test

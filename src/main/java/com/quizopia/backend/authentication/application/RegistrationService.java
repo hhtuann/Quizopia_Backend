@@ -19,7 +19,7 @@ import com.quizopia.backend.security.encryption.SensitiveDataEncryptor;
 import com.quizopia.backend.security.password.PasswordHasher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -53,6 +53,7 @@ public class RegistrationService {
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
     private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
     private final EmailVerificationService emailVerificationService;
+    private final TransactionTemplate tx;
 
     public RegistrationService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -64,7 +65,8 @@ public class RegistrationService {
             StudentProfileRepository studentProfileRepository,
             com.quizopia.backend.notification.application.NotificationService notificationService,
             com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
-            EmailVerificationService emailVerificationService) {
+            EmailVerificationService emailVerificationService,
+            TransactionTemplate tx) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
@@ -73,9 +75,16 @@ public class RegistrationService {
         this.notificationService = notificationService;
         this.workspaceProvisioningService = workspaceProvisioningService;
         this.emailVerificationService = emailVerificationService;
+        this.tx = tx;
     }
 
-    @Transactional
+    /**
+     * NOT {@code @Transactional} (review M1-07): account persistence runs in
+     * one short {@link TransactionTemplate} transaction; OTP delivery is
+     * invoked only AFTER that commit (EmailVerificationService delivers
+     * outside any database transaction), so an SMTP outage can neither roll
+     * back the registration nor hold the transaction open.
+     */
     public RegisterResponse register(RegisterRequest request, ClientContext client) {
         String username = trimmed(request.username());
         String email = trimmed(request.email());
@@ -105,20 +114,44 @@ public class RegistrationService {
         String passwordHash = passwordHasher.hash(request.password());
         String phoneEncrypted = encryptor.encrypt(phone);
 
-        User user = new User(username, email, passwordHash, displayName);
-        user.setPhoneEncrypted(phoneEncrypted);
+        User user;
         try {
-            userRepository.saveAndFlush(user);
+            user = tx.execute(status -> persistStudentAccount(
+                    username, email, displayName, phone, passwordHash, phoneEncrypted));
         } catch (DataIntegrityViolationException race) {
             // Two concurrent registrations of the same username/email: the
             // unique lower() indexes decide the winner; the loser gets 409.
             throw translateUniqueViolation(race);
         }
 
+        // Identity-M1: email OTP verification, issued and delivered strictly
+        // after the account commit. Delivery is best-effort; a failure never
+        // blocks the registration and never verifies the account — the resend
+        // endpoint is the recovery flow.
+        boolean emailSent = emailVerificationService.issueForNewRegistration(
+                user, client == null ? null : client.remoteAddress());
+
+        return new RegisterResponse(
+                user.getId(),
+                user.getUsername(),
+                user.getEmail(),
+                user.getDisplayName(),
+                phone,
+                user.getStatus(),
+                List.of(STUDENT_ROLE_CODE),
+                true,
+                emailSent);
+    }
+
+    private User persistStudentAccount(String username, String email, String displayName,
+            String phone, String passwordHash, String phoneEncrypted) {
+        User user = new User(username, email, passwordHash, displayName);
+        user.setPhoneEncrypted(phoneEncrypted);
+        user = userRepository.saveAndFlush(user);
+
         Role role = roleRepository.findByCode(STUDENT_ROLE_CODE)
                 .orElseThrow(() -> new IllegalStateException(
                         "Required role '" + STUDENT_ROLE_CODE + "' is not seeded; check Flyway V3"));
-
         userRoleRepository.save(new UserRole(user, role, null, null));
 
         // Every new user gets a personal workspace, provisioned
@@ -133,23 +166,7 @@ public class RegistrationService {
                     displayName + " (" + username + ") is awaiting school assignment.",
                     "/admin/pending-students");
         }
-
-        // Identity-M1: email OTP verification. Delivery is best-effort; a
-        // failure never blocks the registration and never verifies the
-        // account — the resend endpoint is the recovery flow.
-        boolean emailSent = emailVerificationService.issueForNewRegistration(
-                user, client == null ? null : client.remoteAddress());
-
-        return new RegisterResponse(
-                user.getId(),
-                user.getUsername(),
-                user.getEmail(),
-                user.getDisplayName(),
-                phone,
-                user.getStatus(),
-                List.of(role.getCode()),
-                true,
-                emailSent);
+        return user;
     }
 
     /**

@@ -14,4 +14,5 @@ public interface ExternalIdentityRepository extends JpaRepository<ExternalIdenti
 
     Optional<ExternalIdentity> findByProviderAndIssuerAndSubject(
             ExternalProvider provider, String issuer, String subject);
+    boolean existsByUserIdAndProvider(Long userId, ExternalProvider provider);
 }

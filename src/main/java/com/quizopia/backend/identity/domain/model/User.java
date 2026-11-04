@@ -58,12 +58,23 @@ public class User {
     private Instant lastLoginAt;
 
     /**
-     * When the user proved ownership of their email (OTP or trusted OIDC
-     * provider). NULL = not yet verified; pre-M1 accounts are grandfathered
-     * by migration V18 (ADR-002 §6).
+     * When the user PROVED ownership of their email (OTP success or a trusted
+     * OIDC provider asserting email_verified). This is an ownership proof,
+     * never a login-compatibility marker: legacy accounts migrated by V18
+     * keep this NULL until they complete a real verification (review M1-03).
      */
     @Column(name = "email_verified_at")
     private Instant emailVerifiedAt;
+
+    /**
+     * Login gate (review M1-03): accounts created after V18 must verify their
+     * email before password login; legacy accounts are set to FALSE by the
+     * migration so their login continuity is preserved WITHOUT granting any
+     * ownership proof. Sensitive actions (teacher upgrade, linking, M3
+     * roster auto-linking) read {@link #emailVerifiedAt}, never this flag.
+     */
+    @Column(name = "login_requires_email_verification", nullable = false)
+    private Boolean loginRequiresEmailVerification = Boolean.TRUE;
 
     @Column(name = "password_changed_at", nullable = false)
     private Instant passwordChangedAt;
@@ -210,6 +221,14 @@ public class User {
 
     public void setEmailVerifiedAt(Instant emailVerifiedAt) {
         this.emailVerifiedAt = emailVerifiedAt;
+    }
+
+    public Boolean getLoginRequiresEmailVerification() {
+        return loginRequiresEmailVerification;
+    }
+
+    public void setLoginRequiresEmailVerification(Boolean loginRequiresEmailVerification) {
+        this.loginRequiresEmailVerification = loginRequiresEmailVerification;
     }
 
     public Instant getPasswordChangedAt() {

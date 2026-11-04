@@ -58,14 +58,14 @@ public interface UserRoleRepository extends JpaRepository<UserRole, UserRoleId> 
 
     /**
      * Inserts a role assignment only when absent. Returns 1 when this call
-     * created the row, 0 when it already existed. Used by the teacher
-     * self-upgrade (Identity-M2): unlike a JPA save that violates the
+     * created the row, 0 when it already existed. Used by Google provisioning
+     * and the teacher self-upgrade: unlike a JPA save that violates the
      * (user_id, role_id) primary key under concurrency, this never throws —
-     * concurrent upgraders converge on exactly one row without marking any
+     * concurrent callers converge on exactly one row without marking any
      * transaction rollback-only.
      */
     @org.springframework.data.jpa.repository.Modifying
-    @Query(value = """
+    @org.springframework.data.jpa.repository.Query(value = """
             INSERT INTO user_roles (user_id, role_id, assigned_by, assigned_at)
             VALUES (:userId, :roleId, :userId, now())
             ON CONFLICT (user_id, role_id) DO NOTHING
