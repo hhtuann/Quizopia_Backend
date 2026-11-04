@@ -232,49 +232,59 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
     }
 
     @Test
-    void resendCooldownIsEnforced() throws Exception {
-        // Pin the mutable clock BEFORE registering: other tests in this class
-        // advance it, and the cooldown must hold regardless of their state.
-        clock.setInstant(java.time.Instant.now());
+    void resendDuringCooldownReturnsUniform200WithoutIssuance() throws Exception {
+        // R2-M1-C: the public response never distinguishes account state —
+        // a throttled resend answers 200 like every other state, and the
+        // throttle is proven by the absence of a NEW challenge/mail.
         String username = unique("otp-cool");
         String email = emailFor(username);
         register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+        int mailsBefore = otpMailbox.sendCountFor(email);
 
         MvcResult immediate = mockMvc.perform(post("/api/auth/verify-email/resend")
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn();
-        assertThat(immediate.getResponse().getStatus()).isEqualTo(429);
-        assertThat(immediate.getResponse().getContentAsString()).contains("AUTH_OTP_RESEND_COOLDOWN");
+        assertThat(immediate.getResponse().getStatus()).isEqualTo(200);
+        assertThat(immediate.getResponse().getContentAsString()).contains("resendCooldownSeconds");
+        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(mailsBefore);
+        assertThat(challengeCountFor(username)).isEqualTo(1);
     }
 
     @Test
     void resendRateLimitPerEmailIsEnforced() throws Exception {
+        // R2-M1-C: uniform 200s; the per-email cap (5/hour incl. the
+        // registration challenge) is proven by issuance counts, not codes.
         String username = unique("otp-rate");
         String email = emailFor(username);
+        // Pin BEFORE registering: challenge createdAt comes from this clock,
+        // so the cooldown comparisons below are deterministic regardless of
+        // the clock state earlier tests in this class left behind.
+        clock.setInstant(java.time.Instant.now());
         register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        // The mutable clock is shared by every test in this class (and by
-        // rerun attempts), so pin it just AHEAD of real time before each
-        // resend: the cooldown check compares against the challenge's
-        // @CreationTimestamp (real time), and pinning makes "cooldown
-        // elapsed" deterministic regardless of accumulated clock state.
-        // The per-email cap is 5 challenges/hour; the registration already
-        // created one, so exactly four resends succeed before the 429.
-        int[] statuses = new int[5];
+
         for (int i = 0; i < 5; i++) {
-            clock.setInstant(java.time.Instant.now().plusSeconds(2));
+            // Each resend must clear the 1s cooldown of the PREVIOUS
+            // challenge, hence the growing offset.
+            clock.setInstant(java.time.Instant.now().plusSeconds(2 + i));
             MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content("{\"email\":\"%s\"}".formatted(email)))
                     .andReturn();
-            statuses[i] = result.getResponse().getStatus();
+            assertThat(result.getResponse().getStatus()).isEqualTo(200);
         }
-        // Fail fast on unexpected outcomes instead of only checking the last.
-        assertThat(statuses[0]).isEqualTo(200);
-        assertThat(statuses[1]).isEqualTo(200);
-        assertThat(statuses[2]).isEqualTo(200);
-        assertThat(statuses[3]).isEqualTo(200);
-        assertThat(statuses[4]).isEqualTo(429);
+        // 1 registration challenge + 4 eligible resends = 5 → the 5th resend
+        // was throttled: still 200, but no sixth challenge and no sixth mail.
+        assertThat(challengeCountFor(username)).isEqualTo(5);
+        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(5);
+    }
+
+    private int challengeCountFor(String username) {
+        return ((Number) entityManager.createNativeQuery(
+                "SELECT count(*) FROM email_verification_challenges c"
+                        + " JOIN users u ON u.id = c.user_id WHERE u.username = :u")
+                .setParameter("u", username)
+                .getSingleResult()).intValue();
     }
 
     @Test

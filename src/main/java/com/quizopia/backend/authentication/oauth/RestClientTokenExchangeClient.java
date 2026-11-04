@@ -39,7 +39,7 @@ public class RestClientTokenExchangeClient implements TokenExchangeClient {
 
         try {
             Map<?, ?> response = restClient.post()
-                    .uri(OAuth2ClientConfig.DEFAULT_TOKEN_URI)
+                    .uri(properties.getGoogle().getTokenUri())
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(form)
                     .retrieve()

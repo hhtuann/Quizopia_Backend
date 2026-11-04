@@ -221,89 +221,129 @@ public class EmailVerificationService {
     }
 
     /**
-     * Re-issues the ACCOUNT_VERIFICATION OTP: supersedes the previous
-     * challenge (committed transaction), enforces the per-account cooldown
-     * plus per-email/per-IP rate limits, then attempts delivery after commit.
-     * Unknown emails answer like successes so the endpoint cannot enumerate
-     * accounts.
+     * Re-issues the ACCOUNT_VERIFICATION OTP (review R2-M1-C).
      *
-     * @return seconds the client should wait before the next resend
+     * <p><strong>Non-enumerating:</strong> every reachable state — unknown
+     * email, already-verified account, cooldown active, rate-limited —
+     * returns the SAME 200 payload ({@code resendCooldownSeconds}); only an
+     * eligible unverified account actually receives a code. Throttling is
+     * enforced internally, never signalled through distinguishable responses.
+     *
+     * <p><strong>Atomic under contention:</strong> eligibility (cooldown,
+     * per-email window, per-IP window) is evaluated INSIDE one transaction
+     * that first takes a pessimistic lock on the USER row — concurrent
+     * resends for the same account serialize there, so at most one OTP is
+     * issued per eligible window even under parallel load.
+     *
+     * @return cooldown seconds the client should count down locally
      */
     public long resend(String email, String requestIp) {
         String normalized = email == null ? "" : email.trim();
         Optional<User> userOpt = userRepository.findByEmailIgnoreCase(normalized);
         if (userOpt.isEmpty()) {
+            // Timing equalization: spend the same HMAC work as a real path.
+            otpHasher.matches("resend-equalizer", dummyHash);
             log.debug("Resend requested for unknown email");
             return properties.getResendCooldown().toSeconds();
         }
         User user = userOpt.get();
         if (user.getEmailVerifiedAt() != null) {
+            // Verified accounts never receive codes; response stays uniform.
             return properties.getResendCooldown().toSeconds();
         }
 
-        Instant now = Instant.now(clock);
+        IssuedChallenge issued = tx.execute(status -> {
+            // Serialize per-account: lock the user row BEFORE evaluating.
+            User locked = userRepository.findForUpdateById(user.getId()).orElse(null);
+            if (locked == null || locked.getEmailVerifiedAt() != null) {
+                return null; // vanished / verified concurrently → silent no-op
+            }
+            Instant now = Instant.now(clock);
+            boolean cooldownOk = challengeRepository
+                    .findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
+                            locked.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
+                    .map(latest -> !now.isBefore(
+                            latest.getCreatedAt().plus(properties.getResendCooldown())))
+                    .orElse(true);
+            boolean emailWindowOk = challengeRepository.countByUserEmailSince(
+                    locked.getEmail(), now.minus(properties.getEmailWindow()))
+                    < properties.getMaxChallengesPerEmail();
+            boolean ipOk = requestIp == null || requestIp.isBlank()
+                    || challengeRepository.countByRequestIpAndCreatedAtGreaterThanEqual(
+                            requestIp, now.minus(properties.getIpWindow()))
+                       < properties.getMaxChallengesPerIp();
+            if (!(cooldownOk && emailWindowOk && ipOk)) {
+                return null; // throttled → uniform 200, no issuance
+            }
+            String otp = otpHasher.generateOtp();
+            // Supersede any PENDING predecessor first (flush before insert so
+            // the partial unique index never sees two PENDING rows).
+            challengeRepository.findPendingForUpdate(
+                            locked.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
+                    .ifPresent(pending -> {
+                        pending.markSuperseded(now);
+                        challengeRepository.saveAndFlush(pending);
+                    });
+            EmailVerificationChallenge challenge = challengeRepository.saveAndFlush(
+                    new EmailVerificationChallenge(
+                            locked, EmailChallengePurpose.ACCOUNT_VERIFICATION,
+                            otpHasher.hash(otp), now, now.plus(properties.getOtpTtl()), requestIp));
+            return new IssuedChallenge(challenge, otp);
+        });
 
-        challengeRepository.findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
-                        user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                .ifPresent(latest -> {
-                    Instant eligibleAt = latest.getCreatedAt().plus(properties.getResendCooldown());
-                    if (now.isBefore(eligibleAt)) {
-                        long retryAfter = java.time.Duration.between(now, eligibleAt).toSeconds();
-                        throw new AuthenticationException(AuthErrorCode.AUTH_OTP_RESEND_COOLDOWN,
-                                "Please wait " + retryAfter + "s before requesting a new code");
-                    }
-                });
+        if (issued != null) {
+            deliverAfterCommit(issued.challenge(), issued.otp());
+        } else {
+            log.debug("Resend throttled or ineligible for user {}", user.getId());
+        }
+        return properties.getResendCooldown().toSeconds();
+    }
 
-        assertEmailRateLimit(user.getEmail(), now);
-        assertIpRateLimit(requestIp);
-
-        return issueAndDeliver(user, requestIp) ? properties.getResendCooldown().toSeconds()
-                : properties.getResendCooldown().toSeconds();
+    private record IssuedChallenge(EmailVerificationChallenge challenge, String otp) {
     }
 
     // ---------- internals ----------
 
     /**
-     * One committed transaction creates the challenge (superseding any PENDING
-     * predecessor under its row lock); delivery runs strictly after that
-     * commit; the {@code delivered} flag is recorded in its own transaction.
-     * The OTP plaintext lives only in this stack frame and the mail body.
+     * Registration-time issuance: one committed transaction creates the
+     * challenge (superseding any PENDING predecessor under its row lock);
+     * delivery runs strictly after that commit.
      */
     private boolean issueAndDeliver(User user, String requestIp) {
         Instant now = Instant.now(clock);
         String otp = otpHasher.generateOtp();
         EmailVerificationChallenge created = tx.execute(status -> {
-            // Supersede any PENDING predecessor first (flush before insert so
-            // the partial unique index never sees two PENDING rows).
-            challengeRepository.findPendingForUpdate(user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
+            challengeRepository.findPendingForUpdate(
+                            user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
                     .ifPresent(pending -> {
                         pending.markSuperseded(now);
                         challengeRepository.saveAndFlush(pending);
                     });
-            EmailVerificationChallenge challenge = new EmailVerificationChallenge(
+            return challengeRepository.saveAndFlush(new EmailVerificationChallenge(
                     user, EmailChallengePurpose.ACCOUNT_VERIFICATION,
-                    otpHasher.hash(otp), now.plus(properties.getOtpTtl()), requestIp);
-            return challengeRepository.saveAndFlush(challenge);
+                    otpHasher.hash(otp), now, now.plus(properties.getOtpTtl()), requestIp));
         });
+        return deliverAfterCommit(created, otp);
+    }
 
+    /**
+     * SMTP delivery AFTER the challenge commit (review M1-07); the
+     * {@code delivered} flag is recorded in its own transaction. The OTP
+     * plaintext lives only in this stack frame and the mail body.
+     */
+    private boolean deliverAfterCommit(EmailVerificationChallenge challenge, String otp) {
+        User user = challenge.getUser();
         boolean sent = mailSender.sendAccountVerificationOtp(
                 user.getEmail(), user.getDisplayName(), otp,
                 properties.getOtpTtl().toSeconds());
         if (sent) {
-            created.markDelivered();
-            tx.executeWithoutResult(status -> challengeRepository.save(created));
+            challenge.markDelivered();
+            tx.executeWithoutResult(status -> challengeRepository.save(challenge));
         } else {
-            log.warn("OTP mail not delivered for user {} (resend is the recovery flow)", user.getId());
+            log.warn("OTP mail not delivered for user {} (resend is the recovery flow)",
+                    user.getId());
         }
         return sent;
-    }
-
-    private void assertEmailRateLimit(String email, Instant now) {
-        long issued = challengeRepository.countByUserEmailSince(
-                email, now.minus(properties.getEmailWindow()));
-        if (issued >= properties.getMaxChallengesPerEmail()) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_RATE_LIMITED);
-        }
     }
 
     private void assertIpRateLimit(String requestIp) {

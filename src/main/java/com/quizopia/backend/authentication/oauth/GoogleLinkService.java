@@ -60,6 +60,7 @@ public class GoogleLinkService {
     private final TokenExchangeClient tokenExchangeClient;
     private final OauthIdentityService identityService;
     private final OAuthProperties properties;
+    private final com.quizopia.backend.security.config.SecurityProperties securityProperties;
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -72,6 +73,7 @@ public class GoogleLinkService {
             TokenExchangeClient tokenExchangeClient,
             OauthIdentityService identityService,
             OAuthProperties properties,
+            com.quizopia.backend.security.config.SecurityProperties securityProperties,
             Clock clock,
             TransactionTemplate tx) {
         this.linkRequestRepository = linkRequestRepository;
@@ -82,6 +84,7 @@ public class GoogleLinkService {
         this.tokenExchangeClient = tokenExchangeClient;
         this.identityService = identityService;
         this.properties = properties;
+        this.securityProperties = securityProperties;
         this.clock = clock;
         this.tx = tx;
     }
@@ -89,12 +92,26 @@ public class GoogleLinkService {
     /**
      * Starts a link flow after password re-authentication.
      *
+     * <p>Review R2-M1-B: this endpoint is a password oracle inside an
+     * authenticated session, so re-authentication shares the SAME durable
+     * lockout machinery as login — failures increment the committed
+     * {@code failed_login_attempts} counter atomically, the account locks at
+     * the configured threshold, and the lock is honored (and cleared on
+     * success) with database-fresh reads. A wrong password here is
+     * indistinguishable in counters from a wrong login password.
+     *
      * @return the browser-facing Google authorization URL
      */
     public String startLink(User user, String password) {
+        java.time.Instant lockedUntil = freshLockedUntil(user);
+        if (lockedUntil != null && java.time.Instant.now(clock).isBefore(lockedUntil)) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_LOCKED);
+        }
         if (!passwordHasher.matches(password == null ? "" : password, user.getPasswordHash())) {
+            recordFailedReauthentication(user);
             throw new AuthenticationException(AuthErrorCode.AUTH_INVALID_CREDENTIALS);
         }
+        clearFailedReauthentication(user);
 
         String state = randomToken(32);
         String codeVerifier = randomToken(64);
@@ -107,7 +124,9 @@ public class GoogleLinkService {
 
         OAuthProperties.Google google = properties.getGoogle();
         String redirectUri = google.getRedirectBaseUri() + LINK_CALLBACK_PATH;
-        return OAuth2ClientConfig.DEFAULT_AUTHORIZATION_URI
+        String authorizationUri = google.getAuthorizationUri() != null && !google.getAuthorizationUri().isBlank()
+                ? google.getAuthorizationUri() : OAuth2ClientConfig.DEFAULT_AUTHORIZATION_URI;
+        return authorizationUri
                 + "?client_id=" + enc(google.getClientId())
                 + "&redirect_uri=" + enc(redirectUri)
                 + "&response_type=code"
@@ -116,6 +135,37 @@ public class GoogleLinkService {
                 + "&nonce=" + enc(nonce)
                 + "&code_challenge=" + enc(s256(codeVerifier))
                 + "&code_challenge_method=S256";
+    }
+
+    // ---------- re-authentication lockout (review R2-M1-B) ----------
+
+    /** Database-fresh lock deadline (native read bypasses the L1 cache). */
+    private java.time.Instant freshLockedUntil(User user) {
+        java.sql.Timestamp ts = userRepository.findLockedUntilById(user.getId());
+        return ts == null ? null : ts.toInstant();
+    }
+
+    /** Committed atomic increment — no lost updates under concurrency. */
+    private void recordFailedReauthentication(User user) {
+        java.time.Instant lockUntil = java.time.Instant.now(clock)
+                .plus(securityProperties.getLockout().getDuration());
+        Integer attempts = tx.execute(status -> {
+            userRepository.incrementFailedLoginAttempts(
+                    user.getId(), securityProperties.getLockout().getThreshold(), lockUntil);
+            return userRepository.findFailedLoginAttempts(user.getId());
+        });
+        if (attempts != null && attempts >= securityProperties.getLockout().getThreshold()) {
+            log.info("Account {} locked after {} failed link re-authentications",
+                    user.getId(), attempts);
+        }
+    }
+
+    private void clearFailedReauthentication(User user) {
+        tx.executeWithoutResult(status -> userRepository.findById(user.getId()).ifPresent(managed -> {
+            managed.setFailedLoginAttempts(0);
+            managed.setLockedUntil(null);
+            userRepository.saveAndFlush(managed);
+        }));
     }
 
     /**

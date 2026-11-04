@@ -12,7 +12,6 @@ import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
@@ -72,7 +71,11 @@ public class EmailVerificationChallenge {
     @Column(name = "delivered", nullable = false)
     private boolean delivered = false;
 
-    @CreationTimestamp
+    /**
+     * Provided by the service from the SAME clock that derives expires_at —
+     * a single time source keeps chk_email_challenges_expiry valid even when
+     * the injected clock differs from the JVM clock (tests use MutableClock).
+     */
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -84,10 +87,11 @@ public class EmailVerificationChallenge {
     }
 
     public EmailVerificationChallenge(User user, EmailChallengePurpose purpose,
-            String otpHash, Instant expiresAt, String requestIp) {
+            String otpHash, Instant createdAt, Instant expiresAt, String requestIp) {
         this.user = user;
         this.purpose = purpose;
         this.otpHash = otpHash;
+        this.createdAt = createdAt;
         this.expiresAt = expiresAt;
         this.requestIp = requestIp;
     }
