@@ -28,34 +28,61 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  */
 @SpringBootTest
 @Import({PostgresTestContainerConfiguration.class,
-        DeliveryCompletionRaceIntegrationTests.SlowMailConfig.class})
+        DeliveryCompletionRaceIntegrationTests.GatedMailConfig.class})
 @ActiveProfiles("test")
 class DeliveryCompletionRaceIntegrationTests extends AbstractAuthenticationIntegrationTests {
 
-    /** Delays delivery so the racing verify lands while "SMTP" is running. */
+    /**
+     * Deterministic SMTP double for the delivery race: when armed, the send
+     * records its OTP, signals "entered" and then BLOCKS on the release
+     * gate — the racing verify is guaranteed to commit while the send is in
+     * flight (no sleeps ordering the race).
+     */
     @TestConfiguration(proxyBeanMethods = false)
-    static class SlowMailConfig {
+    static class GatedMailConfig {
 
-        static volatile long delayMs = 0;
+        static volatile boolean armed = false;
+        static final java.util.concurrent.CountDownLatch entered =
+                new java.util.concurrent.CountDownLatch(1);
+        static volatile String inFlightOtp;
+        static volatile java.util.concurrent.CountDownLatch release =
+                new java.util.concurrent.CountDownLatch(1);
 
         @Bean
         @Primary
-        OtpMailSender slowOtpMailSender(com.quizopia.backend.notification.email.CaptureOtpMailSender capture) {
+        OtpMailSender gatedOtpMailSender(com.quizopia.backend.notification.email.CaptureOtpMailSender capture) {
             return new OtpMailSender() {
                 @Override
                 public boolean sendAccountVerificationOtp(String toEmail, String displayName,
                         String otp, long expiresInSeconds) {
-                    long delay = delayMs;
-                    if (delay > 0) {
-                        try {
-                            Thread.sleep(delay);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
+                    if (!armed) {
+                        return capture.sendAccountVerificationOtp(toEmail, displayName, otp, expiresInSeconds);
+                    }
+                    inFlightOtp = otp;
+                    entered.countDown();
+                    try {
+                        // Block until the racing attempt has committed.
+                        if (!release.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                            return false;
                         }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
                     }
                     return capture.sendAccountVerificationOtp(toEmail, displayName, otp, expiresInSeconds);
                 }
             };
+        }
+
+        static void rearm() {
+            armed = true;
+            inFlightOtp = null;
+            release = new java.util.concurrent.CountDownLatch(1);
+        }
+
+        static void disarm() {
+            armed = false;
+            release.countDown();
         }
     }
 
@@ -77,15 +104,21 @@ class DeliveryCompletionRaceIntegrationTests extends AbstractAuthenticationInteg
         // counter commits at 1. The later delivered-flag write must NOT reset
         // that counter (the stale full-entity merge would).
         Thread.sleep(1100); // clear the 1s test cooldown
-        SlowMailConfig.delayMs = 1500;
+        GatedMailConfig.rearm();
         try {
             mockMvc.perform(post("/api/auth/verify-email/resend")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"email\":\"%s\"}".formatted(email)))
                     .andReturn().getResponse().getStatus();
             waitForChallengeCount(userId, 2); // C2 exists (PENDING)
+            // The send has ENTERED (blocked on the gate) — the race window is
+            // open, and the in-flight OTP is captured deterministically.
+            assertThat(GatedMailConfig.entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("delayed send must be in flight").isTrue();
+            String c2Otp = GatedMailConfig.inFlightOtp;
+            assertThat(c2Otp).isNotEqualTo(realOtp);
 
-            String wrong = realOtp.equals("123456") ? "654321" : "123456";
+            String wrong = c2Otp.equals("123456") ? "654321" : "123456";
             int status = mockMvc.perform(post("/api/auth/verify-email")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(verifyEmailJson(email, wrong)))
@@ -93,9 +126,12 @@ class DeliveryCompletionRaceIntegrationTests extends AbstractAuthenticationInteg
             assertThat(status).isEqualTo(400);
             waitForAttempts(userId, 1); // counter committed while delivery in flight
 
-            Thread.sleep(1800); // let the delayed delivery write land
+            // NOW release the blocked send; the delivered-flag write lands
+            // strictly after the attempt commit.
+            GatedMailConfig.release.countDown();
+            waitForDelivered(userId, true);
         } finally {
-            SlowMailConfig.delayMs = 0;
+            GatedMailConfig.disarm();
         }
 
         entityManager.clear();
@@ -127,6 +163,23 @@ class DeliveryCompletionRaceIntegrationTests extends AbstractAuthenticationInteg
             Thread.sleep(50);
         }
         throw new AssertionError("attempt counter did not reach " + expected);
+    }
+
+    private void waitForDelivered(Long userId, boolean delivered) throws Exception {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            entityManager.clear();
+            Boolean flag = (Boolean) entityManager.createNativeQuery(
+                            "SELECT c.delivered FROM email_verification_challenges c"
+                                    + " WHERE c.user_id = :u ORDER BY c.id DESC LIMIT 1")
+                    .setParameter("u", userId)
+                    .getSingleResult();
+            if (flag != null && flag == delivered) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("delivered flag did not become " + delivered);
     }
 
     private void waitForChallengeCount(Long userId, int expected) throws Exception {
