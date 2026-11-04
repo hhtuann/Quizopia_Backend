@@ -5,6 +5,8 @@ import com.quizopia.backend.identity.domain.model.UserStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -96,4 +98,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
             @Param("roleCode") String roleCode,
             @Param("now") Instant now,
             Pageable pageable);
+
+    /**
+     * Identity-M3 reconciliation: fresh, row-locked user read. A locking
+     * query re-reads committed state (defeats a stale managed instance) and
+     * serializes against concurrent email changes through the update path.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> findByIdForUpdate(@Param("id") Long id);
 }

@@ -36,4 +36,19 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
     long deleteByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
 
     long countByClassroomId(Long classroomId);
+
+    /**
+     * Identity-M3 reconciliation: atomic, conflict-free membership insert.
+     * ON CONFLICT DO NOTHING keeps the surrounding transaction VALID when the
+     * user is already a member (a caught DataIntegrityViolation would abort
+     * the PostgreSQL transaction and doom the roster LINKED write).
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query(value = """
+            INSERT INTO classroom_members (classroom_id, user_id, student_profile_id, school_id, added_at)
+            VALUES (:classroomId, :userId, NULL, NULL, now())
+            ON CONFLICT (classroom_id, user_id) DO NOTHING
+            """, nativeQuery = true)
+    int insertMembershipIfAbsent(@org.springframework.data.repository.query.Param("classroomId") Long classroomId,
+            @org.springframework.data.repository.query.Param("userId") Long userId);
 }

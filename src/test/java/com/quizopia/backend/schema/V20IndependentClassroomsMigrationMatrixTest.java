@@ -90,6 +90,19 @@ class V20IndependentClassroomsMigrationMatrixTest {
                         JOIN workspaces w ON w.name = 'M3 Org WS'
                         WHERE s.code = 'M3SCH'
                         """);
+                // Legacy membership (user-based, V12+) tied to the classroom.
+                st.execute("""
+                        INSERT INTO users (username, email, password_hash, display_name, status,
+                                           token_version, failed_login_attempts, password_changed_at)
+                        VALUES ('m3_member', 'm3member@legacy.example.com', 'x', 'M3 Member',
+                                'ACTIVE', 0, 0, now())
+                        """);
+                st.execute("""
+                        INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id)
+                        SELECT c.id, u.id, c.school_id, NULL
+                        FROM classrooms c, users u
+                        WHERE c.code = 'M3C1' AND u.username = 'm3_member'
+                        """);
             }
 
             // ---- Phase 1 DB → Identity-M3 head (V18–V20) ----
@@ -100,9 +113,12 @@ class V20IndependentClassroomsMigrationMatrixTest {
 
             try (Connection c = java.sql.DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement()) {
-                // Legacy classroom preserved with backfilled owner_user_id.
+                // Legacy classroom preserved with backfilled owner_user_id AND
+                // its org workspace unchanged (review M3-QA).
                 try (ResultSet rs = st.executeQuery("""
-                        SELECT c.school_id, c.owner_teacher_id, c.owner_user_id, c.code
+                        SELECT c.school_id, c.owner_teacher_id, c.owner_user_id, c.code,
+                               c.workspace_id,
+                               (SELECT w.name FROM workspaces w WHERE w.id = c.workspace_id) ws
                         FROM classrooms c
                         """)) {
                     assertThat(rs.next()).isTrue();
@@ -110,7 +126,20 @@ class V20IndependentClassroomsMigrationMatrixTest {
                     assertThat(rs.getObject("owner_teacher_id")).isNotNull();
                     assertThat(rs.getObject("owner_user_id")).as("owner_user_id backfilled").isNotNull();
                     assertThat(rs.getString("code")).isEqualTo("M3C1");
+                    assertThat(rs.getString("ws")).as("legacy classroom stays in ORG workspace")
+                            .isEqualTo("M3 Org WS");
                     assertThat(rs.next()).as("exactly one legacy classroom").isFalse();
+                }
+
+                // Legacy membership preserved (attempt-ownership chain intact).
+                try (ResultSet rs = st.executeQuery("""
+                        SELECT count(*) FROM classroom_members cm
+                        JOIN classrooms c ON c.id = cm.classroom_id
+                        JOIN users u ON u.id = cm.user_id
+                        WHERE c.code = 'M3C1' AND u.username = 'm3_member'
+                        """)) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).isEqualTo(1);
                 }
 
                 // V20 schema objects exist.
