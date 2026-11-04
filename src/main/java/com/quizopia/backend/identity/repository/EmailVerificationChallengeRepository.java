@@ -64,6 +64,20 @@ public interface EmailVerificationChallengeRepository extends JpaRepository<Emai
             """)
     int deleteTerminalOlderThan(@Param("cutoff") Instant cutoff);
 
+    /**
+     * Targeted delivery-completion update (reviewer blocker fix): sets ONLY
+     * the delivered flag by id — never merges a possibly-stale entity
+     * snapshot over concurrent lifecycle changes (attempts, terminal
+     * transitions, supersession) that may have committed while SMTP ran.
+     */
+    @Modifying
+    @org.springframework.data.jpa.repository.Query(value = """
+            UPDATE email_verification_challenges
+               SET delivered = TRUE, updated_at = now()
+             WHERE id = :challengeId
+            """, nativeQuery = true)
+    void markDeliveredById(@Param("challengeId") Long challengeId);
+
     /** Fails PENDING challenges past their deadline (sweeper-only path). */
     @Modifying
     @Query("""

@@ -259,8 +259,6 @@ class TwoConnectionGoogleRaceIntegrationTests {
         assertThat(ex.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM users WHERE email = ?", Integer.class, email)).isEqualTo(1);
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM external_identities", Integer.class)).isGreaterThanOrEqualTo(0);
         // No identity was linked to the foreign account.
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM external_identities e JOIN users u ON u.id = e.user_id"

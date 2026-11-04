@@ -33,7 +33,14 @@ class ResendWorkerOverloadTests extends AbstractAuthenticationIntegrationTests {
     @TestConfiguration(proxyBeanMethods = false)
     static class BlockingMailConfig {
 
-        /** Slow SMTP double: each worker send blocks 400ms (2 workers). */
+        static final java.util.concurrent.atomic.AtomicBoolean failing =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        /**
+         * SMTP double: optionally SLOW (400ms, saturates the workers for the
+         * overload test) and optionally FAILING (returns false, never
+         * records) — a true delivery-failure injection.
+         */
         @Bean
         @Primary
         OtpMailSender blockingOtpMailSender(com.quizopia.backend.notification.email.CaptureOtpMailSender capture) {
@@ -45,6 +52,9 @@ class ResendWorkerOverloadTests extends AbstractAuthenticationIntegrationTests {
                         Thread.sleep(400);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
+                    }
+                    if (failing.get()) {
+                        return false;
                     }
                     return capture.sendAccountVerificationOtp(toEmail, displayName, otp, expiresInSeconds);
                 }
@@ -94,20 +104,54 @@ class ResendWorkerOverloadTests extends AbstractAuthenticationIntegrationTests {
         String user = unique("fail");
         String email = emailFor(user);
         register(studentRegisterJson(user, email, "Passw0rd!", user + " Name", "+84991234567"));
+        waitForOtpMailCount(email, 1); // registration mail delivered normally
 
-        // Direct call into the worker with a FAILING sender installed for one
-        // call: simulate by exhausting… simpler — the capture sender cannot
-        // fail, so assert the invariant at the unit boundary instead: the
-        // intake stays uniform and the challenge remains resend-recoverable.
-        MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
+        // Install a FAILING sender, then drive a resend through the real
+        // worker: no exception may surface (intake stays uniform 200) and the
+        // challenge row must remain with delivered=false. (Cooldown first:
+        // the registration challenge is fresh.)
+        Thread.sleep(1100);
+        BlockingMailConfig.failing.set(true);
+        try {
+            MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"email\":\"%s\"}".formatted(email)))
+                    .andReturn();
+            assertThat(result.getResponse().getStatus()).isEqualTo(200);
+            assertThat(result.getResponse().getContentAsString()).contains("resendCooldownSeconds");
+            waitForChallengeDeliveredFlag(user, false);
+            Thread.sleep(1100); // cooldown before recovery
+        } finally {
+            BlockingMailConfig.failing.set(false);
+        }
+
+        // Recovery: a later resend (healthy sender) issues a fresh challenge
+        // that IS delivered.
+        MvcResult recovery = mockMvc.perform(post("/api/auth/verify-email/resend")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn();
-        assertThat(result.getResponse().getStatus()).isEqualTo(200);
-        // Challenge row exists (issued or not) and no exception surfaced;
-        // recovery via another resend after cooldown is the contract.
-        Thread.sleep(1000);
-        assertThat(challengeCount(user)).isGreaterThanOrEqualTo(1);
+        assertThat(recovery.getResponse().getStatus()).isEqualTo(200);
+        // Registration + recovered delivery. The FAILED send never reached
+        // the capture sender (it returned false before recording), so the
+        // expected total is 2 — proving the failed path produced no mail.
+        waitForOtpMailCount(email, 2);
+        waitForChallengeDeliveredFlag(user, true);
+    }
+
+    private void waitForChallengeDeliveredFlag(String username, boolean delivered) throws Exception {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            Boolean flag = jdbc.queryForObject(
+                    "SELECT c.delivered FROM email_verification_challenges c"
+                            + " JOIN users u ON u.id = c.user_id WHERE u.username = ?"
+                            + " ORDER BY c.id DESC LIMIT 1", Boolean.class, username);
+            if (flag != null && flag == delivered) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("latest challenge delivered flag did not become " + delivered);
     }
 
     @org.springframework.beans.factory.annotation.Autowired

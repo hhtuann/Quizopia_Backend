@@ -392,8 +392,12 @@ public class EmailVerificationService {
                 user.getEmail(), user.getDisplayName(), otp,
                 properties.getOtpTtl().toSeconds());
         if (sent) {
-            challenge.markDelivered();
-            tx.executeWithoutResult(status -> challengeRepository.save(challenge));
+            // Targeted flag update only: the in-memory snapshot is stale by
+            // now (SMTP ran outside the transaction) — merging it could
+            // overwrite concurrent lifecycle changes (attempts/terminal
+            // states) committed meanwhile.
+            tx.executeWithoutResult(status ->
+                    challengeRepository.markDeliveredById(challenge.getId()));
         } else {
             log.warn("OTP mail not delivered for user {} (resend is the recovery flow)",
                     user.getId());
