@@ -18,6 +18,11 @@ import org.springframework.stereotype.Component;
  * phones, raw email) — are deleted {@code quizopia.roster.retention.days}
  * days after their last update. The canonical matching email is deleted with
  * the row. LINKED entries are live state and are never touched here.
+     * <p><b>Consent consequence:</b> deleting a DECLINED row removes that
+     * classroom's standing opt-out for the address — after the retention
+     * window a teacher re-invitation CAN auto-link again. The opt-out window
+     * therefore equals the retention window; operators choosing a short
+     * retention accept shorter consent memory.
  *
  * <p><b>Default:</b> {@code 0} = cleanup DISABLED — no implicit data
  * destruction until an operator explicitly opts in per environment. Set
