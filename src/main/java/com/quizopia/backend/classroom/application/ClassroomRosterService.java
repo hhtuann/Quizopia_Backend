@@ -111,12 +111,17 @@ public class ClassroomRosterService {
         }
 
         // If the email's owner ALREADY exists AND is verified, reconcile
-        // immediately (the invitation may be for an existing learner).
-        com.quizopia.backend.identity.domain.model.User invitee =
-                classroomService.findUserByEmailIfVerified(canonical);
-        if (invitee != null) {
-            reconcileEntriesForUser(invitee.getId(), canonical);
-            entry = rosterRepository.findById(entry.getId()).orElse(entry);
+        // immediately — EXCEPT when the learner DECLINED this classroom
+        // before (review M3-02): their opt-out survives re-invitation; the
+        // entry stays PENDING until the learner explicitly accepts it via
+        // /roster/{id}/accept (learner-initiated consent).
+        if (!hasDeclinedHistory(classroomId, canonical)) {
+            com.quizopia.backend.identity.domain.model.User invitee =
+                    classroomService.findUserByEmailIfVerified(canonical);
+            if (invitee != null) {
+                reconcileEntriesForUser(invitee.getId(), canonical);
+                entry = rosterRepository.findById(entry.getId()).orElse(entry);
+            }
         }
         return toResponse(entry, classroom);
     }
@@ -133,22 +138,48 @@ public class ClassroomRosterService {
     }
 
     /**
-     * Teacher withdraws a pending invitation (PENDING → REVOKED). Takes the
-     * SAME pessimistic lock as reconciliation (review M3-DB P1): without it,
-     * a stale PENDING read could overwrite a concurrently-committed LINKED
-     * row (membership would survive a "successful" withdrawal).
+     * Teacher withdrawal (review M3-01): PENDING → REVOKED (invitation
+     * withdrawn) and LINKED → REVOKED (member removed + membership deleted,
+     * user-based independent memberships have no legacy member endpoint).
+     * Takes the row lock so a concurrent reconciliation cannot interleave;
+     * the locked state — not a stale read — decides the outcome.
      */
     @org.springframework.transaction.annotation.Transactional
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        ClassroomRosterEntry entry = rosterRepository
-                .findPendingForUpdate(classroomId, requireEntry(classroomId, entryId).getEmailNormalized())
-                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE));
-        if (!entry.getId().equals(entryId)) {
-            throw new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND);
+        String email = requireEntry(classroomId, entryId).getEmailNormalized();
+        ClassroomRosterEntry locked = lockEntry(classroomId, entryId, email);
+        if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
+            // Remove the user-based membership first (same transaction).
+            memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
+            notifyRemovedMember(locked);
         }
-        entry.revoke(Instant.now(clock));
-        rosterRepository.saveAndFlush(entry);
+        locked.revoke(Instant.now(clock));
+        rosterRepository.saveAndFlush(locked);
+    }
+
+    /** PESSIMISTIC_WRITE on the entry in its CURRENT (non-terminal) state. */
+    private ClassroomRosterEntry lockEntry(Long classroomId, Long entryId, String email) {
+        ClassroomRosterEntry entry = tx.execute(status -> rosterRepository
+                .findByIdAndClassroomIdForUpdate(entryId, classroomId)
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND)));
+        if (entry.getStatus() == ClassroomRosterEntry.RosterStatus.REVOKED
+                || entry.getStatus() == ClassroomRosterEntry.RosterStatus.DECLINED) {
+            throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
+        }
+        return entry;
+    }
+
+    private void notifyRemovedMember(ClassroomRosterEntry entry) {
+        try {
+            notificationService.create(entry.getUserId(),
+                    com.quizopia.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                    "Removed from class",
+                    "You were removed from " + entry.getClassroom().getName(),
+                    "/my-classes");
+        } catch (RuntimeException ex) {
+            log.warn("Failed to notify removed member for entry {}", entry.getId());
+        }
     }
 
     // ============================================================
@@ -180,6 +211,63 @@ public class ClassroomRosterService {
         rosterRepository.saveAndFlush(entry);
         log.info("User {} declined roster entry {} (classroom {})", userId, entryId,
                 entry.getClassroomId());
+    }
+
+    /**
+     * Learner-initiated consent (review M3-02): the verified owner of the
+     * entry's email ACCEPTS a pending invitation — the only path that can
+     * relink a classroom the learner previously DECLINED.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public RosterEntryResponse acceptEntry(Long userId, Long entryId) {
+        ClassroomRosterEntry entry = tx.execute(status -> {
+            ClassroomRosterEntry locked = rosterRepository
+                    .findByIdAndClassroomIdForUpdate(entryId,
+                            rosterRepository.findById(entryId)
+                                    .orElseThrow(() -> new ClassroomException(
+                                            ClassroomErrorCode.ROSTER_NOT_FOUND))
+                                    .getClassroomId())
+                    .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
+            if (locked.getStatus() != ClassroomRosterEntry.RosterStatus.PENDING) {
+                throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
+            }
+            // Consent proof: the caller's email must be VERIFIED and match
+            // the invitation address (same proof as auto-linking).
+            String canonical = locked.getEmailNormalized();
+            com.quizopia.backend.identity.domain.model.User user =
+                    classroomService.findUserByIdWithVerifiedEmail(userId, canonical);
+            if (user == null) {
+                throw new ClassroomException(ClassroomErrorCode.ROSTER_ACCESS_DENIED);
+            }
+            memberRepository.insertMembershipIfAbsent(locked.getClassroomId(), userId);
+            locked.linkTo(userId, Instant.now(clock));
+            rosterRepository.saveAndFlush(locked);
+            return locked;
+        });
+        return toResponse(entry, null);
+    }
+
+    /**
+     * Learner: PENDING invitations addressed to the caller's VERIFIED email
+     * (these await explicit consent — they exist only when the learner
+     * previously declined this classroom).
+     */
+    public List<RosterEntryResponse> myPendingInvitations(Long userId) {
+        com.quizopia.backend.identity.domain.model.User user = classroomService
+                .findVerifiedUserById(userId);
+        if (user == null) {
+            return List.of();
+        }
+        String canonical = canonicalEmail(user.getEmail());
+        return rosterRepository
+                .findAllByEmailNormalizedAndStatus(canonical,
+                        ClassroomRosterEntry.RosterStatus.PENDING)
+                .stream().map(e -> toResponse(e, null)).toList();
+    }
+
+    private boolean hasDeclinedHistory(Long classroomId, String canonicalEmail) {
+        return rosterRepository.existsByClassroomIdAndEmailNormalizedAndStatus(
+                classroomId, canonicalEmail, ClassroomRosterEntry.RosterStatus.DECLINED);
     }
 
     // ============================================================
@@ -218,6 +306,12 @@ public class ClassroomRosterService {
                 }
                 Classroom classroom = classroomRepository.findById(classroomId).orElse(null);
                 if (classroom == null) {
+                    return new LinkOutcome(false, null);
+                }
+                // Review M3-02: a DECLINED history for this (classroom,
+                // email) is a standing opt-out — verification alone must not
+                // relink; only the learner's explicit accept can.
+                if (hasDeclinedHistory(classroomId, canonical)) {
                     return new LinkOutcome(false, null);
                 }
                 insertMembershipDeduped(classroomId, userId);

@@ -81,6 +81,22 @@ public class ClassroomController {
         return rosterService.myLinkedEntries(userId);
     }
 
+    /** Review M3-02: PENDING invitations awaiting the caller's consent. */
+    @GetMapping("/roster/invitations")
+    public List<RosterEntryResponse> myPendingInvitations(@AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return rosterService.myPendingInvitations(userId);
+    }
+
+    /** Review M3-02: learner-initiated consent — the only relink path for a
+     *  classroom the learner previously DECLINED. */
+    @PostMapping("/roster/{entryId}/accept")
+    public RosterEntryResponse acceptInvitation(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long entryId) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return rosterService.acceptEntry(userId, entryId);
+    }
+
     @PostMapping("/roster/{entryId}/decline")
     public ResponseEntity<Void> declineRosterEntry(
             @AuthenticationPrincipal Jwt jwt, @PathVariable Long entryId) {
