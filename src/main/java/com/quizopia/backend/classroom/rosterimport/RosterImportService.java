@@ -60,22 +60,35 @@ public class RosterImportService {
 
     private static final long MAX_FILE_BYTES = 2 * 1024 * 1024; // 2 MB
 
+    private final com.quizopia.backend.classroom.application.ClassroomService classroomService;
     private final RosterExcelParser parser;
     private final ClassroomRosterEntryRepository rosterRepository;
     private final ClassroomRosterService rosterService;
     /** Per-row REQUIRES_NEW transactions (partial-success isolation). */
     private final org.springframework.transaction.support.TransactionTemplate rowTx;
 
-    public RosterImportService(RosterExcelParser parser,
+    public RosterImportService(
+            com.quizopia.backend.classroom.application.ClassroomService classroomService,
+            RosterExcelParser parser,
             ClassroomRosterEntryRepository rosterRepository,
             ClassroomRosterService rosterService,
             org.springframework.transaction.PlatformTransactionManager txManager) {
+        this.classroomService = classroomService;
         this.parser = parser;
         this.rosterRepository = rosterRepository;
         this.rosterService = rosterService;
         this.rowTx = new org.springframework.transaction.support.TransactionTemplate(txManager);
         this.rowTx.setPropagationBehavior(
                 org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
+     * Review M4-02: confirm's upfront write check — CLASSROOM_MEMBER_ADD +
+     * classroom ownership, BEFORE the workbook is read (template/preview keep
+     * their READ-permission semantics).
+     */
+    public void requireConfirmWriteAccess(Long userId, Long classroomId) {
+        classroomService.requireOwnedClassroomForRoster(userId, classroomId);
     }
 
     /** Read-only preview (authorization happens in the controller first). */

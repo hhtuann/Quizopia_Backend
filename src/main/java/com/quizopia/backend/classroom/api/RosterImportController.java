@@ -49,23 +49,24 @@ public class RosterImportController {
             @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
             @RequestPart("file") MultipartFile file) {
         Long userId = Long.valueOf(jwt.getSubject());
-        importPreviewAuth(userId, id);
+        // Preview stays READ-permission + ownership, before any byte is read.
+        templateService.checkPermission(userId, id);
         return importService.preview(userId, id, file);
     }
 
-    /** POST /api/classrooms/{id}/roster-import/confirm — idempotent batch. */
+    /**
+     * POST /api/classrooms/{id}/roster-import/confirm — idempotent batch.
+     * Review M4-02: confirm MUTATES, so it requires the WRITE permission
+     * (CLASSROOM_MEMBER_ADD + ownership) BEFORE any byte is parsed — a
+     * READ-only owner gets an upfront 403 instead of row failures.
+     */
     @PostMapping(value = "/{id}/roster-import/confirm",
             consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public RosterImportService.ConfirmResult confirm(
             @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
             @RequestPart("file") MultipartFile file) {
         Long userId = Long.valueOf(jwt.getSubject());
-        importPreviewAuth(userId, id);
+        importService.requireConfirmWriteAccess(userId, id);
         return importService.confirm(userId, id, file);
-    }
-
-    private void importPreviewAuth(Long userId, Long classroomId) {
-        // Deny-by-default classroom ownership BEFORE parsing any byte.
-        templateService.checkPermission(userId, classroomId);
     }
 }

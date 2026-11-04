@@ -56,6 +56,9 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
     private com.quizopia.backend.classroom.repository.ClassroomMemberRepository memberRepository;
 
     @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    @Autowired
     private com.quizopia.backend.security.encryption.SensitiveDataEncryptor encryptor;
 
     private String decrypt(String ciphertext) {
@@ -589,6 +592,110 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> importService.preview(
                         ownerOf(t.classroomId()), t.classroomId(), file))
                 .hasMessageContaining("Invalid roster import file");
+    }
+
+    // ---------- M4-02: confirm requires ADD permission BEFORE parsing ----------
+
+    @Test
+    void confirmDeniedUpfrontWhenAddPermissionIsRevoked() throws Exception {
+        Teacher owner = teacherWithClassroom("PERM");
+        byte[] book = workbook(List.of(List.of("Perm Kid", "", "", "", "", "",
+                emailFor(unique("perm")))));
+
+        // Sanity: owner can confirm.
+        assertThat(mockMvc.perform(multipart(
+                        "/api/classrooms/" + owner.classroomId() + "/roster-import/preview")
+                        .file(xlsx(book))
+                        .header("Authorization", "Bearer " + owner.token()))
+                .andReturn().getResponse().getStatus()).isEqualTo(200);
+
+        // Revoke CLASSROOM_MEMBER_ADD from the TEACHER role: preview (READ)
+        // still allowed, confirm (ADD) must now fail UPFRONT with 403 —
+        // before parsing (a garbage file would otherwise 400 first).
+        jdbcTemplate.update("""
+                DELETE FROM role_permissions
+                WHERE role_id = (SELECT id FROM roles WHERE code = 'TEACHER')
+                  AND permission_id = (SELECT id FROM permissions WHERE code = 'CLASSROOM_MEMBER_ADD')
+                """);
+        try {
+            MockMultipartFile garbage = new MockMultipartFile("file", "roster.xlsx",
+                    "application/octet-stream", "not a workbook".getBytes());
+            MvcResult previewOk = mockMvc.perform(multipart(
+                            "/api/classrooms/" + owner.classroomId() + "/roster-import/preview")
+                            .file(garbage)
+                            .header("Authorization", "Bearer " + owner.token()))
+                    .andReturn();
+            assertThat(previewOk.getResponse().getStatus())
+                    .as("preview keeps READ semantics (fails on file, not permission)")
+                    .isEqualTo(400);
+
+            MvcResult confirmDenied = mockMvc.perform(multipart(
+                            "/api/classrooms/" + owner.classroomId() + "/roster-import/confirm")
+                            .file(garbage)
+                            .header("Authorization", "Bearer " + owner.token()))
+                    .andReturn();
+            assertThat(confirmDenied.getResponse().getStatus())
+                    .as("confirm requires ADD before parsing")
+                    .isEqualTo(403);
+        } finally {
+            jdbcTemplate.update("""
+                    INSERT INTO role_permissions (role_id, permission_id)
+                    SELECT (SELECT id FROM roles WHERE code = 'TEACHER'),
+                           (SELECT id FROM permissions WHERE code = 'CLASSROOM_MEMBER_ADD')
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM role_permissions rp
+                        WHERE rp.role_id = (SELECT id FROM roles WHERE code = 'TEACHER')
+                          AND rp.permission_id = (SELECT id FROM permissions WHERE code = 'CLASSROOM_MEMBER_ADD'))
+                    """);
+        }
+    }
+
+    // ---------- M4-03: DECLINED opt-out holds through import ----------
+
+    @Test
+    void declinedAddressImportedAsPendingNeverAutoLinked() throws Exception {
+        Teacher t = teacherWithClassroom("DECIMP");
+        Long owner = ownerOf(t.classroomId());
+
+        // Verified learner declines an invitation (opt-out established).
+        String email = emailFor(unique("deci"));
+        String username = unique("deci");
+        registerAndVerify(username, email, "Passw0rd!");
+        RosterImportService.ConfirmResult seed = importService.confirm(owner, t.classroomId(),
+                xlsx(workbook(List.of(List.of("Declined Importer", "", "", "", "", "", email)))));
+        assertThat(seed.imported()).isEqualTo(1); // first-time verified → linked
+        var linked = rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                t.classroomId(), org.springframework.data.domain.PageRequest.of(0, 10))
+                .getContent().get(0);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/classrooms/roster/" + linked.getId() + "/decline")
+                        .header("Authorization", "Bearer " + extractAccessToken(login(email, "Passw0rd!"))))
+                .andReturn();
+        assertThat(rosterRepository.findById(linked.getId()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.DECLINED));
+
+        // Re-import the SAME address via XLSX: the row imports as PENDING and
+        // must NOT auto-link (no membership fabricated).
+        RosterImportService.ConfirmResult reimport = importService.confirm(owner,
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("Declined Importer", "", "", "", "", "", email)))));
+        assertThat(reimport.imported()).isEqualTo(1);
+        var pending = rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                t.classroomId(), org.springframework.data.domain.PageRequest.of(0, 10))
+                .getContent().get(0);
+        assertThat(pending.getStatus())
+                .as("declined opt-out survives XLSX re-import").isEqualTo(
+                        ClassroomRosterEntry.RosterStatus.PENDING);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(t.classroomId()))
+                .as("no membership without learner consent").isEmpty();
+
+        // Retry the same workbook: the PENDING row is a duplicate now.
+        RosterImportService.ConfirmResult retry = importService.confirm(owner,
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("Declined Importer", "", "", "", "", "", email)))));
+        assertThat(retry.imported()).isZero();
+        assertThat(retry.duplicates()).isEqualTo(1);
     }
 
     // ---------- HTTP contract ----------
