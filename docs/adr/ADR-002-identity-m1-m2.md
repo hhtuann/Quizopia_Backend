@@ -91,16 +91,26 @@ Rules:
 
 Forward-only, V18+ (V1–V17 untouched). Testcontainers recreates from scratch each run.
 
-- **V18 (M1):**
-  - `users.email_verified_at TIMESTAMPTZ NULL` + `UPDATE users SET email_verified_at = created_at`
-    (**legacy grandfathering** — see §6).
+- **V18 (M1, amended after the first Tech Lead review — review M1-03):**
+  - `users.email_verified_at TIMESTAMPTZ NULL` — a REAL ownership proof only (OTP success,
+    trusted OIDC provider, or a completed account link). Legacy accounts are NOT grandfathered.
+  - `users.login_requires_email_verification BOOLEAN NOT NULL DEFAULT TRUE`, set to FALSE for
+    all rows existing at migration time: login compatibility for legacy accounts, kept strictly
+    separate from the ownership proof (see §6).
   - `email_verification_challenges` (id, user_id, purpose, otp_hash, status, attempts,
     expires_at, superseded_at/consumed_at/failed_at, request_ip, created_at; partial unique
-    `(user_id, purpose) WHERE status='PENDING'`; indexes for cleanup by `expires_at`).
+    `(user_id, purpose) WHERE status='PENDING'`; terminal rows retained so verification is
+    proof-bound and idempotent retries of the consumed CORRECT code still succeed).
   - `external_identities` (id, user_id, provider, issuer, subject, email_at_link, linked_at,
     created_at; unique `(provider, issuer, subject)`).
   - `oauth_login_codes` (id, code_hash, user_id, expires_at, consumed_at, created_at; unique
     `code_hash`).
+  - `oauth_link_requests` (id, user_id, state_hash, code_verifier, nonce, expires_at,
+    consumed_at; unique `state_hash`) — server-side state binding the authenticated Google
+    LINKING flow (review M1-06) to one re-authenticated account.
+  - The amendment was made in-place on the feature branch: V18/V19 had only ever been applied
+    to ephemeral Testcontainers databases (the long-lived compose database runs main/V17), so
+    no preserved environment can hit a checksum mismatch.
 - **V19 (M2):** `identity_audit_events` (id, user_id, event_type, created_at, ip, user_agent,
   details JSONB) — records `TEACHER_SELF_UPGRADE` (and idempotent repeats) with no secrets.
 - Expiration/cleanup: lazily on access + scheduled sweeper (`quizopia.email-verification.cleanup.*`,
@@ -108,12 +118,16 @@ Forward-only, V18+ (V1–V17 untouched). Testcontainers recreates from scratch e
 
 ## 6. Legacy compatibility
 
-- **Grandfathering is deliberate:** pre-M1 accounts were created under a contract that did not
-  require verification; locking them out would be a regression. V18 marks all existing users
-  verified at their `created_at`. This is "evidence by prior contract", not fabricated per-user
-  proof; it is applied exactly once, never for post-M1 rows.
+- **Login compatibility ≠ ownership proof (review M1-03):** pre-M1 accounts keep signing in
+  with their old credentials (`login_requires_email_verification = FALSE`), but their email
+  stays UNPROVEN (`email_verified_at = NULL`) until they complete a real OTP verification via
+  the resend flow. Ownership-requiring actions — teacher self-upgrade (M2), Google account
+  linking, M3 roster auto-linking — read ONLY `email_verified_at`, never the compatibility
+  flag. A completed Google link also sets `email_verified_at` (the provider asserted the same
+  address under re-authentication).
 - No token_version bump, no refresh-session changes: existing JWTs/cookies keep working.
-- Demo seeder accounts are written with `email_verified_at` set (they are operator-seeded).
+- Demo seeder accounts are written with `email_verified_at` set AND the login gate flag FALSE
+  (they are operator-seeded and password-authenticated).
 - `AUTH_ACCOUNT_PENDING` (academic) semantics unchanged.
 - Teacher invite code: `QUIZOPIA_TEACHER_INVITE_CODE` and `SecurityProperties.TeacherInvite`
   become obsolete with student-only registration and are removed; the env var is ignored if
@@ -126,12 +140,16 @@ Forward-only, V18+ (V1–V17 untouched). Testcontainers recreates from scratch e
 | OTP brute force | 6-digit HMAC + 5 attempts/challenge + 5 challenges/email/h + 20/IP/h |
 | OTP replay | one PENDING challenge; CONSUMED transition under row lock |
 | OTP leak via logs | OTP only in mail body; hash at rest; logger denylist |
-| Account enumeration | verify gate after password check; resend answers unknown emails like known ones |
+| Account enumeration (login) | verify gate after password check |
+| Account enumeration (OTP) | success is proof-bound: unknown email, verified+random OTP and unverified+wrong OTP all answer AUTH_OTP_INVALID after a constant-time dummy compare; only knowledge of the code yields 200 |
+| Failed-attempt rollback | wrong-OTP counters and FAILED transitions commit in their own short transaction before the error is thrown; login lockout uses an atomic committed UPDATE |
 | SMTP failure abuse | user never activated by delivery; resend is the only recovery |
 | Registration race (dup username/email) | unique lower() indexes + `DataIntegrityViolationException` → 409 mapping |
 | OAuth CSRF/mix-up | state (framework), nonce (validated), single registered provider, exact redirect URI |
 | OAuth token leakage | tokens only in POST body + HttpOnly cookie; opaque 60s one-time exchange code |
-| Google email collision takeover | reject; no auto-link |
+| Google email collision takeover | login flow rejects; linking requires JWT + password re-auth + state/PKCE/nonce + email equality |
+| Linking CSRF / session substitution | single-use 5-minute state bound to the authenticated user, consumed under a row lock |
+| Partial OAuth configuration | provider disabled unless BOTH client id and secret are set; redirect origin must be CORS-allowed or startup fails |
 | Unverified email privilege | login and refresh gated; teacher upgrade requires verified email |
 | Role escalation via client | register ignores roles; upgrade endpoint takes no role parameter, grants only TEACHER |
 | Frontend role spoofing | activeView is UI preference only; every API re-checks DB authorities |
