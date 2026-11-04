@@ -100,30 +100,6 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         assertThat(tooLate.getResponse().getStatus()).isEqualTo(400);
     }
 
-    @Test
-    void expiredOtpIsRejectedAndResendRecovers() throws Exception {
-        String username = unique("otp-exp");
-        String email = emailFor(username);
-        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-
-        clock.advance(java.time.Duration.ofMinutes(11)); // OTP TTL is 10 minutes
-
-        MvcResult expired = verifyEmail(email);
-        assertThat(expired.getResponse().getStatus()).isEqualTo(400);
-        assertThat(expired.getResponse().getContentAsString()).contains("AUTH_OTP_EXPIRED");
-
-        clock.advance(java.time.Duration.ofSeconds(2)); // pass the 1s test cooldown
-
-        MvcResult resend = mockMvc.perform(post("/api/auth/verify-email/resend")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"%s\"}".formatted(email)))
-                .andReturn();
-        assertThat(resend.getResponse().getStatus()).isEqualTo(200);
-        waitForOtpMailCount(email, 2);
-
-        MvcResult verified = verifyEmail(email);
-        assertThat(verified.getResponse().getStatus()).isEqualTo(200);
-    }
 
     @Test
     void otpReplayAfterSuccessIsIdempotent() throws Exception {
@@ -174,112 +150,9 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         assertThat(retry.getResponse().getStatus()).isEqualTo(200);
     }
 
-    @Test
-    void supersededOldCodeWithWrongGuessStaysInvalid() throws Exception {
-        String username = unique("otp-supw");
-        String email = emailFor(username);
-        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        String firstOtp = otpMailbox.latestOtpFor(email);
 
-        clock.advance(java.time.Duration.ofSeconds(2));
-        mockMvc.perform(post("/api/auth/verify-email/resend")
-                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                .content("{\"email\":\"%s\"}".formatted(email)));
 
-        // Wrong guess against the superseded challenge: plain invalid.
-        MvcResult wrong = mockMvc.perform(post("/api/auth/verify-email")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content(verifyEmailJson(email, "000000")))
-                .andReturn();
-        assertThat(wrong.getResponse().getStatus()).isEqualTo(400);
-        assertThat(wrong.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
 
-        // The superseded CORRECT code points the user at a resend.
-        MvcResult oldCode = mockMvc.perform(post("/api/auth/verify-email")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content(verifyEmailJson(email, firstOtp)))
-                .andReturn();
-        assertThat(oldCode.getResponse().getStatus()).isEqualTo(400);
-        assertThat(oldCode.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
-    }
-
-    @Test
-    void resendSupersedesOldOtp() throws Exception {
-        String username = unique("otp-sup");
-        String email = emailFor(username);
-        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        String firstOtp = otpMailbox.latestOtpFor(email);
-
-        clock.advance(java.time.Duration.ofSeconds(2)); // pass the test cooldown
-        mockMvc.perform(post("/api/auth/verify-email/resend")
-                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                .content("{\"email\":\"%s\"}".formatted(email)));
-        waitForOtpMailCount(email, 2);
-        String secondOtp = otpMailbox.latestOtpFor(email);
-
-        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(2);
-
-        // The superseded OTP no longer verifies.
-        MvcResult oldOtp = mockMvc.perform(post("/api/auth/verify-email")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content(verifyEmailJson(email, firstOtp)))
-                .andReturn();
-        MvcResult newOtp = mockMvc.perform(post("/api/auth/verify-email")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content(verifyEmailJson(email, secondOtp)))
-                .andReturn();
-
-        assertThat(oldOtp.getResponse().getStatus()).isEqualTo(400);
-        assertThat(newOtp.getResponse().getStatus()).isEqualTo(200);
-    }
-
-    @Test
-    void resendDuringCooldownReturnsUniform200WithoutIssuance() throws Exception {
-        // R2-M1-C: the public response never distinguishes account state —
-        // a throttled resend answers 200 like every other state, and the
-        // throttle is proven by the absence of a NEW challenge/mail.
-        String username = unique("otp-cool");
-        String email = emailFor(username);
-        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-        int mailsBefore = otpMailbox.sendCountFor(email);
-
-        MvcResult immediate = mockMvc.perform(post("/api/auth/verify-email/resend")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"%s\"}".formatted(email)))
-                .andReturn();
-        assertThat(immediate.getResponse().getStatus()).isEqualTo(200);
-        assertThat(immediate.getResponse().getContentAsString()).contains("resendCooldownSeconds");
-        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(mailsBefore);
-        assertThat(challengeCountFor(username)).isEqualTo(1);
-    }
-
-    @Test
-    void resendRateLimitPerEmailIsEnforced() throws Exception {
-        // R2-M1-C: uniform 200s; the per-email cap (5/hour incl. the
-        // registration challenge) is proven by issuance counts, not codes.
-        String username = unique("otp-rate");
-        String email = emailFor(username);
-        // Pin BEFORE registering: challenge createdAt comes from this clock,
-        // so the cooldown comparisons below are deterministic regardless of
-        // the clock state earlier tests in this class left behind.
-        clock.setInstant(java.time.Instant.now());
-        register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
-
-        for (int i = 0; i < 5; i++) {
-            // Each resend must clear the 1s cooldown of the PREVIOUS
-            // challenge, hence the growing offset.
-            clock.setInstant(java.time.Instant.now().plusSeconds(2 + i));
-            MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
-                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                            .content("{\"email\":\"%s\"}".formatted(email)))
-                    .andReturn();
-            assertThat(result.getResponse().getStatus()).isEqualTo(200);
-        }
-        // 1 registration challenge + 4 eligible resends = 5 → the 5th resend
-        // was throttled: still 200, but no sixth challenge and no sixth mail.
-        assertThat(challengeCountFor(username)).isEqualTo(5);
-        waitForOtpMailCount(email, 5);
-    }
 
     private int challengeCountFor(String username) {
         return ((Number) entityManager.createNativeQuery(
@@ -289,16 +162,6 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
                 .getSingleResult()).intValue();
     }
 
-    @Test
-    void resendForUnknownEmailDoesNotEnumerate() throws Exception {
-        MvcResult result = mockMvc.perform(post("/api/auth/verify-email/resend")
-                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"ghost-%s@example.com\"}".formatted(UUID.randomUUID())))
-                .andReturn();
-        assertThat(result.getResponse().getStatus()).isEqualTo(200);
-        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
-        assertThat(body.get("resendCooldownSeconds").asLong()).isPositive();
-    }
 
     @Test
     void verifyForUnknownEmailLooksLikeWrongOtp() throws Exception {

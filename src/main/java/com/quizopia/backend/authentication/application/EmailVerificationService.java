@@ -246,35 +246,65 @@ public class EmailVerificationService {
     }
 
     /**
-     * Re-issues the ACCOUNT_VERIFICATION OTP (review R2-M1-C).
+     * PUBLIC resend intake (reviews R2-M1-C + round 4): performs NO
+     * account-specific work whatsoever — one constant HMAC (uniform CPU for
+     * every request) and a bounded-queue enqueue. The response is a constant
+     * 200 body carrying the configured cooldown window for every reachable
+     * state, so status, body AND timing are structurally decoupled from
+     * account state (not merely empirically similar). Processing — including
+     * the decision of whether the address is unknown, verified, cooled down
+     * or eligible — happens on the background worker
+     * ({@link #processResend(String, String)}).
      *
-     * <p><strong>Non-enumerating:</strong> every reachable state — unknown
-     * email, already-verified account, cooldown active, rate-limited —
-     * returns the SAME 200 payload ({@code resendCooldownSeconds}); only an
-     * eligible unverified account actually receives a code. Throttling is
-     * enforced internally, never signalled through distinguishable responses.
+     * <p>Bounded intake: when the worker queue is full the request is dropped
+     * with a WARN log (no PII) and the same uniform 200; recovery is the
+     * resend endpoint itself (retry after the cooldown).
      *
-     * <p><strong>Atomic under contention:</strong> eligibility (cooldown,
-     * per-email window, per-IP window) is evaluated INSIDE one transaction
-     * that first takes a pessimistic lock on the USER row — concurrent
-     * resends for the same account serialize there, so at most one OTP is
-     * issued per eligible window even under parallel load.
-     *
-     * @return cooldown seconds the client should count down locally
+     * @return the configured cooldown seconds (constant, not account-derived)
      */
     public long resend(String email, String requestIp) {
-        String normalized = email == null ? "" : email.trim();
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(normalized);
+        // Constant-cost normalization work for every request.
+        otpHasher.matches("resend-intake-equalizer", dummyHash);
+        final String normalized = email == null ? "" : email.trim();
+        final String ip = requestIp;
+        try {
+            // execute() (NOT a raw queue offer): it spawns the pool's worker
+            // threads on demand and throws RejectedExecutionException once
+            // the bounded queue is full.
+            otpDeliveryExecutor.execute(() -> {
+                try {
+                    processResend(normalized, ip);
+                } catch (RuntimeException ex) {
+                    // Worker failures never propagate to the (already-answered)
+                    // client; recovery is a retry after the cooldown.
+                    log.warn("Resend worker failed: {}", ex.toString());
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException saturated) {
+            log.warn("Resend intake dropped: worker queue full (capacity bounded)");
+        }
+        return properties.getResendCooldown().toSeconds();
+    }
+
+    /**
+     * Background resend state machine: unknown → nothing; verified → nothing;
+     * unverified → serialized (user-row lock) cooldown/window evaluation,
+     * issuing at most one challenge per eligible window, then synchronous
+     * delivery (already off the HTTP path).
+     */
+    void processResend(String email, String requestIp) {
+        if (email == null || email.isBlank()) {
+            return;
+        }
+        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email);
         if (userOpt.isEmpty()) {
-            // Timing equalization: spend the same HMAC work as a real path.
-            otpHasher.matches("resend-equalizer", dummyHash);
             log.debug("Resend requested for unknown email");
-            return properties.getResendCooldown().toSeconds();
+            return;
         }
         User user = userOpt.get();
         if (user.getEmailVerifiedAt() != null) {
-            // Verified accounts never receive codes; response stays uniform.
-            return properties.getResendCooldown().toSeconds();
+            // Verified accounts never receive codes.
+            return;
         }
 
         IssuedChallenge issued = tx.execute(status -> {
@@ -298,7 +328,7 @@ public class EmailVerificationService {
                             requestIp, now.minus(properties.getIpWindow()))
                        < properties.getMaxChallengesPerIp();
             if (!(cooldownOk && emailWindowOk && ipOk)) {
-                return null; // throttled → uniform 200, no issuance
+                return null; // throttled → uniform intake already answered 200
             }
             String otp = otpHasher.generateOtp();
             // Supersede any PENDING predecessor first (flush before insert so
@@ -317,16 +347,11 @@ public class EmailVerificationService {
         });
 
         if (issued != null) {
-            // Review R3-M1-03: SMTP dispatch runs OFF the request path so the
-            // eligible path's latency stays in the same band as the
-            // unknown/verified paths (which perform only the equalizing HMAC).
-            final IssuedChallenge toDeliver = issued;
-            otpDeliveryExecutor.execute(() -> deliverAfterCommit(
-                    toDeliver.challenge(), toDeliver.otp()));
+            // Delivery runs INSIDE the worker (already off the HTTP path).
+            deliverAfterCommit(issued.challenge(), issued.otp());
         } else {
             log.debug("Resend throttled or ineligible for user {}", user.getId());
         }
-        return properties.getResendCooldown().toSeconds();
     }
 
     private record IssuedChallenge(EmailVerificationChallenge challenge, String otp) {

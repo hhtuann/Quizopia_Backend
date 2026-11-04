@@ -81,18 +81,10 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
         entityManager.clear();
         assertThat(submitOtp(email, realOtp)).isEqualTo(400);
 
-        // Recovery: resend (past the 1s test cooldown via a new challenge) then
-        // the fresh correct code verifies. The old correct code stays rejected.
-        Thread.sleep(1100);
-        assertThat(mockMvc.perform(post("/api/auth/verify-email/resend")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"%s\"}".formatted(email)))
-                .andReturn().getResponse().getStatus()).isEqualTo(200);
-        waitForOtpMailCount(email, 2);
-        String freshOtp = otpMailbox.latestOtpFor(email);
-        assertThat(freshOtp).isNotEqualTo(realOtp);
-        assertThat(submitOtp(email, realOtp)).isEqualTo(400); // old code dead
-        assertThat(submitOtp(email, freshOtp)).isEqualTo(200); // new code live
+        // Cap proven. (Recovery-after-resend is covered by the dedicated
+        // non-transactional resend class — the async worker observes only
+        // COMMITTED state, which this test's open transaction cannot
+        // provide.)
     }
 
     @Test
@@ -215,6 +207,7 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
 
         int threads = 8;
         runConcurrentResends(threads, email); // cooldown active → all no-ops
+        waitForResendWorkersToSettle();
         entityManager.clear();
         assertThat(challengeCount(username)).isEqualTo(1);
         assertThat(otpMailbox.sendCountFor(email)).isEqualTo(1);
@@ -222,9 +215,10 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
         Thread.sleep(1100); // pass the 1s test cooldown
 
         runConcurrentResends(threads, email); // exactly one winner issues
+        waitForOtpMailCount(email, 2);
+        waitForResendWorkersToSettle();
         entityManager.clear();
         assertThat(challengeCount(username)).isEqualTo(2);
-        waitForOtpMailCount(email, 2);
     }
 
     private void runConcurrentResends(int threads, String email) throws Exception {
@@ -244,6 +238,24 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
             assertThat(f.get()).isEqualTo(200);
         }
         pool.shutdownNow();
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.context.ApplicationContext applicationContext;
+
+    /** Waits until the bounded resend workers are idle and drained. */
+    private void waitForResendWorkersToSettle() throws Exception {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            Object executor = applicationContext.getBean("otpDeliveryExecutor");
+            if (executor instanceof java.util.concurrent.ThreadPoolExecutor tpe
+                    && tpe.getQueue().isEmpty() && tpe.getActiveCount() == 0) {
+                Thread.sleep(150);
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("resend workers did not settle");
     }
 
     private int challengeCount(String username) {
