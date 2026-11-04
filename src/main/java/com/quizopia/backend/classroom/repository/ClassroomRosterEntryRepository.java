@@ -85,4 +85,10 @@ public interface ClassroomRosterEntryRepository extends JpaRepository<ClassroomR
                   com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry$RosterStatus.LINKED)
             """)
     java.util.List<String> findActiveEmailsByClassroomId(@Param("classroomId") Long classroomId);
+
+    /** Review M3-01: lock an entry by id regardless of status (revoke/accept). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select e from ClassroomRosterEntry e where e.id = :id and e.classroom.id = :classroomId")
+    Optional<ClassroomRosterEntry> findByIdAndClassroomIdForUpdate(
+            @Param("id") Long id, @Param("classroomId") Long classroomId);
 }

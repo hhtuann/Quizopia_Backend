@@ -15,6 +15,7 @@ public enum ClassroomErrorCode {
     ROSTER_NOT_FOUND(HttpStatus.NOT_FOUND, "Roster entry not found"),
     ROSTER_DUPLICATE_PENDING(HttpStatus.CONFLICT, "A pending roster entry already exists for this email in this classroom"),
     ROSTER_INVALID_STATE(HttpStatus.CONFLICT, "Roster entry is not in a state that allows this operation"),
+    ROSTER_ACCESS_DENIED(HttpStatus.FORBIDDEN, "You cannot accept this invitation"),
 
     // ---------- Identity-M4 roster import (issue #16) ----------
     ROSTER_IMPORT_FILE_INVALID(HttpStatus.BAD_REQUEST, "Invalid roster import file"),

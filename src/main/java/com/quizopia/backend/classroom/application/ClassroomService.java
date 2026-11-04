@@ -418,6 +418,13 @@ public class ClassroomService {
         return requireOwnedClassroom(userId, classroomId);
     }
 
+    /** Identity-M3: the caller's user if the email is verified, else null. */
+    public com.quizopia.backend.identity.domain.model.User findVerifiedUserById(Long userId) {
+        return userRepository.findById(userId)
+                .filter(u -> u.getEmailVerifiedAt() != null)
+                .orElse(null);
+    }
+
     /** Roster listing rides CLASSROOM_MEMBER_READ. */
     public Classroom requireOwnedClassroomForRosterRead(Long userId, Long classroomId) {
         requirePermission(userId, "CLASSROOM_MEMBER_READ");

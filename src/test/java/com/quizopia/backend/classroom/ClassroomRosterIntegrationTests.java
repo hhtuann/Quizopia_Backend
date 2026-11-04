@@ -435,28 +435,176 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
                 email, ClassroomRosterEntry.RosterStatus.LINKED)).isEmpty();
     }
 
+    // ---------- review M3-01: teacher removes a LINKED learner ----------
+
     @Test
-    void revokeOfLinkedEntryReturnsInvalidState() throws Exception {
+    void ownerRevokeOfLinkedEntryRemovesMembership() throws Exception {
         String username = unique("rev");
         registerAndVerify(username, emailFor(username), "Passw0rd!");
-        String teacherToken = teacherWithClassroom("REVL");
-        Long classroomId = firstClassroomId(teacherToken);
-        JsonNode entry = addRoster(teacherToken, classroomId, "Linked One",
+        String ownerToken = teacherWithClassroom("REVL");
+        Long classroomId = firstClassroomId(ownerToken);
+        JsonNode entry = addRoster(ownerToken, classroomId, "Linked One",
+                emailFor(username), null, null);
+        assertThat(entry.get("status").asText()).isEqualTo("LINKED");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+
+        // Owner revoke of a LINKED entry removes the membership + entry → REVOKED.
+        MvcResult revoke = mockMvc.perform(delete(
+                        "/api/classrooms/" + classroomId + "/roster/" + entry.get("id").asLong())
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andReturn();
+        assertThat(revoke.getResponse().getStatus()).isEqualTo(204);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        assertThat(rosterRepository.findById(entry.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.REVOKED));
+
+        // Terminal states are final: a second revoke is 409.
+        MvcResult again = mockMvc.perform(delete(
+                        "/api/classrooms/" + classroomId + "/roster/" + entry.get("id").asLong())
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andReturn();
+        assertThat(again.getResponse().getStatus()).isEqualTo(409);
+    }
+
+    @Test
+    void unauthorizedTeacherCannotRemoveLinkedLearner() throws Exception {
+        String username = unique("revx");
+        registerAndVerify(username, emailFor(username), "Passw0rd!");
+        String ownerToken = teacherWithClassroom("REVX");
+        Long classroomId = firstClassroomId(ownerToken);
+        JsonNode entry = addRoster(ownerToken, classroomId, "Linked Two",
                 emailFor(username), null, null);
         assertThat(entry.get("status").asText()).isEqualTo("LINKED");
 
-        // Revoking a LINKED entry is not a PENDING withdrawal; the membership
-        // must be removed through the member endpoint (which the lock makes
-        // race-free), not by overwriting the roster row.
-        MvcResult revoke = mockMvc.perform(delete(
+        String strangerToken = teacherWithClassroom("REVY");
+        MvcResult denied = mockMvc.perform(delete(
                         "/api/classrooms/" + classroomId + "/roster/" + entry.get("id").asLong())
-                        .header("Authorization", "Bearer " + teacherToken))
+                        .header("Authorization", "Bearer " + strangerToken))
                 .andReturn();
-        assertThat(revoke.getResponse().getStatus()).isEqualTo(409);
-        assertThat(revoke.getResponse().getContentAsString()).contains("ROSTER_INVALID_STATE");
+        assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+        // Membership + LINKED state untouched.
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
         assertThat(rosterRepository.findById(entry.get("id").asLong()))
                 .hasValueSatisfying(e -> assertThat(e.getStatus())
                         .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
+    }
+
+    // ---------- review M3-02: DECLINED is a real opt-out ----------
+
+    @Test
+    void declinedLearnerIsNotAutoRelinkedByTeacherReinviteManualPath() throws Exception {
+        String username = unique("dec2");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("DEC2");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        // Invite + immediate link (verified learner).
+        JsonNode first = addRoster(teacherToken, classroomId, "Decliner", email, null, null);
+        assertThat(first.get("status").asText()).isEqualTo("LINKED");
+
+        // Learner declines (opt-out).
+        MvcResult declined = mockMvc.perform(post(
+                        "/api/classrooms/roster/" + first.get("id").asLong() + "/decline")
+                        .header("Authorization", "Bearer "
+                                + extractAccessToken(login(email, "Passw0rd!"))))
+                .andReturn();
+        assertThat(declined.getResponse().getStatus()).isEqualTo(204);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+
+        // Teacher re-invites the SAME verified email: entry MUST stay PENDING
+        // (no auto relink, no membership).
+        JsonNode second = addRoster(teacherToken, classroomId, "Decliner", email, null, null);
+        assertThat(second.get("status").asText())
+                .as("declined opt-out survives manual re-invitation").isEqualTo("PENDING");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+
+        // Reconciliation (e.g. a later verify trigger) also must not relink.
+        Long userId = jdbcTemplate.queryForObject(
+                "SELECT id FROM users WHERE username = ?", Long.class, username);
+        reconciliationService.reconcile(userId, email);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+        assertThat(rosterRepository.findById(second.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+    }
+
+    @Test
+    void declinedLearnerCanExplicitlyRejoinViaAccept() throws Exception {
+        String username = unique("dec3");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("DEC3");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        JsonNode first = addRoster(teacherToken, classroomId, "Rejoiner", email, null, null);
+        String learnerToken = extractAccessToken(login(email, "Passw0rd!"));
+        mockMvc.perform(post("/api/classrooms/roster/" + first.get("id").asLong() + "/decline")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode second = addRoster(teacherToken, classroomId, "Rejoiner", email, null, null);
+        assertThat(second.get("status").asText()).isEqualTo("PENDING");
+
+        // The learner SEES the pending invitation and accepts it (consent).
+        MvcResult invitations = mockMvc.perform(get("/api/classrooms/roster/invitations")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode list = objectMapper.readTree(invitations.getResponse().getContentAsString());
+        assertThat(list.size()).isEqualTo(1);
+        Long entryId = list.get(0).get("id").asLong();
+
+        MvcResult accepted = mockMvc.perform(post("/api/classrooms/roster/" + entryId + "/accept")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        assertThat(accepted.getResponse().getStatus()).isEqualTo(200);
+        assertThat(objectMapper.readTree(accepted.getResponse().getContentAsString())
+                .get("status").asText()).isEqualTo("LINKED");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+
+        // Idempotent guard: accepting a non-PENDING entry is 409.
+        MvcResult again = mockMvc.perform(post("/api/classrooms/roster/" + entryId + "/accept")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        assertThat(again.getResponse().getStatus()).isEqualTo(409);
+    }
+
+    @Test
+    void acceptRequiresTheVerifiedOwnerOfTheInvitationEmail() throws Exception {
+        String invited = unique("acpt");
+        String invitedEmail = emailFor(invited);
+        // Registered but NOT verified → the invitation stays PENDING.
+        register(studentRegisterJson(invited, invitedEmail, "Passw0rd!",
+                "Invited", "+84991234099"));
+        String teacherToken = teacherWithClassroom("ACPT");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        JsonNode entry = addRoster(teacherToken, classroomId, "Invited", invitedEmail, null, null);
+        Long entryId = entry.get("id").asLong();
+
+        // A DIFFERENT verified user cannot accept someone else's invitation.
+        String stranger = unique("othr");
+        registerAndVerify(stranger, emailFor(stranger), "Passw0rd!");
+        String strangerToken = extractAccessToken(login(emailFor(stranger), "Passw0rd!"));
+        MvcResult denied = mockMvc.perform(post("/api/classrooms/roster/" + entryId + "/accept")
+                        .header("Authorization", "Bearer " + strangerToken))
+                .andReturn();
+        assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+    }
+
+    @Test
+    void firstTimeVerifiedAutoLinkStillWorksAfterRemediation() throws Exception {
+        String teacherToken = teacherWithClassroom("FTL");
+        Long classroomId = firstClassroomId(teacherToken);
+        String email = emailFor(unique("ftl"));
+        addRoster(teacherToken, classroomId, "First Timer", email, null, null);
+
+        // No declined history → registration+verification still auto-links.
+        registerAndVerify(unique("ftl"), email, "Passw0rd!");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+        assertThat(rosterRepository.findAllByEmailNormalizedAndStatus(
+                email, ClassroomRosterEntry.RosterStatus.LINKED)).hasSize(1);
     }
 
     // ---------- authorization error shapes (review M3-QA) ----------
