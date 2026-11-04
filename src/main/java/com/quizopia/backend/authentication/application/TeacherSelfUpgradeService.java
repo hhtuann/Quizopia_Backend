@@ -86,30 +86,46 @@ public class TeacherSelfUpgradeService {
         }
 
         List<String> rolesBefore = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
+        boolean activeTeacherBefore = rolesBefore.contains(TEACHER_ROLE_CODE);
+        boolean hadExpiredTeacher = hadExpiredTeacherAssignment(userId);
 
-        boolean alreadyTeacher = rolesBefore.contains(TEACHER_ROLE_CODE);
-        if (!alreadyTeacher) {
+        String eventType;
+        if (activeTeacherBefore) {
+            // Idempotent repeat: a live assignment exists — never touch it.
+            eventType = IdentityAuditEvent.TEACHER_SELF_UPGRADE_IDEMPOTENT;
+        } else {
             Role teacher = roleRepository.findByCode(TEACHER_ROLE_CODE)
                     .orElseThrow(() -> new IllegalStateException(
                             "Required role '" + TEACHER_ROLE_CODE + "' is not seeded; check Flyway V3"));
-            // Insert-if-absent: a concurrent upgrade cannot fail this
-            // transaction (no PK violation, no rollback-only state) — losers
-            // simply insert 0 rows and read the winner's assignment.
-            int inserted = userRoleRepository.insertAssignmentIfAbsent(userId, teacher.getId());
-            alreadyTeacher = inserted == 0; // someone else granted it first
+            // Grant-or-reactivate upsert (review M2-01): inserts when absent,
+            // clears expires_at on an EXPIRED assignment, leaves a live
+            // assignment untouched. Atomic under the (user_id, role_id) PK,
+            // so concurrent upgrades converge without exceptions.
+            userRoleRepository.grantOrReactivateAssignment(userId, teacher.getId());
+            eventType = hadExpiredTeacher
+                    ? IdentityAuditEvent.TEACHER_SELF_UPGRADE_REACTIVATED
+                    : IdentityAuditEvent.TEACHER_SELF_UPGRADE;
         }
 
         auditRepository.save(new IdentityAuditEvent(
-                user,
-                alreadyTeacher ? IdentityAuditEvent.TEACHER_SELF_UPGRADE_IDEMPOTENT
-                        : IdentityAuditEvent.TEACHER_SELF_UPGRADE,
-                ip, userAgent,
+                user, eventType, ip, userAgent,
                 Map.of("rolesBefore", String.join(",", rolesBefore))));
 
         List<String> rolesAfter = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-        if (!alreadyTeacher) {
-            log.info("User {} self-upgraded to TEACHER", userId);
+        if (!rolesAfter.contains(TEACHER_ROLE_CODE)) {
+            // Never report success without an EFFECTIVE TEACHER role.
+            throw new IllegalStateException(
+                    "Teacher grant did not take effect for user " + userId);
+        }
+        if (!activeTeacherBefore) {
+            log.info("User {} self-upgraded to TEACHER (reactivated={})", userId,
+                    eventType.equals(IdentityAuditEvent.TEACHER_SELF_UPGRADE_REACTIVATED));
         }
         return rolesAfter;
     }
+
+    private boolean hadExpiredTeacherAssignment(Long userId) {
+        return Boolean.TRUE.equals(userRoleRepository.hasExpiredAssignment(userId, TEACHER_ROLE_CODE));
+    }
+
 }

@@ -25,7 +25,7 @@ CREATE TABLE identity_audit_events (
         ON DELETE CASCADE,
 
     CONSTRAINT chk_identity_audit_events_type
-        CHECK (event_type IN ('TEACHER_SELF_UPGRADE', 'TEACHER_SELF_UPGRADE_IDEMPOTENT'))
+        CHECK (event_type IN ('TEACHER_SELF_UPGRADE', 'TEACHER_SELF_UPGRADE_IDEMPOTENT', 'TEACHER_SELF_UPGRADE_REACTIVATED'))
 );
 
 CREATE INDEX idx_identity_audit_events_user

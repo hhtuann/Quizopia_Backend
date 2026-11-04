@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import com.quizopia.backend.security.password.PasswordHasher;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MvcResult;
@@ -41,6 +42,12 @@ class TeacherSelfUpgradeIntegrationTests extends AbstractAuthenticationIntegrati
 
     @Autowired
     private IdentityAuditEventRepository auditRepository;
+
+    @Autowired
+    private com.quizopia.backend.security.password.PasswordHasher passwordHasher;
+
+    @Autowired
+    private org.springframework.transaction.support.TransactionTemplate tx;
 
     @Autowired
     private EntityManager entityManager;
@@ -221,6 +228,132 @@ class TeacherSelfUpgradeIntegrationTests extends AbstractAuthenticationIntegrati
                 "SELECT count(*) FROM users WHERE id = " + userId).getSingleResult()).intValue();
         assertThat(workspacesAfter).isEqualTo(workspacesBefore);
         assertThat(userRowsAfter).isEqualTo(userRowsBefore).isEqualTo(1);
+    }
+
+    @Test
+    void expiredTeacherAssignmentIsReactivatedAndEffective() throws Exception {
+        String username = unique("reac");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String token = extractAccessToken(login(username, "Passw0rd!"));
+        Long userId = userIdOf(username);
+
+        // Review M2-01: an EXPIRED TEACHER assignment (revoked by time).
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery("""
+                        INSERT INTO user_roles (user_id, role_id, assigned_by, assigned_at, expires_at)
+                        SELECT :u, r.id, :u, now() - interval '2 days', now() - interval '1 day'
+                        FROM roles r WHERE r.code = 'TEACHER'
+                        """)
+                .setParameter("u", userId)
+                .executeUpdate());
+
+        MvcResult result = mockMvc.perform(post("/api/auth/upgrade-teacher")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+
+        entityManager.clear();
+        Object expiresAt = entityManager.createNativeQuery(
+                        "SELECT ur.expires_at FROM user_roles ur JOIN roles r ON r.id = ur.role_id"
+                                + " WHERE ur.user_id = :u AND r.code = 'TEACHER'")
+                .setParameter("u", userId)
+                .getSingleResult();
+        assertThat(expiresAt).as("expired assignment must be reactivated").isNull();
+        assertThat(userRoleRepository.findActiveRoleCodesByUserId(userId, java.time.Instant.now()))
+                .as("TEACHER must be EFFECTIVE after the upgrade")
+                .containsExactlyInAnyOrder("STUDENT", "TEACHER");
+        assertThat(auditRepository.findByUserIdOrderByCreatedAtDesc(userId))
+                .first()
+                .satisfies(e -> assertThat(e.getEventType()).isEqualTo("TEACHER_SELF_UPGRADE_REACTIVATED"));
+    }
+
+    @Test
+    void concurrentReactivationsYieldOneActiveAssignment() throws Exception {
+        String username = unique("reacc");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String token = extractAccessToken(login(username, "Passw0rd!"));
+        Long userId = userIdOf(username);
+
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery("""
+                        INSERT INTO user_roles (user_id, role_id, assigned_by, assigned_at, expires_at)
+                        SELECT :u, r.id, :u, now() - interval '2 days', now() - interval '1 day'
+                        FROM roles r WHERE r.code = 'TEACHER'
+                        """)
+                .setParameter("u", userId)
+                .executeUpdate());
+
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        List<Callable<Integer>> calls = new ArrayList<>();
+        for (int i = 0; i < threads; i++) {
+            calls.add(() -> mockMvc.perform(post("/api/auth/upgrade-teacher")
+                            .header("Authorization", "Bearer " + token))
+                    .andReturn().getResponse().getStatus());
+        }
+        int ok = 0;
+        List<Future<Integer>> futures = new ArrayList<>();
+        calls.forEach(c -> futures.add(pool.submit(c)));
+        for (Future<Integer> f : futures) {
+            if (f.get() == 200) ok++;
+        }
+        pool.shutdownNow();
+
+        assertThat(ok).isEqualTo(threads);
+        entityManager.clear();
+        Integer rows = ((Number) entityManager.createNativeQuery(
+                        "SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id"
+                                + " WHERE ur.user_id = :u AND r.code = 'TEACHER'")
+                .setParameter("u", userId).getSingleResult()).intValue();
+        assertThat(rows).isEqualTo(1);
+        Object expiresAt = entityManager.createNativeQuery(
+                        "SELECT ur.expires_at FROM user_roles ur JOIN roles r ON r.id = ur.role_id"
+                                + " WHERE ur.user_id = :u AND r.code = 'TEACHER'")
+                .setParameter("u", userId).getSingleResult();
+        assertThat(expiresAt).isNull();
+    }
+
+    @Test
+    void legacyAccountWithoutEmailProofCannotUpgradeUntilVerified() throws Exception {
+        // Review M2-02: legacy login compatibility does NOT satisfy the
+        // verified-email prerequisite for self-upgrade.
+        String username = "legacyup-" + UUID.randomUUID().toString().substring(0, 6);
+        String email = username + "@legacy.example.com";
+        tx.executeWithoutResult(status -> entityManager.createNativeQuery("""
+                        INSERT INTO users (username, email, password_hash, display_name, status,
+                                           token_version, failed_login_attempts, password_changed_at,
+                                           login_requires_email_verification)
+                        VALUES (:u, :e, :h, 'Legacy Upgrader', 'ACTIVE', 0, 0, now(), FALSE)
+                        """)
+                .setParameter("u", username)
+                .setParameter("e", email)
+                .setParameter("h", passwordHasher.hash("LegacyPassw0rd!"))
+                .executeUpdate());
+
+        // Legacy login works (compatibility flag)…
+        MvcResult loginResult = login(username, "LegacyPassw0rd!");
+        assertThat(loginResult.getResponse().getStatus()).isEqualTo(200);
+        String token = extractAccessToken(loginResult);
+
+        // …but self-upgrade requires a REAL email proof.
+        MvcResult denied = mockMvc.perform(post("/api/auth/upgrade-teacher")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+        assertThat(denied.getResponse().getContentAsString()).contains("AUTH_EMAIL_NOT_VERIFIED");
+
+        // After a real OTP verification, the upgrade succeeds.
+        mockMvc.perform(post("/api/auth/verify-email/resend")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\"%s\"}".formatted(email)));
+        mockMvc.perform(post("/api/auth/verify-email")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(verifyEmailJson(email, otpMailbox.latestOtpFor(email))));
+        MvcResult allowed = mockMvc.perform(post("/api/auth/upgrade-teacher")
+                        .header("Authorization", "Bearer " + token))
+                .andReturn();
+        assertThat(allowed.getResponse().getStatus()).isEqualTo(200);
+        assertThat(allowed.getResponse().getContentAsString()).contains("TEACHER");
     }
 
     // ---------- helpers ----------

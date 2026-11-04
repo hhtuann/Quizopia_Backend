@@ -29,6 +29,7 @@ public class IdentityAuditEvent {
 
     public static final String TEACHER_SELF_UPGRADE = "TEACHER_SELF_UPGRADE";
     public static final String TEACHER_SELF_UPGRADE_IDEMPOTENT = "TEACHER_SELF_UPGRADE_IDEMPOTENT";
+    public static final String TEACHER_SELF_UPGRADE_REACTIVATED = "TEACHER_SELF_UPGRADE_REACTIVATED";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
