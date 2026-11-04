@@ -346,6 +346,7 @@ class TeacherSelfUpgradeIntegrationTests extends AbstractAuthenticationIntegrati
         mockMvc.perform(post("/api/auth/verify-email/resend")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"email\":\"%s\"}".formatted(email)));
+        waitForOtpMailCount(email, 1);
         mockMvc.perform(post("/api/auth/verify-email")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(verifyEmailJson(email, otpMailbox.latestOtpFor(email))));
