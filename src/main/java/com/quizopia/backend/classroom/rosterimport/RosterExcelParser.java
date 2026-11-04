@@ -184,17 +184,64 @@ public class RosterExcelParser {
         return String.valueOf(d);
     }
 
+    /**
+     * Review M4-SEC: FORMULA cells count as NON-BLANK — a formula-only row
+     * must flow into parseRow (formula rejection + row cap), not be skipped
+     * as blank.
+     */
     private boolean isBlankRow(Row row) {
         for (int c = 0; c < RosterTemplateService.EXPECTED_HEADERS.size(); c++) {
             Cell cell = row.getCell(c);
-            if (cell != null && cell.getCellType() != CellType.BLANK) {
-                String v = cellAsStringOrNull(cell);
-                if (v != null && !v.isBlank()) {
-                    return false;
-                }
+            if (cell == null || cell.getCellType() == CellType.BLANK) {
+                continue;
+            }
+            if (cell.getCellType() == CellType.FORMULA) {
+                return false;
+            }
+            String v = cellAsStringOrNull(cell);
+            if (v != null && !v.isBlank()) {
+                return false;
             }
         }
         return true;
+    }
+
+    /**
+     * Review M4-SEC: bound the DECOMPRESSED workbook before POI materializes
+     * it. A 2 MiB zip can inflate to gigabytes; these limits (entries,
+     * per-entry, total) are enforced while streaming the archive, before any
+     * DOM load. POI's ZipSecureFile heuristics remain as defense in depth.
+     */
+    static final int MAX_ZIP_ENTRIES = 500;
+    static final long MAX_ZIP_ENTRY_BYTES = 8L * 1024 * 1024;
+    static final long MAX_ZIP_TOTAL_BYTES = 32L * 1024 * 1024;
+
+    static void validateZipLimits(byte[] xlsxBytes) {
+        try (java.util.zip.ZipInputStream zip =
+                new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(xlsxBytes))) {
+            int entries = 0;
+            long total = 0;
+            java.util.zip.ZipEntry entry;
+            byte[] buf = new byte[8192];
+            while ((entry = zip.getNextEntry()) != null) {
+                if (++entries > MAX_ZIP_ENTRIES) {
+                    throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
+                }
+                long entryBytes = 0;
+                int n;
+                while ((n = zip.read(buf)) > 0) {
+                    entryBytes += n;
+                    total += n;
+                    if (entryBytes > MAX_ZIP_ENTRY_BYTES || total > MAX_ZIP_TOTAL_BYTES) {
+                        throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
+                    }
+                }
+            }
+        } catch (ClassroomException ce) {
+            throw ce;
+        } catch (Exception ex) {
+            throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
+        }
     }
 
     private String text(Row row, int col, int maxLen, String column, List<RowError> errors) {

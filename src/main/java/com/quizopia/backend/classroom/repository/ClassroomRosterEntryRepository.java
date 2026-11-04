@@ -71,4 +71,18 @@ public interface ClassroomRosterEntryRepository extends JpaRepository<ClassroomR
               and e.status = com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry$RosterStatus.PENDING
             """)
     List<Classroom> findPendingClassroomsForEmail(@Param("email") String emailNormalized);
+
+    /**
+     * Identity-M4: ALL active (PENDING/LINKED) emails of a classroom —
+     * unpaged (review M4-QA: a paged read silently misses older invitations,
+     * making preview disagree with confirm).
+     */
+    @Query("""
+            select e.emailNormalized from ClassroomRosterEntry e
+            where e.classroom.id = :classroomId
+              and e.status in (
+                  com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry$RosterStatus.PENDING,
+                  com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry$RosterStatus.LINKED)
+            """)
+    java.util.List<String> findActiveEmailsByClassroomId(@Param("classroomId") Long classroomId);
 }

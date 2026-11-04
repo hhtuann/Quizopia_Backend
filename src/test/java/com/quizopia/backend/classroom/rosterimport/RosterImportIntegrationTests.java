@@ -184,6 +184,197 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
                 .hasSize(1);
     }
 
+    // ---------- multi-error rows count once (review M4-QA) ----------
+
+    @Test
+    void previewGroupsColumnErrorsPerRowAndCountsDistinctRows() throws Exception {
+        Teacher t = teacherWithClassroom("MULTI");
+        // One row with BOTH a missing name and an invalid email.
+        RosterImportService.PreviewResult preview = importService.preview(ownerOf(t.classroomId()),
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("", "", "", "", "", "", "bad-email")))));
+        assertThat(preview.totalRows()).as("one sheet row = one preview row").isEqualTo(1);
+        assertThat(preview.ready()).isZero();
+        assertThat(preview.rows()).hasSize(1);
+        assertThat(preview.rows().get(0).issues()).hasSize(2);
+    }
+
+    // ---------- classroom duplicate beyond page one (review M4-QA) ----------
+
+    @Test
+    void previewDetectsClassDuplicatesBeyondTheFirstTwoHundredEntries() throws Exception {
+        Teacher t = teacherWithClassroom("PAGE");
+        Long owner = ownerOf(t.classroomId());
+        String target = emailFor(unique("far"));
+        // 210 distinct entries, then import a file whose email matches the
+        // OLDEST entry (row 1 — outside any first-200 page).
+        java.util.List<java.util.List<String>> rows = new java.util.ArrayList<>();
+        rows.add(List.of("Oldest", "", "", "", "", "", target));
+        for (int i = 0; i < 210; i++) {
+            rows.add(List.of("Kid " + i, "", "", "", "", "", emailFor(unique("p" + i))));
+        }
+        RosterImportService.ConfirmResult seeded = importService.confirm(owner,
+                t.classroomId(), xlsx(workbook(rows)));
+        assertThat(seeded.imported()).isEqualTo(211);
+
+        RosterImportService.PreviewResult preview = importService.preview(owner, t.classroomId(),
+                xlsx(workbook(List.of(List.of("Again", "", "", "", "", "", target)))));
+        assertThat(preview.rows().get(0).status()).isEqualTo("DUPLICATE_IN_CLASS");
+    }
+
+    // ---------- row-limit boundary ----------
+
+    @Test
+    void rowLimitIsEnforced() throws Exception {
+        Teacher t = teacherWithClassroom("LIM");
+        Long owner = ownerOf(t.classroomId());
+        java.util.List<java.util.List<String>> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            rows.add(List.of("Row " + i, "", "", "", "", "", emailFor(unique("L" + i))));
+        }
+        // Exactly 500 valid rows import fine.
+        assertThat(importService.confirm(owner, t.classroomId(), xlsx(workbook(rows))).imported())
+                .isEqualTo(500);
+        // 501 rows are rejected before any write.
+        rows.add(List.of("One Too Many", "", "", "", "", "", emailFor(unique("L501"))));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> importService.confirm(owner,
+                        t.classroomId(), xlsx(workbook(rows))))
+                .hasMessageContaining("500");
+    }
+
+    // ---------- confirm denial + learner role + cross-class isolation ----------
+
+    @Test
+    void confirmIsDeniedForStrangersAndLearnersWithNoSideEffects() throws Exception {
+        Teacher owner = teacherWithClassroom("AUTHC");
+        byte[] book = workbook(List.of(List.of("Auth Kid", "", "", "", "", "",
+                emailFor(unique("authc")))));
+
+        // Stranger teacher: 403, nothing written.
+        Teacher stranger = teacherWithClassroom("AUTHS");
+        MvcResult strangerConfirm = mockMvc.perform(multipart(
+                        "/api/classrooms/" + owner.classroomId() + "/roster-import/confirm")
+                        .file(xlsx(book))
+                        .header("Authorization", "Bearer " + stranger.token()))
+                .andReturn();
+        assertThat(strangerConfirm.getResponse().getStatus()).isEqualTo(403);
+
+        // Anonymous: 401, nothing written.
+        MvcResult anonConfirm = mockMvc.perform(multipart(
+                        "/api/classrooms/" + owner.classroomId() + "/roster-import/confirm")
+                        .file(xlsx(book)))
+                .andReturn();
+        assertThat(anonConfirm.getResponse().getStatus()).isEqualTo(401);
+
+        // Learner role: 403 on template, preview AND confirm.
+        String learner = unique("learn");
+        registerAndVerify(learner, emailFor(learner), "Passw0rd!");
+        String learnerToken = extractAccessToken(login(emailFor(learner), "Passw0rd!"));
+        for (String path : List.of("template")) {
+            MvcResult denied = mockMvc.perform(get("/api/classrooms/" + owner.classroomId()
+                            + "/roster-import/" + path)
+                            .header("Authorization", "Bearer " + learnerToken))
+                    .andReturn();
+            assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+        }
+        for (String path : List.of("preview", "confirm")) {
+            MvcResult denied = mockMvc.perform(multipart(
+                            "/api/classrooms/" + owner.classroomId() + "/roster-import/" + path)
+                            .file(xlsx(book))
+                            .header("Authorization", "Bearer " + learnerToken))
+                    .andReturn();
+            assertThat(denied.getResponse().getStatus()).isEqualTo(403);
+        }
+        assertThat(rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                owner.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50)))
+                .isEmpty();
+
+        // Cross-class isolation: an entry in the STRANGER's class must not
+        // affect the OWNER's preview.
+        importService.confirm(ownerOf(stranger.classroomId()), stranger.classroomId(),
+                xlsx(workbook(List.of(List.of("Other Class", "", "", "", "", "",
+                        emailFor(unique("iso")))))));
+        RosterImportService.PreviewResult preview = importService.preview(
+                ownerOf(owner.classroomId()), owner.classroomId(),
+                xlsx(workbook(List.of(List.of("Iso Kid", "", "", "", "", "",
+                        emailFor(unique("iso")))))));
+        assertThat(preview.rows().get(0).status()).isEqualTo("READY");
+    }
+
+    // ---------- manual vs import equivalence (issue #16 acceptance) ----------
+
+    @Test
+    void manualEntryAndImportProduceEquivalentRosterRows() throws Exception {
+        Teacher manual = teacherWithClassroom("EQM");
+        Teacher imported = teacherWithClassroom("EQI");
+
+        // Lowercase from the start: roster emails are canonicalized (M1 policy).
+        String emailA = emailFor(unique("eqa")); // unknown learner → PENDING
+        String emailB = emailFor(unique("eqb2")); // pre-verified → LINKED
+        registerAndVerify(unique("eqb"), emailB, "Passw0rd!");
+
+        // Manual path for BOTH learners (owner-scoped).
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/classrooms/" + manual.classroomId() + "/roster")
+                        .header("Authorization", "Bearer " + manual.token())
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(java.util.Map.of(
+                                "fullName", "Equiv Kid", "email", emailA,
+                                "gender", "MALE", "dob", "2010-01-02",
+                                "parentPhone", "+84987654321"))))
+                .andReturn();
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/classrooms/" + manual.classroomId() + "/roster")
+                        .header("Authorization", "Bearer " + manual.token())
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(java.util.Map.of(
+                                "fullName", "Equiv Kid B", "email", emailB))))
+                .andReturn();
+
+        // Import path with the SAME data.
+        RosterImportService.ConfirmResult importedResult = importService.confirm(
+                ownerOf(imported.classroomId()), imported.classroomId(),
+                xlsx(workbook(List.of(
+                        List.of("Equiv Kid", "", "MALE", "2010-01-02", "", "+84987654321", emailA),
+                        List.of("Equiv Kid B", "", "", "", "", "", emailB)))));
+        assertThat(importedResult.imported()).as("both rows imported: %s",
+                importedResult.errors()).isEqualTo(2);
+
+        var manualRows = rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                manual.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50));
+        var importRows = rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                imported.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50));
+        assertThat(manualRows).hasSize(2);
+        assertThat(importRows).hasSize(2);
+
+        var manualByMail = manualRows.stream()
+                .collect(java.util.stream.Collectors.toMap(r -> r.getEmailNormalized(), r -> r));
+        var importByMail = importRows.stream()
+                .collect(java.util.stream.Collectors.toMap(r -> r.getEmailNormalized(), r -> r));
+        for (String email : List.of(emailA, emailB)) {
+            var m = manualByMail.get(email);
+            var i = importByMail.get(email);
+            assertThat(i.getStatus()).as("status equivalence for %s", email)
+                    .isEqualTo(m.getStatus());
+            assertThat(i.getFullName()).isEqualTo(m.getFullName());
+            assertThat(i.getStudentNumber()).isEqualTo(m.getStudentNumber());
+            // Sensitive fields: both v1-encrypted when present (fresh nonces
+            // → different ciphertext, same decryption); both absent for B.
+            if (email.equals(emailA)) {
+                assertThat(i.getDobEncrypted()).startsWith("v1:");
+                assertThat(m.getDobEncrypted()).startsWith("v1:");
+            } else {
+                assertThat(i.getDobEncrypted()).isNull();
+                assertThat(m.getDobEncrypted()).isNull();
+            }
+        }
+        // The pre-verified learner reconciled identically through both paths.
+        assertThat(importByMail.get(emailB).getStatus())
+                .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
+        assertThat(manualByMail.get(emailB).getStatus())
+                .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
+    }
+
     // ---------- confirm: partial success + idempotency ----------
 
     @Test
@@ -286,6 +477,72 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> importService.preview(ownerOf(t.classroomId()), t.classroomId(), tooBig))
                 .hasMessageContaining("exceeds");
+    }
+
+    // ---------- formula-only rows + decompression bombs (review M4-SEC) ----------
+
+    @Test
+    void formulaOnlyRowsAreRejectedNotSkipped() throws Exception {
+        Teacher t = teacherWithClassroom("FRML");
+        byte[] book;
+        try (XSSFWorkbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = wb.createSheet("Roster");
+            Row header = sheet.createRow(0);
+            for (int c = 0; c < RosterTemplateService.EXPECTED_HEADERS.size(); c++) {
+                header.createCell(c).setCellValue(RosterTemplateService.EXPECTED_HEADERS.get(c));
+            }
+            // A row whose ONLY content is a formula cell.
+            Row row = sheet.createRow(1);
+            row.createCell(3).setCellFormula("1+1");
+            wb.write(out);
+            book = out.toByteArray();
+        }
+        RosterImportService.PreviewResult preview = importService.preview(ownerOf(t.classroomId()),
+                t.classroomId(), xlsx(book));
+        assertThat(preview.ready()).isZero();
+        assertThat(preview.rows()).hasSize(1);
+        assertThat(preview.rows().get(0).status()).isEqualTo("ERROR");
+        assertThat(String.join("; ", preview.rows().get(0).issues())).contains("Formula");
+    }
+
+    @Test
+    void highRatioZipBombIsRejectedBeforePoiLoadsIt() throws Exception {
+        Teacher t = teacherWithClassroom("BOMB");
+        // Valid xlsx... with an extra entry of 64 MB of zeros (< 20 KB zipped
+        // — well under the 2 MB upload limit, huge decompressed).
+        byte[] base = templateService.generateTemplate();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(out);
+                var baseIn = new java.io.ByteArrayInputStream(base)) {
+            // copy original entries
+            try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(baseIn)) {
+                byte[] buf = new byte[8192];
+                java.util.zip.ZipEntry e;
+                while ((e = zin.getNextEntry()) != null) {
+                    zip.putNextEntry(new java.util.zip.ZipEntry(e.getName()));
+                    int n;
+                    while ((n = zin.read(buf)) > 0) {
+                        zip.write(buf, 0, n);
+                    }
+                    zip.closeEntry();
+                }
+            }
+            zip.putNextEntry(new java.util.zip.ZipEntry("xl/pad.bin"));
+            byte[] zeros = new byte[8192];
+            for (int i = 0; i < 8 * 1024; i++) { // 64 MB
+                zip.write(zeros);
+            }
+            zip.closeEntry();
+        }
+        byte[] bomb = out.toByteArray();
+        org.assertj.core.api.Assertions.assertThat(bomb.length)
+                .as("compressed bomb stays under the upload limit").isLessThan(2 * 1024 * 1024);
+
+        MockMultipartFile file = new MockMultipartFile("file", "roster.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bomb);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> importService.preview(
+                        ownerOf(t.classroomId()), t.classroomId(), file))
+                .hasMessageContaining("Invalid roster import file");
     }
 
     // ---------- HTTP contract ----------

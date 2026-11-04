@@ -17,6 +17,7 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -62,13 +63,19 @@ public class RosterImportService {
     private final RosterExcelParser parser;
     private final ClassroomRosterEntryRepository rosterRepository;
     private final ClassroomRosterService rosterService;
+    /** Per-row REQUIRES_NEW transactions (partial-success isolation). */
+    private final org.springframework.transaction.support.TransactionTemplate rowTx;
 
     public RosterImportService(RosterExcelParser parser,
             ClassroomRosterEntryRepository rosterRepository,
-            ClassroomRosterService rosterService) {
+            ClassroomRosterService rosterService,
+            org.springframework.transaction.PlatformTransactionManager txManager) {
         this.parser = parser;
         this.rosterRepository = rosterRepository;
         this.rosterService = rosterService;
+        this.rowTx = new org.springframework.transaction.support.TransactionTemplate(txManager);
+        this.rowTx.setPropagationBehavior(
+                org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /** Read-only preview (authorization happens in the controller first). */
@@ -98,12 +105,19 @@ public class RosterImportService {
                     row.gender(), row.dob() == null ? null : row.dob().toString(),
                     row.phone(), row.parentPhone(), canonical, status, issues));
         }
+        // Review M4-QA: ONE preview row per sheet row — multiple column errors
+        // on one row are merged into that row's issues (not separate rows).
+        Map<Integer, List<String>> errorsByRow = new java.util.LinkedHashMap<>();
         for (RosterExcelParser.RowError err : parsed.errors()) {
-            rows.add(new PreviewRow(err.sheetRow(), null, null, null, null, null, null, null,
-                    "ERROR", List.of(err.column() + ": " + err.message())));
+            errorsByRow.computeIfAbsent(err.sheetRow(), k -> new ArrayList<>())
+                    .add(err.column() + ": " + err.message());
+        }
+        for (Map.Entry<Integer, List<String>> e : errorsByRow.entrySet()) {
+            rows.add(new PreviewRow(e.getKey(), null, null, null, null, null, null, null,
+                    "ERROR", e.getValue()));
         }
         rows.sort((a, b) -> Integer.compare(a.sheetRow(), b.sheetRow()));
-        return new PreviewResult(parsed.validRows().size() + parsed.errors().size(), ready, rows);
+        return new PreviewResult(rows.size(), ready, rows);
     }
 
     /**
@@ -111,8 +125,13 @@ public class RosterImportService {
      * collide with state created after the preview are counted as duplicates;
      * structural errors can only appear if the workbook changed (re-parsed
      * here from the same upload).
+     *
+     * <p>Review M4-SEC: NO enclosing batch transaction — each row imports in
+     * its own REQUIRES_NEW transaction so a failed row (e.g. a concurrent
+     * duplicate insert, which aborts the PostgreSQL transaction) is counted
+     * and skipped WITHOUT poisoning the other rows' commits. This is what
+     * makes the partial-success policy real under concurrency.
      */
-    @Transactional
     public ConfirmResult confirm(Long userId, Long classroomId, MultipartFile file) {
         RosterExcelParser.ParseResult parsed = parseFile(file);
 
@@ -135,9 +154,10 @@ public class RosterImportService {
                 continue;
             }
             try {
-                rosterService.addRosterEntry(userId, classroomId, new CreateRosterEntryRequest(
-                        row.fullName(), row.studentNumber(), row.gender(), row.dob(),
-                        row.phone(), row.parentPhone(), canonical));
+                rowTx.executeWithoutResult(tx -> rosterService.addRosterEntry(
+                        userId, classroomId, new CreateRosterEntryRequest(
+                                row.fullName(), row.studentNumber(), row.gender(), row.dob(),
+                                row.phone(), row.parentPhone(), canonical)));
                 imported++;
             } catch (ClassroomException dupe) {
                 if (dupe.getErrorCode() == ClassroomErrorCode.ROSTER_DUPLICATE_PENDING) {
@@ -148,22 +168,23 @@ public class RosterImportService {
                 }
             }
         }
-        return new ConfirmResult(imported, duplicates, errors.size(), errors);
+        // Review M4-QA: failed counts DISTINCT rows (one row may carry several
+        // column errors).
+        long failed = errors.stream().map(RosterExcelParser.RowError::sheetRow).distinct().count();
+        return new ConfirmResult(imported, duplicates, (int) failed, errors);
     }
 
     // ---------- internals ----------
 
     private RosterExcelParser.ParseResult parseFile(MultipartFile file) {
-        validateFileMetadata(file);
-        try (InputStream in = file.getInputStream()) {
-            return parser.parse(in);
-        } catch (IOException ex) {
-            throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
-        }
+        byte[] bytes = validateFileMetadata(file);
+        // Review M4-SEC: decompression bounds BEFORE POI materializes the DOM.
+        RosterExcelParser.validateZipLimits(bytes);
+        return parser.parse(new java.io.ByteArrayInputStream(bytes));
     }
 
-    /** Metadata validation BEFORE any byte is parsed (fail fast, cheap). */
-    private void validateFileMetadata(MultipartFile file) {
+    /** Metadata validation BEFORE parsing; returns the bounded upload bytes. */
+    private byte[] validateFileMetadata(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
         }
@@ -174,28 +195,24 @@ public class RosterImportService {
         if (name == null || !name.toLowerCase().endsWith(".xlsx")) {
             throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
         }
-        // Deterministic OOXML (zip) magic check before handing bytes to POI.
-        try (java.io.InputStream probe = file.getInputStream()) {
-            byte[] magic = probe.readNBytes(4);
-            boolean zip = magic.length == 4
-                    && magic[0] == 'P' && magic[1] == 'K'
-                    && (magic[2] == 3 || magic[2] == 5 || magic[2] == 7);
-            if (!zip) {
-                throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
-            }
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
         } catch (IOException ex) {
             throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
         }
+        // Deterministic OOXML (zip) magic check before handing bytes to POI.
+        boolean zip = bytes.length >= 4
+                && bytes[0] == 'P' && bytes[1] == 'K'
+                && (bytes[2] == 3 || bytes[2] == 5 || bytes[2] == 7);
+        if (!zip) {
+            throw new ClassroomException(ClassroomErrorCode.ROSTER_IMPORT_FILE_INVALID);
+        }
+        return bytes;
     }
 
+    /** Unpaged (review M4-QA): must see ALL active invitations, not page 1. */
     private Set<String> activeClassroomEmails(Long classroomId) {
-        Set<String> emails = new HashSet<>();
-        rosterRepository.findByClassroomIdOrderByCreatedAtDesc(classroomId, org.springframework.data.domain.PageRequest.of(0, 200)).forEach(e -> {
-            if (e.getStatus() == ClassroomRosterEntry.RosterStatus.PENDING
-                    || e.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
-                emails.add(e.getEmailNormalized());
-            }
-        });
-        return emails;
+        return new HashSet<>(rosterRepository.findActiveEmailsByClassroomId(classroomId));
     }
 }
