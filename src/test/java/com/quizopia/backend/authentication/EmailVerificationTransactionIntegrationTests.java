@@ -88,6 +88,7 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
+        waitForOtpMailCount(email, 2);
         String freshOtp = otpMailbox.latestOtpFor(email);
         assertThat(freshOtp).isNotEqualTo(realOtp);
         assertThat(submitOtp(email, realOtp)).isEqualTo(400); // old code dead
@@ -152,6 +153,7 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
+        waitForOtpMailCount(email, 2);
         assertThat(submitOtp(email, otpMailbox.latestOtpFor(email))).isEqualTo(200);
     }
 
@@ -222,7 +224,7 @@ class EmailVerificationTransactionIntegrationTests extends AbstractAuthenticatio
         runConcurrentResends(threads, email); // exactly one winner issues
         entityManager.clear();
         assertThat(challengeCount(username)).isEqualTo(2);
-        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(2);
+        waitForOtpMailCount(email, 2);
     }
 
     private void runConcurrentResends(int threads, String email) throws Exception {

@@ -44,6 +44,15 @@ import java.util.Optional;
  * the consumed challenge's hash is retained. The endpoint therefore cannot be
  * used to enumerate registered email addresses.
  *
+ * <p>Timing (review R3-M1-03): the resend endpoint performs no synchronous
+ * SMTP — delivery is dispatched to a background executor after the issuing
+ * transaction commits, so every reachable state costs only an HMAC
+ * comparison plus at most one small transaction. This is a documented
+ * bounded mitigation (the dominant latency term is removed from the
+ * request path), not a constant-time claim; the regression test drives a
+ * deliberately delayed SMTP double and asserts the eligible band stays
+ * flat.
+ *
  * <p>Security properties retained: HMAC-SHA256 storage, constant-time
  * compare, one PENDING challenge per account (resend supersedes),
  * per-challenge failed-attempt cap, per-email/per-IP issuance rate limits,
@@ -63,6 +72,8 @@ public class EmailVerificationService {
     private final EmailVerificationProperties properties;
     private final Clock clock;
     private final TransactionTemplate tx;
+    /** Background dispatch for the enumeration-sensitive resend path (R3-M1-03). */
+    private final java.util.concurrent.Executor otpDeliveryExecutor;
     /**
      * Fixed HMAC target for timing equalization when no real challenge exists
      * (unknown email): burned once at construction, never a credential.
@@ -75,7 +86,8 @@ public class EmailVerificationService {
             OtpMailSender mailSender,
             EmailVerificationProperties properties,
             Clock clock,
-            TransactionTemplate tx) {
+            TransactionTemplate tx,
+            java.util.concurrent.Executor otpDeliveryExecutor) {
         this.challengeRepository = challengeRepository;
         this.userRepository = userRepository;
         this.otpHasher = otpHasher;
@@ -83,6 +95,7 @@ public class EmailVerificationService {
         this.properties = properties;
         this.clock = clock;
         this.tx = tx;
+        this.otpDeliveryExecutor = otpDeliveryExecutor;
         this.dummyHash = otpHasher.hash("timing-equalizer");
     }
 
@@ -216,8 +229,20 @@ public class EmailVerificationService {
      * @return {@code true} when the OTP mail was delivered
      */
     public boolean issueForNewRegistration(User user, String requestIp) {
-        assertIpRateLimit(requestIp);
+        // No rate-limit throw here: registration checks issuance eligibility
+        // BEFORE persisting the account (see assertRegistrationIssuanceAllowed);
+        // by the time this runs, denying would be inconsistent with a row
+        // that already committed.
         return issueAndDeliver(user, requestIp);
+    }
+
+    /**
+     * Registration-time gate (review R3-M1-02): throws AUTH_RATE_LIMITED
+     * BEFORE any user row exists, so a denied registration is exactly a
+     * non-event (no partial state, retryable after the window).
+     */
+    public void assertRegistrationIssuanceAllowed(String requestIp) {
+        assertIpRateLimit(requestIp);
     }
 
     /**
@@ -292,7 +317,12 @@ public class EmailVerificationService {
         });
 
         if (issued != null) {
-            deliverAfterCommit(issued.challenge(), issued.otp());
+            // Review R3-M1-03: SMTP dispatch runs OFF the request path so the
+            // eligible path's latency stays in the same band as the
+            // unknown/verified paths (which perform only the equalizing HMAC).
+            final IssuedChallenge toDeliver = issued;
+            otpDeliveryExecutor.execute(() -> deliverAfterCommit(
+                    toDeliver.challenge(), toDeliver.otp()));
         } else {
             log.debug("Resend throttled or ineligible for user {}", user.getId());
         }
