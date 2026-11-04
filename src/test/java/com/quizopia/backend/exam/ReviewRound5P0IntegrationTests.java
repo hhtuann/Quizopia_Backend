@@ -61,16 +61,25 @@ class ReviewRound5P0IntegrationTests {
         }
 
         private Long register(String username, String accountType) throws Exception {
+
                 MvcResult result = mockMvc.perform(post("/api/auth/register")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{\"username\":\"" + username + "\",\"email\":\"" + username
                                                 + "@t.com\",\"password\":\"Passw0rd!123\","
                                                 + "\"displayName\":\"" + username + "\","
-                                                + "\"phone\":\"0900000066\","
-                                                + "\"accountType\":\"" + accountType + "\"}"))
+                                                + "\"phone\":\"0900000088\","
+                                                + "\"accountType\":\"STUDENT\"}"))
                                 .andExpect(status().isCreated())
                                 .andReturn();
-                return mapper().readTree(result.getResponse().getContentAsString()).get("id").asLong();
+                JsonNode body = mapper().readTree(result.getResponse().getContentAsString());
+                Long userId = body.get("id").asLong();
+                if ("TEACHER".equals(accountType)) {
+                        // Identity-M1: the public form is STUDENT-only; tests emulate the
+                        // teacher capability grant the way M2's self-upgrade will.
+                        jdbc.update("INSERT INTO user_roles (user_id, role_id, assigned_at) "
+                                        + "SELECT " + userId + ", id, now() FROM roles WHERE code = 'TEACHER'");
+                }
+                return userId;
         }
 
         private Long insert(String sql) {

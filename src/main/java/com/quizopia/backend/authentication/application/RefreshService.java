@@ -119,6 +119,15 @@ public class RefreshService {
             throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_PENDING);
         }
 
+        // Identity-M1 defense-in-depth, aligned with the login gate (review
+        // M1-03): only accounts whose login REQUIRES email verification are
+        // blocked here; legacy accounts (compatibility flag FALSE) keep
+        // rotating sessions with their old credentials.
+        if (Boolean.TRUE.equals(user.getLoginRequiresEmailVerification())
+                && user.getEmailVerifiedAt() == null) {
+            throw new AuthenticationException(AuthErrorCode.AUTH_EMAIL_NOT_VERIFIED);
+        }
+
         String newRawToken = rotate(now, session, user, client);
 
         List<String> roleCodes = userRoleRepository.findActiveRoleCodesByUserId(user.getId(), now);

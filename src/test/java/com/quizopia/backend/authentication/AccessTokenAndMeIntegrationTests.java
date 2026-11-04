@@ -128,6 +128,7 @@ class AccessTokenAndMeIntegrationTests extends AbstractAuthenticationIntegration
         String json = studentRegisterJson(username, emailFor(username), password, username + " Name", "+84991234567");
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/auth/register")
                 .contentType(MediaType.APPLICATION_JSON).content(json));
+        verifyEmail(emailFor(username)); // Identity-M1: verified accounts only
     }
 
     private static String unique(String base) {

@@ -72,8 +72,7 @@ class JwtAuthoritiesIntegrationTests {
                 "Passw0rd!",
                 username + " Name",
                 "+84991234567",
-                AccountType.STUDENT,
-                null)).id();
+                AccountType.STUDENT), null).id();
     }
 
     private void expireRolesOf(Long userId) {
