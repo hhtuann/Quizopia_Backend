@@ -37,8 +37,12 @@ public class ClassroomRosterRetentionScheduler {
         this.retentionDays = retentionDays;
     }
 
-    /** Daily; no-op unless retention is configured. */
+    /**
+     * Daily; no-op unless retention is configured. Transactional: the
+     * @Modifying delete requires a transaction boundary (review R2-SEC P2).
+     */
     @Scheduled(fixedDelay = 24 * 3600 * 1000L, initialDelay = 24 * 3600 * 1000L)
+    @org.springframework.transaction.annotation.Transactional
     public void purgeTerminalEntries() {
         if (retentionDays <= 0) {
             return;
