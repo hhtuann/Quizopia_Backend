@@ -58,16 +58,20 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         String username = unique("otp-bad");
         String email = emailFor(username);
         register(studentRegisterJson(username, email, "Passw0rd!", username + " Name", "+84991234567"));
+        String realOtp = otpMailbox.latestOtpFor(email);
+        // Guaranteed-wrong guess (never the real code).
+        String wrong = realOtp.equals("123456") ? "654321" : "123456";
 
         MvcResult result = mockMvc.perform(post("/api/auth/verify-email")
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content(verifyEmailJson(email, "000000")))
+                        .content(verifyEmailJson(email, wrong)))
                 .andReturn();
-        // The generated OTP is random; a wrong guess only passes by 1/10 chance.
-        // Use the real OTP next to prove the challenge is still usable.
+        assertThat(result.getResponse().getStatus()).isEqualTo(400);
+        assertThat(result.getResponse().getContentAsString()).contains("AUTH_OTP_INVALID");
+
+        // The real OTP still verifies afterwards (counter below the cap).
         MvcResult retry = verifyEmail(email);
         assertThat(retry.getResponse().getStatus()).isEqualTo(200);
-        assertThat(result.getResponse().getStatus()).isIn(200, 400);
     }
 
     @Test
