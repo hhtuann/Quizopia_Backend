@@ -626,9 +626,9 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         JsonNode old = addRoster(teacherToken, classroomId, "Overlapped", email, null, null);
         assertThat(old.get("status").asText()).isEqualTo("LINKED");
         // NEW PENDING entry for the same (classroom, email): manufactured
-        // directly (the sequential add-path would auto-link it instantly).
-        // This mirrors the reachable crash window between insert and
-        // immediate-reconcile in addRosterEntry.
+        // directly via the repository — the sequential add-path auto-links a
+        // verified email instantly, so this is the test fixture for the
+        // cross-entry invariant (not a claim about production insert paths).
         Long freshId = txInsertPending(classroomId, email, userId);
         assertThat(rosterRepository.findById(freshId))
                 .hasValueSatisfying(e -> assertThat(e.getStatus())

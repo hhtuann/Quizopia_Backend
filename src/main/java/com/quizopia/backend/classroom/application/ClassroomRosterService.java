@@ -160,6 +160,21 @@ public class ClassroomRosterService {
         // form with a concurrent decline.
         Long linkedUserId = rosterRepository.findUserIdByIdAndClassroomId(entryId, classroomId)
                 .orElse(null);
+        if (linkedUserId == null) {
+            // Review R4 window: the scalar read is a SNAPSHOT — a PENDING
+            // entry can be linked by reconciliation/accept BEFORE our entry
+            // lock, which would then find LINKED without a user lock held
+            // (recreating the notification-FK deadlock). The ONLY possible
+            // link target is the verified owner of the entry's email, so
+            // lock that user now; when no verified owner exists nothing can
+            // ever link the row and entry-only revoke is safe.
+            com.quizopia.backend.identity.domain.model.User prospectiveOwner =
+                    classroomService.findUserByEmailIfVerified(
+                            rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
+                                    .orElseThrow(() -> new ClassroomException(
+                                            ClassroomErrorCode.ROSTER_NOT_FOUND)));
+            linkedUserId = prospectiveOwner == null ? null : prospectiveOwner.getId();
+        }
         if (linkedUserId != null) {
             classroomService.lockUserRow(linkedUserId);
         }
