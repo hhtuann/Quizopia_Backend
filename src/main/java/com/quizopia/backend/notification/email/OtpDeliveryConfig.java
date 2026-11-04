@@ -1,5 +1,6 @@
 package com.quizopia.backend.notification.email;
 
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -27,8 +28,10 @@ import java.util.concurrent.TimeUnit;
  * exists, {@code delivered=false}; a later resend issues a fresh challenge).
  *
  * <h2>Shutdown</h2>
- * {@code shutdown()} + up to 30s drain on context close; tasks not drained
- * are lost with the same recovery semantics as an SMTP outage. Tasks are not
+ * {@code @PreDestroy} performs a REAL awaited drain (stop intake, then up
+ * to 30s for queued/in-flight resends) before context close; tasks still
+ * unfinished after the timeout are lost with the same recovery semantics as
+ * an SMTP outage. Tasks are not
  * durable across restarts (documented; a restart mid-cooldown costs the user
  * one resend — the challenge row and cooldown state live in PostgreSQL and
  * survive).
@@ -37,12 +40,15 @@ import java.util.concurrent.TimeUnit;
 public class OtpDeliveryConfig {
 
     private static final int WORKER_THREADS = 2;
+    private static final long DRAIN_TIMEOUT_SECONDS = 30;
 
-    @Bean(destroyMethod = "shutdown")
+    private ExecutorService executor;
+
+    @Bean
     public ExecutorService otpDeliveryExecutor(
             @Value("${quizopia.email-verification.resend-intake-capacity:200}")
             int intakeCapacity) {
-        return new ThreadPoolExecutor(
+        executor = new ThreadPoolExecutor(
                 WORKER_THREADS, WORKER_THREADS,
                 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(Math.max(1, intakeCapacity)),
@@ -51,5 +57,24 @@ public class OtpDeliveryConfig {
                     thread.setDaemon(true);
                     return thread;
                 });
+        return executor;
+    }
+
+    /**
+     * Real awaited drain (review follow-up): stop accepting new tasks, then
+     * wait up to 30s for in-flight/queued resends to finish so a restart
+     * during ordinary traffic does not drop accepted work. Tasks still
+     * unfinished after the timeout are lost with the documented recovery
+     * semantics (retry after the cooldown).
+     */
+    @PreDestroy
+    void shutdownAndDrain() throws InterruptedException {
+        if (executor == null) {
+            return;
+        }
+        executor.shutdown();
+        if (!executor.awaitTermination(DRAIN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            executor.shutdownNow();
+        }
     }
 }
