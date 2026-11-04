@@ -128,6 +128,18 @@ public class OauthIdentityService {
                 if (provisioned != null) {
                     return provisioned;
                 }
+            } catch (AuthenticationException conflict) {
+                // Review R3-M1-01 (defensive third window): a conflict thrown
+                // from inside the provisioning transaction is re-resolved by
+                // the stable identity key in a FRESH transaction before it is
+                // allowed to surface.
+                User winner = resolveEmailCollisionByIdentity(identity);
+                if (winner != null) {
+                    log.info("Conflict inside provisioning resolved to same-identity user {}",
+                            winner.getId());
+                    return winner;
+                }
+                throw conflict;
             } catch (DataIntegrityViolationException race) {
                 // The provision transaction is aborted; NEVER query it again.
                 // Resolve the race in a FRESH transaction.
@@ -194,6 +206,15 @@ public class OauthIdentityService {
             return existing.getUser();
         }
         if (emailExists(identity.email())) {
+            // Review R3-M1-01: inside THIS transaction the same read-pair
+            // race exists — a concurrent same-identity winner may have
+            // committed between the findByIdentity above and this email
+            // check. Re-read the stable identity key BEFORE conflicting;
+            // only a genuinely foreign owner of the address throws.
+            ExternalIdentity innerWinner = findByIdentity(identity).orElse(null);
+            if (innerWinner != null) {
+                return innerWinner.getUser();
+            }
             throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
         }
 

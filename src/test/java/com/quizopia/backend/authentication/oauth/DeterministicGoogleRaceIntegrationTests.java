@@ -111,10 +111,17 @@ class DeterministicGoogleRaceIntegrationTests {
             this.jdbc = jdbc;
         }
 
+        /** Which emailExists invocation (1-based) performs the injection. */
+        volatile int injectOnInvocation = 1;
+        final java.util.concurrent.atomic.AtomicInteger invocations =
+                new java.util.concurrent.atomic.AtomicInteger();
+
         @Override
         protected boolean emailExists(String candidate) {
             String armed = injectEmail;
+            int invocation = invocations.incrementAndGet();
             if (armed != null && candidate.equalsIgnoreCase(armed)
+                    && invocation == injectOnInvocation
                     && injected.compareAndSet(false, true)) {
                 // ---- The concurrent winner commits HERE (own transaction) ----
                 jdbc.update("""
@@ -164,6 +171,30 @@ class DeterministicGoogleRaceIntegrationTests {
     }
 
     @Test
+    void sameIdentityCommittingInsideTheProvisioningTransactionResolvesToWinner() {
+        // Review R3-M1-01: the winner commits between the INNER transaction's
+        // findByIdentity and its emailExists — the inner read pair must
+        // re-resolve by the stable identity key, not throw CONFLICT.
+        String email = "inner-" + UUID.randomUUID() + "@example.com";
+        String subject = "sub-" + UUID.randomUUID();
+        Interleaved armed = arm(email, subject, 2);
+
+        Long winnerId = armed.resolveGoogleUser(
+                new ValidatedOidcIdentity(ISSUER, subject, email, true)).getId();
+
+        entityManager.clear();
+        Long storedWinner = jdbc.queryForObject(
+                "SELECT user_id FROM external_identities WHERE subject = ?", Long.class, subject);
+        assertThat(winnerId).isEqualTo(storedWinner);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM external_identities WHERE subject = ?", Integer.class, subject))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM users WHERE email = ?", Integer.class, email))
+                .isEqualTo(1);
+    }
+
+    @Test
     void foreignOwnerOfTheAddressIsStillAConflict() {
         String email = "foreign-" + UUID.randomUUID() + "@example.com";
         jdbc.update("""
@@ -181,12 +212,23 @@ class DeterministicGoogleRaceIntegrationTests {
     }
 
     private Interleaved arm(String email, String subject) {
+        return arm(email, subject, 1);
+    }
+
+    /**
+     * @param injectOnInvocation 1 = outer orchestrator's emailExists (the
+     *        R2 window); 2 = the emailExists INSIDE the provisioning
+     *        transaction (the R3-M1-01 window).
+     */
+    private Interleaved arm(String email, String subject, int injectOnInvocation) {
         // The @Primary bean IS the Interleaved instance.
         assertThat(service).isInstanceOf(Interleaved.class);
         Interleaved interleaved = (Interleaved) service;
         interleaved.injectEmail = email;
         interleaved.injectSubject = subject;
         interleaved.injected.set(false);
+        interleaved.invocations.set(0);
+        interleaved.injectOnInvocation = injectOnInvocation;
         return interleaved;
     }
 }

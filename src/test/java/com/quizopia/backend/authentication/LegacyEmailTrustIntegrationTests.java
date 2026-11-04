@@ -89,6 +89,7 @@ class LegacyEmailTrustIntegrationTests extends AbstractAuthenticationIntegration
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn();
         assertThat(resend.getResponse().getStatus()).isEqualTo(200);
+        waitForOtpMailCount(email, 1);
 
         MvcResult verify = mockMvc.perform(post("/api/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)

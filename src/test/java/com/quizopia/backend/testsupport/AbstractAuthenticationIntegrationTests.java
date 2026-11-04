@@ -93,6 +93,23 @@ public abstract class AbstractAuthenticationIntegrationTests {
         return registration;
     }
 
+    /**
+     * Waits until the capture mailbox has recorded {@code expectedCount}
+     * mails for the email (resend delivery runs on a background executor —
+     * review R3-M1-03).
+     */
+    protected void waitForOtpMailCount(String email, int expectedCount) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            if (otpMailbox.sendCountFor(email) >= expectedCount) {
+                return;
+            }
+            Thread.sleep(50);
+        }
+        throw new AssertionError("expected " + expectedCount + " OTP mails for " + email
+                + " but saw " + otpMailbox.sendCountFor(email));
+    }
+
     protected MvcResult login(String identifier, String password) throws Exception {
         return mockMvc.perform(post("/api/auth/login")
                 .contentType(MediaType.APPLICATION_JSON)

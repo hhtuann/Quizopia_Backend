@@ -119,6 +119,7 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn();
         assertThat(resend.getResponse().getStatus()).isEqualTo(200);
+        waitForOtpMailCount(email, 2);
 
         MvcResult verified = verifyEmail(email);
         assertThat(verified.getResponse().getStatus()).isEqualTo(200);
@@ -213,6 +214,7 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         mockMvc.perform(post("/api/auth/verify-email/resend")
                 .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                 .content("{\"email\":\"%s\"}".formatted(email)));
+        waitForOtpMailCount(email, 2);
         String secondOtp = otpMailbox.latestOtpFor(email);
 
         assertThat(otpMailbox.sendCountFor(email)).isEqualTo(2);
@@ -276,7 +278,7 @@ class EmailVerificationOtpIntegrationTests extends AbstractAuthenticationIntegra
         // 1 registration challenge + 4 eligible resends = 5 → the 5th resend
         // was throttled: still 200, but no sixth challenge and no sixth mail.
         assertThat(challengeCountFor(username)).isEqualTo(5);
-        assertThat(otpMailbox.sendCountFor(email)).isEqualTo(5);
+        waitForOtpMailCount(email, 5);
     }
 
     private int challengeCountFor(String username) {

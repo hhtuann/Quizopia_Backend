@@ -36,7 +36,9 @@ class GoogleIdTokenValidatorTest {
     private static final String CLIENT_ID = "test-google-client-id";
     private static final String SUBJECT = "google-sub-" + UUID.randomUUID();
     private static final String EMAIL = "learner@example.com";
-    private static final Instant NOW = Instant.parse("2026-11-04T12:00:00Z");
+    /** Derived from the REAL clock: Nimbus's claims verifier uses real time,
+     *  so a fixed past instant eventually makes every minted token "expired". */
+    private static final Instant NOW = Instant.now().plusSeconds(60);
 
     private RSAKey signingKey;
     private RSAKey otherKey;

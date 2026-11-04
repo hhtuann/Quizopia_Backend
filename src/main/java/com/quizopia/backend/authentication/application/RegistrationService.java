@@ -114,6 +114,14 @@ public class RegistrationService {
         String passwordHash = passwordHasher.hash(request.password());
         String phoneEncrypted = encryptor.encrypt(phone);
 
+        // Review R3-M1-02: the OTP-issuance IP rate limit is evaluated
+        // BEFORE any persistence so a denied registration leaves NO user row
+        // (previously the account committed first and the later 429 made the
+        // caller believe the registration failed while the email/username
+        // were already taken).
+        emailVerificationService.assertRegistrationIssuanceAllowed(
+                client == null ? null : client.remoteAddress());
+
         User user;
         try {
             user = tx.execute(status -> persistStudentAccount(
