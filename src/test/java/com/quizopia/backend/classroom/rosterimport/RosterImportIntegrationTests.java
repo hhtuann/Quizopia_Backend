@@ -52,6 +52,16 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
     @Autowired
     private ClassroomRepository classroomRepository;
 
+    @Autowired
+    private com.quizopia.backend.classroom.repository.ClassroomMemberRepository memberRepository;
+
+    @Autowired
+    private com.quizopia.backend.security.encryption.SensitiveDataEncryptor encryptor;
+
+    private String decrypt(String ciphertext) {
+        return ciphertext == null ? null : encryptor.decrypt(ciphertext);
+    }
+
     // ---------- helpers ----------
 
     private static String unique(String base) {
@@ -199,6 +209,22 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
         assertThat(preview.rows().get(0).issues()).hasSize(2);
     }
 
+    // ---------- distinct failed-row accounting through confirm ----------
+
+    @Test
+    void confirmCountsMultiErrorRowsOnceWithNoWrites() throws Exception {
+        Teacher t = teacherWithClassroom("MULTI2");
+        RosterImportService.ConfirmResult result = importService.confirm(ownerOf(t.classroomId()),
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("", "", "", "", "", "", "bad-email")))));
+        assertThat(result.imported()).isZero();
+        assertThat(result.failed()).as("one row, two column errors").isEqualTo(1);
+        assertThat(result.errors()).hasSize(2);
+        assertThat(rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                t.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50)))
+                .isEmpty();
+    }
+
     // ---------- classroom duplicate beyond page one (review M4-QA) ----------
 
     @Test
@@ -289,16 +315,16 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
                 owner.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50)))
                 .isEmpty();
 
-        // Cross-class isolation: an entry in the STRANGER's class must not
-        // affect the OWNER's preview.
+        // Cross-class isolation: the SAME email active in the STRANGER's class
+        // must NOT look like a duplicate in the OWNER's preview.
+        String sharedEmail = emailFor(unique("iso"));
         importService.confirm(ownerOf(stranger.classroomId()), stranger.classroomId(),
-                xlsx(workbook(List.of(List.of("Other Class", "", "", "", "", "",
-                        emailFor(unique("iso")))))));
+                xlsx(workbook(List.of(List.of("Other Class", "", "", "", "", "", sharedEmail)))));
         RosterImportService.PreviewResult preview = importService.preview(
                 ownerOf(owner.classroomId()), owner.classroomId(),
-                xlsx(workbook(List.of(List.of("Iso Kid", "", "", "", "", "",
-                        emailFor(unique("iso")))))));
-        assertThat(preview.rows().get(0).status()).isEqualTo("READY");
+                xlsx(workbook(List.of(List.of("Iso Kid", "", "", "", "", "", sharedEmail)))));
+        assertThat(preview.rows().get(0).status())
+                .as("other classrooms' rosters are invisible").isEqualTo("READY");
     }
 
     // ---------- manual vs import equivalence (issue #16 acceptance) ----------
@@ -357,22 +383,24 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
             assertThat(i.getStatus()).as("status equivalence for %s", email)
                     .isEqualTo(m.getStatus());
             assertThat(i.getFullName()).isEqualTo(m.getFullName());
-            assertThat(i.getStudentNumber()).isEqualTo(m.getStudentNumber());
-            // Sensitive fields: both v1-encrypted when present (fresh nonces
-            // → different ciphertext, same decryption); both absent for B.
-            if (email.equals(emailA)) {
-                assertThat(i.getDobEncrypted()).startsWith("v1:");
-                assertThat(m.getDobEncrypted()).startsWith("v1:");
-            } else {
-                assertThat(i.getDobEncrypted()).isNull();
-                assertThat(m.getDobEncrypted()).isNull();
-            }
+            assertThat(i.getGender()).isEqualTo(m.getGender());
+            // Sensitive fields: fresh nonces → different ciphertext, but the
+            // DECRYPTED values must match exactly (both v1-scheme).
+            assertThat(decrypt(i.getParentPhoneEncrypted()))
+                    .isEqualTo(decrypt(m.getParentPhoneEncrypted()));
+            assertThat(decrypt(i.getDobEncrypted())).isEqualTo(decrypt(m.getDobEncrypted()));
         }
-        // The pre-verified learner reconciled identically through both paths.
-        assertThat(importByMail.get(emailB).getStatus())
-                .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
-        assertThat(manualByMail.get(emailB).getStatus())
-                .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
+        // The pre-verified learner reconciled identically through both paths:
+        // LINKED to the SAME user id with exactly one membership each.
+        var linkedImport = importByMail.get(emailB);
+        var linkedManual = manualByMail.get(emailB);
+        assertThat(linkedImport.getStatus()).isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
+        assertThat(linkedManual.getStatus()).isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED);
+        assertThat(linkedImport.getUserId()).isEqualTo(linkedManual.getUserId());
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(imported.classroomId()))
+                .hasSize(1);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(manual.classroomId()))
+                .hasSize(1);
     }
 
     // ---------- confirm: partial success + idempotency ----------
@@ -479,6 +507,24 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
                 .hasMessageContaining("exceeds");
     }
 
+    // ---------- header-only workbook: empty, valid, no writes ----------
+
+    @Test
+    void headerOnlyWorkbookYieldsEmptyPreviewAndZeroWriteConfirm() throws Exception {
+        Teacher t = teacherWithClassroom("EMPTY");
+        byte[] book = workbook(List.of());
+        RosterImportService.PreviewResult preview = importService.preview(
+                ownerOf(t.classroomId()), t.classroomId(), xlsx(book));
+        assertThat(preview.totalRows()).isZero();
+        assertThat(preview.ready()).isZero();
+        RosterImportService.ConfirmResult result = importService.confirm(
+                ownerOf(t.classroomId()), t.classroomId(), xlsx(book));
+        assertThat(result.imported()).isZero();
+        assertThat(rosterRepository.findByClassroomIdOrderByCreatedAtDesc(
+                t.classroomId(), org.springframework.data.domain.PageRequest.of(0, 50)))
+                .isEmpty();
+    }
+
     // ---------- formula-only rows + decompression bombs (review M4-SEC) ----------
 
     @Test
@@ -568,6 +614,12 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
                         .header("Authorization", "Bearer " + stranger.token()))
                 .andReturn();
         assertThat(tplDenied.getResponse().getStatus()).isEqualTo(403);
+
+        // Anonymous template download: 401.
+        MvcResult tplAnon = mockMvc.perform(get("/api/classrooms/" + owner.classroomId()
+                        + "/roster-import/template"))
+                .andReturn();
+        assertThat(tplAnon.getResponse().getStatus()).isEqualTo(401);
 
         // Preview: stranger 403, unauthenticated 401.
         MvcResult previewDenied = mockMvc.perform(multipart(
