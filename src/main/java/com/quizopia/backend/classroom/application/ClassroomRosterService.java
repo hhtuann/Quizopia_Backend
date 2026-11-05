@@ -138,71 +138,64 @@ public class ClassroomRosterService {
     }
 
     /**
-     * Teacher withdrawal (review M3-01): PENDING → REVOKED (invitation
-     * withdrawn) and LINKED → REVOKED (member removed + membership deleted,
-     * user-based independent memberships have no legacy member endpoint).
-     * Takes the row lock so a concurrent reconciliation cannot interleave;
-     * the locked state — not a stale read — decides the outcome.
+     * Teacher withdrawal (review M3-01): PENDING -> REVOKED (invitation
+     * withdrawn) and LINKED -> REVOKED (member removed + membership deleted).
+     *
+     * <p>Review R5 deadlock P1 (STRUCTURAL fix): the removal notification is
+     * sent AFTER the transaction commits. Its users-FK check takes a
+     * key-share lock on the learner row -- the same row decline/accept/
+     * reconcile lock FOR UPDATE -- so notifying while holding the entry lock
+     * could always cycle with a concurrent decline, no matter which user
+     * lock revoke tried to pre-acquire (every pre-read is an unlocked
+     * snapshot; a PENDING row can be linked in between, and even a verified
+     * owner can appear after a null lookup). With the notification outside,
+     * the transaction only ever locks the ENTRY row: no user->entry /
+     * entry->user cycle is possible in any interleaving. This mirrors
+     * reconciliation, which also notifies after commit.
      */
-    @org.springframework.transaction.annotation.Transactional
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        // Existence pre-checks via SCALAR reads — no managed entity that could
-        // go stale before the locking read (review R2 P1: lock on first load).
+        // Existence pre-check via SCALAR read; the locking finder below is the
+        // entry's FIRST entity load (review R2 P1: no stale managed state).
         rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
-        // Review R3 deadlock P1: a LINKED entry's removal inserts a
-        // notification (FK on users) which takes a key-share lock on the
-        // learner row — the SAME row decline/accept/reconcile lock FOR UPDATE.
-        // Acquire the user lock FIRST (scalar userId read; null for PENDING,
-        // which never notifies and needs no user lock) so every LINKED-row
-        // mutation follows the shared user → entry ordering and no cycle can
-        // form with a concurrent decline.
-        Long linkedUserId = rosterRepository.findUserIdByIdAndClassroomId(entryId, classroomId)
-                .orElse(null);
-        if (linkedUserId == null) {
-            // Review R4 window: the scalar read is a SNAPSHOT — a PENDING
-            // entry can be linked by reconciliation/accept BEFORE our entry
-            // lock, which would then find LINKED without a user lock held
-            // (recreating the notification-FK deadlock). The ONLY possible
-            // link target is the verified owner of the entry's email, so
-            // lock that user now; when no verified owner exists nothing can
-            // ever link the row and entry-only revoke is safe.
-            com.quizopia.backend.identity.domain.model.User prospectiveOwner =
-                    classroomService.findUserByEmailIfVerified(
-                            rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
-                                    .orElseThrow(() -> new ClassroomException(
-                                            ClassroomErrorCode.ROSTER_NOT_FOUND)));
-            linkedUserId = prospectiveOwner == null ? null : prospectiveOwner.getId();
+
+        record RemovedMember(Long userId, Long entryId, Long classroomId) {}
+        RemovedMember removed = tx.execute(status -> {
+            ClassroomRosterEntry locked = rosterRepository
+                    .findByIdAndClassroomIdForUpdate(entryId, classroomId)
+                    .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND));
+            if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.REVOKED
+                    || locked.getStatus() == ClassroomRosterEntry.RosterStatus.DECLINED) {
+                throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
+            }
+            RemovedMember result = null;
+            if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
+                memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
+                result = new RemovedMember(locked.getUserId(), locked.getId(), classroomId);
+            }
+            locked.revoke(Instant.now(clock));
+            rosterRepository.saveAndFlush(locked);
+            return result;
+        });
+        // Best-effort notification AFTER commit (see javadoc above).
+        if (removed != null) {
+            notifyRemovedMember(removed.entryId(), removed.classroomId(), removed.userId());
         }
-        if (linkedUserId != null) {
-            classroomService.lockUserRow(linkedUserId);
-        }
-        ClassroomRosterEntry locked = tx.execute(status -> rosterRepository
-                .findByIdAndClassroomIdForUpdate(entryId, classroomId)
-                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.ROSTER_NOT_FOUND)));
-        if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.REVOKED
-                || locked.getStatus() == ClassroomRosterEntry.RosterStatus.DECLINED) {
-            throw new ClassroomException(ClassroomErrorCode.ROSTER_INVALID_STATE);
-        }
-        if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
-            // Remove the user-based membership first (same transaction).
-            memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
-            notifyRemovedMember(locked);
-        }
-        locked.revoke(Instant.now(clock));
-        rosterRepository.saveAndFlush(locked);
     }
 
-    private void notifyRemovedMember(ClassroomRosterEntry entry) {
+    /** Post-commit, best-effort; touches only ids (no lazy entities). */
+    private void notifyRemovedMember(Long entryId, Long classroomId, Long userId) {
         try {
-            notificationService.create(entry.getUserId(),
+            String className = classroomRepository.findById(classroomId)
+                    .map(Classroom::getName).orElse("your class");
+            notificationService.create(userId,
                     com.quizopia.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
                     "Removed from class",
-                    "You were removed from " + entry.getClassroom().getName(),
+                    "You were removed from " + className,
                     "/my-classes");
         } catch (RuntimeException ex) {
-            log.warn("Failed to notify removed member for entry {}", entry.getId());
+            log.warn("Failed to notify removed member for entry {}", entryId);
         }
     }
 
