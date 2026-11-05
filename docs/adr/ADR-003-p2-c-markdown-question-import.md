@@ -86,7 +86,13 @@ rollback, identical to the Excel path.
   `QUESTION_IMPORT_FILE_INVALID`** by the controller-scoped
   `QuestionImportHttpExceptionHandler`. (Declaring `consumes` would instead fail
   at handler mapping, where no controller-scoped advice applies, surfacing as a
-  generic 500.) An oversized `Content-Length` is rejected before body reads.
+  generic 500.)
+
+Known limitation: the size cap runs after argument resolution has deserialized
+the JSON body (a pre-read cap would need a container-level request-size limit,
+which this app does not configure). The authoritative char cap bounds all
+parse/persist work; a global JSON body limit is app-wide hardening outside
+P2-C scope.
 
 ### 2.5 Persistence conventions (unchanged from Excel)
 
