@@ -437,6 +437,17 @@ public class ClassroomService {
     }
 
     /**
+     * Review M3-FINAL-01: ownership + READ baseline for roster revocation.
+     * The status-dependent action permission (ADD for PENDING withdrawal,
+     * REMOVE for LINKED membership deletion) is evaluated by the caller
+     * UNDER the entry lock so a concurrent grant revocation is honored.
+     */
+    public Classroom requireOwnedClassroomForRevoke(Long userId, Long classroomId) {
+        requirePermission(userId, "CLASSROOM_READ");
+        return requireOwnedClassroom(userId, classroomId);
+    }
+
+    /**
      * Review M3-FINAL-01: permission predicate over the same DB-backed
      * permission store as requirePermission (deny by default).
      */
