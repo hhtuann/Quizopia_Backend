@@ -46,8 +46,8 @@ class UserEncryptedPersonalDataIntegrationTests {
         // foundation, V13–V15 exam redesign) and issue #4 P0-1 (V16
         // user-based attempts). This test pins the current Flyway
         // version and must be updated whenever a migration is added.
-        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19");
-        assertThat(versions).endsWith("19");
+        assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20");
+        assertThat(versions).endsWith("20");
     }
 
     @Test

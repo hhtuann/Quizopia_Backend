@@ -92,9 +92,9 @@ class AvailableSessionQueryCountIntegrationTests {
         // All fixture sessions are CLASS_RESTRICTED + assigned to one classroom the
         // student belongs to, so the eligible set is deterministic (no reliance on
         // PUBLIC platform-wide visibility).
-        long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, code, name) "
+        long cls = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, owner_user_id, code, name) "
                 + "VALUES (quizopia_org_workspace_for_school(" + school + ")," + school + "," + tp
-                + ",'CLS" + count + "','C')");
+                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + tp + "),'CLS" + count + "','C')");
         jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, student_profile_id) VALUES ("
                 + cls + "," + userId + "," + school + "," + sp + ")");
         // P0-R2: the exam lives in an ORGANIZATION workspace, so the class member

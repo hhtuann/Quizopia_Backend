@@ -97,8 +97,9 @@ class AttemptAuthorizationRefactorTests {
                 + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
 
         // Classroom owned by the teacher (NOT yet assigned to the class-restricted session, student NOT yet a member).
-        classroomId = insert("INSERT INTO classrooms (school_id, owner_teacher_id, code, name) "
-                + "VALUES (" + schoolId + "," + teacherId + ",'CLS-A','Class A')");
+        classroomId = insert("INSERT INTO classrooms (school_id, owner_teacher_id, owner_user_id, code, name) "
+                + "VALUES (" + schoolId + "," + teacherId
+                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + teacherId + "),'CLS-A','Class A')");
     }
 
     // ============================================================

@@ -178,11 +178,16 @@ public class UserService {
         }
         if (request.email() != null && !request.email().isBlank()) {
             String email = request.email().trim();
-            if (!email.equalsIgnoreCase(user.getEmail())
-                    && userRepository.existsByEmailIgnoreCase(email)) {
-                throw new UserException(UserErrorCode.USER_EMAIL_ALREADY_EXISTS);
+            if (!email.equalsIgnoreCase(user.getEmail())) {
+                if (userRepository.existsByEmailIgnoreCase(email)) {
+                    throw new UserException(UserErrorCode.USER_EMAIL_ALREADY_EXISTS);
+                }
+                // Identity-M3 (review M3-SEC): the verified-email proof belongs
+                // to the OLD address. Keeping it would let pending roster
+                // invitations for the NEW address link without verification.
+                user.setEmail(email);
+                user.setEmailVerifiedAt(null);
             }
-            user.setEmail(email);
         }
         userRepository.saveAndFlush(user);
         return toResponse(user);

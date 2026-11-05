@@ -69,7 +69,8 @@ public class SecurityFilterChainConfig {
             ClientRegistrationRepository clientRegistrations,
             GoogleIdTokenValidator googleIdTokenValidator,
             OauthIdentityService oauthIdentityService,
-            OAuthProperties oauthProperties) throws Exception {
+            OAuthProperties oauthProperties,
+            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliationService) throws Exception {
         http
                 .securityMatcher("/oauth2/authorization/*", OAuth2ClientConfig.CALLBACK_PATH)
                 .csrf(csrf -> csrf.disable())
@@ -85,7 +86,8 @@ public class SecurityFilterChainConfig {
                         .redirectionEndpoint(endpoint -> endpoint.baseUri(OAuth2ClientConfig.CALLBACK_PATH))
                         .userInfoEndpoint(endpoint -> endpoint.oidcUserService(new QuizopiaOidcUserService()))
                         .successHandler(new OauthLoginSuccessHandler(
-                                googleIdTokenValidator, oauthIdentityService, oauthProperties))
+                                googleIdTokenValidator, oauthIdentityService, oauthProperties,
+                                rosterReconciliationService))
                         .failureHandler(new OauthLoginFailureHandler(oauthProperties)));
         return http.build();
     }

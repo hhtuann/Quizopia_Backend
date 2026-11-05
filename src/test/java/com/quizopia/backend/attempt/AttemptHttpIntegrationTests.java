@@ -321,8 +321,9 @@ class AttemptHttpIntegrationTests {
                                 Long.class);
                 long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId,
                                 Long.class);
-                long classroom = insert("INSERT INTO classrooms (school_id, owner_teacher_id, code, name) VALUES ("
-                                + school + "," + tpId + ",'C1','Class 1')");
+                long classroom = insert("INSERT INTO classrooms (school_id, owner_teacher_id, owner_user_id, code, name) VALUES ("
+                                + school + "," + tpId
+                                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + tpId + "),'C1','Class 1')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES (" + classroom + ","
                                 + studentUserId + ")");
                 jdbc.update("INSERT INTO exam_session_classes (school_id, exam_session_id, classroom_id) VALUES ("

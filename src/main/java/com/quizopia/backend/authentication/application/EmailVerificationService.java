@@ -65,6 +65,7 @@ public class EmailVerificationService {
     private static final Logger log = LoggerFactory.getLogger(EmailVerificationService.class);
     private static final String MASKED_IP_LOG = "<ip>";
 
+    private final com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation;
     private final EmailVerificationChallengeRepository challengeRepository;
     private final UserRepository userRepository;
     private final OtpHasher otpHasher;
@@ -80,7 +81,9 @@ public class EmailVerificationService {
      */
     private final String dummyHash;
 
-    public EmailVerificationService(EmailVerificationChallengeRepository challengeRepository,
+    public EmailVerificationService(
+            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation,
+EmailVerificationChallengeRepository challengeRepository,
             UserRepository userRepository,
             OtpHasher otpHasher,
             OtpMailSender mailSender,
@@ -88,6 +91,7 @@ public class EmailVerificationService {
             Clock clock,
             TransactionTemplate tx,
             java.util.concurrent.Executor otpDeliveryExecutor) {
+        this.rosterReconciliation = rosterReconciliation;
         this.challengeRepository = challengeRepository;
         this.userRepository = userRepository;
         this.otpHasher = otpHasher;
@@ -212,6 +216,13 @@ public class EmailVerificationService {
         });
         if (Boolean.TRUE.equals(consumed)) {
             log.info("Email verified for user {}", user.getId());
+            // Identity-M3: reconciliation runs AFTER the verification
+            // commit; failures must not fail the verification itself.
+            try {
+                rosterReconciliation.reconcile(user.getId(), user.getEmail());
+            } catch (RuntimeException ex) {
+                log.error("Roster reconciliation failed for user {} (non-fatal)", user.getId(), ex);
+            }
             return;
         }
         if (consumed == null) {

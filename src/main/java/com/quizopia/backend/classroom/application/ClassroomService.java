@@ -47,10 +47,11 @@ public class ClassroomService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt");
-    private static final String CODE_CONFLICT_INDEX = "uk_classrooms_owner_code_ci";
+    private static final String CODE_CONFLICT_INDEX = "uk_classrooms_owner_user_code_ci";
     private static final String MEMBER_DUPLICATE_CONSTRAINT = "uk_classroom_members_classroom_";
 
     private final TeacherProfileRepository teacherProfileRepository;
+    private final com.quizopia.backend.identity.repository.UserRepository userRepository;
     private final StudentProfileRepository studentProfileRepository;
     private final ClassroomRepository classroomRepository;
     private final ClassroomMemberRepository memberRepository;
@@ -63,6 +64,7 @@ public class ClassroomService {
     private final com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService;
 
     public ClassroomService(TeacherProfileRepository teacherProfileRepository,
+            com.quizopia.backend.identity.repository.UserRepository userRepository,
             StudentProfileRepository studentProfileRepository,
             ClassroomRepository classroomRepository,
             ClassroomMemberRepository memberRepository,
@@ -74,6 +76,7 @@ public class ClassroomService {
             com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
             com.quizopia.backend.workspace.application.WorkspaceAccessService workspaceAccessService) {
         this.teacherProfileRepository = teacherProfileRepository;
+        this.userRepository = userRepository;
         this.studentProfileRepository = studentProfileRepository;
         this.classroomRepository = classroomRepository;
         this.memberRepository = memberRepository;
@@ -93,18 +96,24 @@ public class ClassroomService {
     @Transactional
     public ClassroomResponse createClassroom(Long userId, CreateClassroomRequest request) {
         requirePermission(userId, "CLASSROOM_CREATE");
-        TeacherProfile profile = resolveTeacherProfile(userId);
+        ClassroomOwnership ownership = resolveOwnership(userId);
 
-        if (classroomRepository.existsByOwnerTeacherIdAndCodeIgnoreCase(profile.getId(), request.code())) {
+        if (classroomRepository.existsByOwnerUserIdAndCodeIgnoreCase(userId, request.code())) {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_CODE_CONFLICT);
         }
 
-        Long workspaceId = requireOrganizationWorkspaceId(profile.getSchoolId());
-        // P0-2 (issue #4): creating in the org workspace requires an ACTIVE
-        // membership (revoked members are denied even with a teacher profile).
-        workspaceAccessService.requireContentEditor(userId, workspaceId);
-        Classroom classroom = new Classroom(workspaceId, profile.getSchoolId(), profile.getId(),
-                request.code(), request.name());
+        Classroom classroom;
+        if (ownership.profile() != null) {
+            // Legacy: school-scoped, org workspace, editor membership required.
+            Long workspaceId = requireOrganizationWorkspaceId(ownership.profile().getSchoolId());
+            workspaceAccessService.requireContentEditor(userId, workspaceId);
+            classroom = Classroom.legacy(workspaceId, ownership.profile().getSchoolId(),
+                    ownership.profile().getId(), userId, request.code(), request.name());
+        } else {
+            // Identity-M3: independent teacher — PERSONAL workspace ownership.
+            Long workspaceId = workspaceAccessService.requirePersonalWorkspaceId(userId);
+            classroom = Classroom.independent(workspaceId, userId, request.code(), request.name());
+        }
         classroom.setDescription(request.description());
         try {
             classroomRepository.saveAndFlush(classroom);
@@ -117,6 +126,27 @@ public class ClassroomService {
         return toResponse(classroom, 0L);
     }
 
+    /**
+     * Identity-M3 dual-mode ownership resolution: a TEACHER with a
+     * TeacherProfile keeps the legacy school/org semantics; a TEACHER
+     * without one (self-upgraded, independent) gets personal-workspace
+     * ownership. Non-teachers are denied.
+     */
+    private record ClassroomOwnership(TeacherProfile profile) {
+    }
+
+    private ClassroomOwnership resolveOwnership(Long userId) {
+        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
+        if (profile != null) {
+            return new ClassroomOwnership(profile);
+        }
+        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, Instant.now(clock));
+        if (roles.contains("TEACHER")) {
+            return new ClassroomOwnership(null);
+        }
+        throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+    }
+
     // ============================================================
     // GET /api/classrooms/my
     // ============================================================
@@ -125,11 +155,10 @@ public class ClassroomService {
     @Transactional(readOnly = true)
     public MyClassroomsResponse listMyClassrooms(Long userId) {
         requirePermission(userId, "CLASSROOM_READ");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        // "My" classrooms: a teacher's own classrooms. Not paginated in Phase 1
-        // (small N per teacher); reuse the page query at a large size.
-        Page<Classroom> page = classroomRepository.findByOwnerTeacherIdOrderByCreatedAtDescIdDesc(
-                profile.getId(), PageRequest.of(0, MAX_PAGE_SIZE));
+        // Identity-M3: "my" classrooms = classrooms owned by this USER
+        // (both legacy and independent). Not paginated in Phase 1.
+        Page<Classroom> page = classroomRepository.findByOwnerUserIdOrderByCreatedAtDescIdDesc(
+                userId, PageRequest.of(0, MAX_PAGE_SIZE));
         // P0-2 (issue #4): hide classrooms in workspaces the user may no
         // longer access (revoked organization membership).
         java.util.Set<Long> accessible = new java.util.HashSet<>(
@@ -153,8 +182,7 @@ public class ClassroomService {
     @Transactional(readOnly = true)
     public ClassroomDetailView getClassroom(Long userId, Long classroomId) {
         requirePermission(userId, "CLASSROOM_READ");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        Classroom classroom = requireOwnedClassroom(profile, classroomId);
+        Classroom classroom = requireOwnedClassroom(userId, classroomId);
 
         List<ClassroomMember> members = memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId);
         Map<Long, StudentProfile> profiles = batchStudentProfiles(
@@ -176,7 +204,8 @@ public class ClassroomService {
         return new ClassroomDetailView(
                 classroom.getId(), classroom.getCode(), classroom.getName(),
                 classroom.getDescription(), classroom.getStatus().name(),
-                classroom.getOwnerTeacherId(), classroom.getCreatedAt(),
+                classroom.getOwnerTeacherId(), classroom.getOwnerUserId(),
+                classroom.isIndependent(), classroom.getCreatedAt(),
                 members.size(), memberViews);
     }
 
@@ -187,8 +216,7 @@ public class ClassroomService {
     @Transactional
     public ClassroomResponse updateClassroom(Long userId, Long classroomId, UpdateClassroomRequest request) {
         requirePermission(userId, "CLASSROOM_UPDATE");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        Classroom classroom = requireOwnedClassroom(profile, classroomId);
+        Classroom classroom = requireOwnedClassroom(userId, classroomId);
         classroom.update(request.name(), request.description());
         classroomRepository.saveAndFlush(classroom);
         return toResponse(classroom, memberRepository.countByClassroomId(classroomId));
@@ -202,8 +230,7 @@ public class ClassroomService {
     @Transactional
     public AddMembersResponse addMembers(Long userId, Long classroomId, AddMembersRequest request) {
         requirePermission(userId, "CLASSROOM_MEMBER_ADD");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        Classroom classroom = requireOwnedClassroom(profile, classroomId);
+        Classroom classroom = requireOwnedClassroom(userId, classroomId);
 
         // De-duplicate request (preserve first occurrence).
         List<Long> rawIds = request.studentProfileIds();
@@ -288,8 +315,7 @@ public class ClassroomService {
     @Transactional
     public void removeMember(Long userId, Long classroomId, Long studentProfileId) {
         requirePermission(userId, "CLASSROOM_MEMBER_REMOVE");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        Classroom classroom = requireOwnedClassroom(profile, classroomId);
+        Classroom classroom = requireOwnedClassroom(userId, classroomId);
         // User-based removal (V12): resolve the profile's user, then remove the
         // membership row by user. Falls back to the legacy profile-scoped delete
         // for rows without a resolvable user. Idempotent by design.
@@ -322,8 +348,7 @@ public class ClassroomService {
     public PageResponse<ClassroomMemberResponse> listMembers(
             Long userId, Long classroomId, int page, int size, String sort) {
         requirePermission(userId, "CLASSROOM_MEMBER_READ");
-        TeacherProfile profile = resolveTeacherProfile(userId);
-        requireOwnedClassroom(profile, classroomId);
+        requireOwnedClassroom(userId, classroomId);
 
         PageRequest pageable = safePageable(page, size, sort);
         Page<ClassroomMember> members = memberRepository.findByClassroomIdOrderByIdAsc(classroomId, pageable);
@@ -362,32 +387,107 @@ public class ClassroomService {
         return organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
     }
 
-    private Classroom requireOwnedClassroom(TeacherProfile profile, Long classroomId) {
+    /**
+     * Identity-M3: ownership is by OWNER USER. Legacy classrooms keep their
+     * school scoping implicitly (owner_user_id was backfilled from the
+     * teacher profile); independent classrooms are personal. Both modes
+     * additionally require read access to the owning workspace.
+     */
+    private Classroom requireOwnedClassroom(Long userId, Long classroomId) {
         Classroom classroom = classroomRepository.findById(classroomId)
                 .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.CLASSROOM_NOT_FOUND));
-        if (!classroom.getOwnerTeacherId().equals(profile.getId())
-                || !classroom.getSchoolId().equals(profile.getSchoolId())) {
+        if (!userId.equals(classroom.getOwnerUserId())) {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
         }
         // P0-2 (issue #4): owning the classroom is not enough when the
-        // organization membership has been revoked.
-        try {
-            workspaceAccessService.requireResourceRead(profile.getUserId(), classroom.getWorkspaceId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+        // organization membership has been revoked (legacy mode only —
+        // personal workspaces cannot be "revoked").
+        if (classroom.getSchoolId() != null) {
+            try {
+                workspaceAccessService.requireResourceRead(userId, classroom.getWorkspaceId());
+            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+                throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+            }
         }
         return classroom;
     }
 
-    private TeacherProfile resolveTeacherProfile(Long userId) {
-        return teacherProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> {
-                    List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, Instant.now(clock));
-                    if (roles.contains("TEACHER")) {
-                        return new ClassroomException(ClassroomErrorCode.CLASSROOM_TEACHER_PROFILE_NOT_FOUND);
-                    }
-                    return new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
-                });
+    /** Roster flows ride the CLASSROOM_MEMBER_* permission set. */
+    public Classroom requireOwnedClassroomForRoster(Long userId, Long classroomId) {
+        requirePermission(userId, "CLASSROOM_MEMBER_ADD");
+        return requireOwnedClassroom(userId, classroomId);
+    }
+
+    /**
+     * Review R2 P1 serialization: PESSIMISTIC_WRITE on the user row — the
+     * COMMON lock ordering point (user → entry) shared by decline, accept and
+     * reconciliation so a learner's committed opt-out can never be raced by
+     * an automatic link.
+     */
+    public void lockUserRow(Long userId) {
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED));
+    }
+
+    /** Identity-M3: the caller's user if the email is verified, else null. */
+    public com.quizopia.backend.identity.domain.model.User findVerifiedUserById(Long userId) {
+        return userRepository.findById(userId)
+                .filter(u -> u.getEmailVerifiedAt() != null)
+                .orElse(null);
+    }
+
+    /**
+     * Review M3-FINAL-01: ownership + READ baseline for roster revocation.
+     * The status-dependent action permission (ADD for PENDING withdrawal,
+     * REMOVE for LINKED membership deletion) is evaluated by the caller
+     * UNDER the entry lock so a concurrent grant revocation is honored.
+     */
+    public Classroom requireOwnedClassroomForRevoke(Long userId, Long classroomId) {
+        requirePermission(userId, "CLASSROOM_READ");
+        return requireOwnedClassroom(userId, classroomId);
+    }
+
+    /**
+     * Review M3-FINAL-01: permission predicate over the same DB-backed
+     * permission store as requirePermission (deny by default).
+     */
+    public boolean hasRosterPermission(Long userId, String permissionCode) {
+        return rolePermissionRepository
+                .findEffectivePermissionCodesByUserId(userId, Instant.now(clock))
+                .contains(permissionCode);
+    }
+
+    /** Roster listing rides CLASSROOM_MEMBER_READ. */
+    public Classroom requireOwnedClassroomForRosterRead(Long userId, Long classroomId) {
+        requirePermission(userId, "CLASSROOM_MEMBER_READ");
+        return requireOwnedClassroom(userId, classroomId);
+    }
+
+    /**
+     * Identity-M3: the verified owner of a canonical email, or null. Only a
+     * user whose email_verified_at is set AND whose email matches the
+     * canonical form counts — an unverified string can never link.
+     */
+    public com.quizopia.backend.identity.domain.model.User findUserByEmailIfVerified(String canonicalEmail) {
+        return userRepository.findByEmailIgnoreCase(canonicalEmail)
+                .filter(u -> u.getEmailVerifiedAt() != null)
+                .orElse(null);
+    }
+
+    /**
+     * Identity-M3: inside a reconciliation transaction, re-checks that the
+     * user id still maps to a verified owner of the canonical email
+     * (defense against concurrent email reassignment).
+     */
+    public com.quizopia.backend.identity.domain.model.User findUserByIdWithVerifiedEmail(
+            Long userId, String canonicalEmail) {
+        // Review M3-SEC: locking read — fresh committed state (a stale managed
+        // instance from the same transaction must not satisfy the check) and
+        // serialized against concurrent email reassignment.
+        return userRepository.findByIdForUpdate(userId)
+                .filter(u -> u.getEmailVerifiedAt() != null)
+                .filter(u -> canonicalEmail.equals(u.getEmail() == null ? "" : u.getEmail().trim().toLowerCase()))
+                .orElse(null);
     }
 
     private void requirePermission(Long userId, String permissionCode) {
@@ -401,7 +501,8 @@ public class ClassroomService {
     private ClassroomResponse toResponse(Classroom c, long memberCount) {
         return new ClassroomResponse(
                 c.getId(), c.getCode(), c.getName(), c.getDescription(),
-                c.getStatus().name(), memberCount, c.getOwnerTeacherId(), c.getCreatedAt());
+                c.getStatus().name(), memberCount, c.getOwnerTeacherId(),
+                c.getOwnerUserId(), c.getCreatedAt());
     }
 
     private Map<Long, Long> batchMemberCounts(List<Long> classroomIds) {
