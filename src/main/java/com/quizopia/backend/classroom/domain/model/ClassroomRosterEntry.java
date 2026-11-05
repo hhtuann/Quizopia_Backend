@@ -163,11 +163,11 @@ public class ClassroomRosterEntry {
 
     @Override
     public String toString() {
-        // No emails (even canonical), no ciphertext: identifiers and state only.
+        // Review M3-FINAL-04: identifiers and state ONLY — no names, no
+        // emails (even canonical), no DOB/phones, no ciphertext.
         return "ClassroomRosterEntry{id=" + id
                 + ", classroomId=" + classroomId
                 + ", status=" + status
-                + ", fullName='" + fullName + '\''
                 + ", linkedAt=" + linkedAt
                 + ", createdAt=" + createdAt + '}';
     }
