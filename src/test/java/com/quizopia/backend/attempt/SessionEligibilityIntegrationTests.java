@@ -205,6 +205,18 @@ class SessionEligibilityIntegrationTests {
     // Lifecycle / window / quota states (safe actionable UI)
     // ============================================================
 
+
+    @Test
+    void draftSession_deniedWithoutMetadata() throws Exception {
+        // Discovery hides DRAFT sessions entirely; the deep-link pre-flight
+        // must not leak their title/window to link holders.
+        jdbc.update("UPDATE exam_sessions SET status = 'DRAFT', opened_at = NULL WHERE id = " + publicSessionId);
+
+        mockMvc.perform(get(ENDPOINT, publicSessionId).with(jwtFor(studentUserId)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ATTEMPT_NOT_ELIGIBLE"));
+    }
+
     @Test
     void notYetStarted_windowInFuture() throws Exception {
         clock.setInstant(Instant.parse("2026-07-10T06:00:00Z"));

@@ -8,6 +8,7 @@ import com.quizopia.backend.attempt.dto.AvailableSessionsResponse;
 import com.quizopia.backend.attempt.dto.AvailableSessionsResponse.AvailableSessionItem;
 import com.quizopia.backend.attempt.dto.MyAttemptsResponse;
 import com.quizopia.backend.attempt.dto.MyAttemptsResponse.MyAttemptListItem;
+import com.quizopia.backend.attempt.dto.SessionEligibilityResponse;
 import com.quizopia.backend.attempt.dto.SaveAnswerResponse;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse;
 import com.quizopia.backend.attempt.dto.SubmitResponse;
@@ -43,7 +44,8 @@ class AttemptDataLeakStructuralTest {
             SubmitResponse.class,
             StartAttemptResponse.class, StartAttemptResponse.QuestionView.class,
             StartAttemptResponse.QuestionView.OptionView.class,
-            AvailableSessionsResponse.class, AvailableSessionItem.class, AvailableSessionItem.ExamInfo.class);
+            AvailableSessionsResponse.class, AvailableSessionItem.class, AvailableSessionItem.ExamInfo.class,
+            SessionEligibilityResponse.class);
 
     @Test
     void noStudentDtoDeclaresForbiddenField() {

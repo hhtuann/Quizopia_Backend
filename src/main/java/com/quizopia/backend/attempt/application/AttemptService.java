@@ -120,7 +120,10 @@ public class AttemptService {
 
         ExamSession session = sessionRepo.findById(sessionId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.EXAM_SESSION_NOT_FOUND));
-        if (!isEligible(userId, session)) {
+        // DRAFT sessions are invisible to discovery; the eligibility pre-flight
+        // must not become a metadata oracle for them either.
+        if (session.getStatus() == ExamSessionStatus.DRAFT
+                || !isEligible(userId, session)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_ELIGIBLE);
         }
 
