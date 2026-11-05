@@ -18,8 +18,8 @@ import java.util.Optional;
 /**
  * Repository for {@link ClassroomRosterEntry}. PENDING invitations are
  * matched by canonical email; the partial unique index
- * {@code uk_roster_pending_classroom_email} guarantees one PENDING entry
- * per (classroom, email).
+ * {@code uk_roster_active_classroom_email} guarantees one ACTIVE entry
+ * (PENDING or LINKED) per (classroom, email) — review M3-FINAL-02.
  */
 public interface ClassroomRosterEntryRepository extends JpaRepository<ClassroomRosterEntry, Long> {
 

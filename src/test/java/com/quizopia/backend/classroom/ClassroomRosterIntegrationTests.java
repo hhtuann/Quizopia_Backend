@@ -1070,6 +1070,52 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
     }
 
+    @Test
+    void removeOnlyOwnerCanRemoveLinkedButNotWithdrawPending() throws Exception {
+        String username = unique("rmo");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("RMO");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        // LINKED entry first (both permissions present at creation time).
+        JsonNode linked = addRoster(teacherToken, classroomId, "Remove Only", email, null, null);
+        assertThat(linked.get("status").asText()).isEqualTo("LINKED");
+
+        revokePermission("CLASSROOM_MEMBER_ADD");
+        try {
+            // REMOVE-only owner: LINKED removal works (status-dependent split).
+            MvcResult remove = mockMvc.perform(delete(
+                            "/api/classrooms/" + classroomId + "/roster/"
+                                    + linked.get("id").asLong())
+                            .header("Authorization", "Bearer " + teacherToken))
+                    .andReturn();
+            assertThat(remove.getResponse().getStatus())
+                    .as("REMOVE-only owner removes a LINKED member").isEqualTo(204);
+            assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+
+            // ...but cannot withdraw a PENDING invitation (ADD-gated).
+            restorePermission("CLASSROOM_MEMBER_ADD");
+            String pendingEmail = emailFor(unique("rmp"));
+            JsonNode pending = addRoster(teacherToken, classroomId, "Pending Rm",
+                    pendingEmail, null, null);
+            assertThat(pending.get("status").asText()).isEqualTo("PENDING");
+            revokePermission("CLASSROOM_MEMBER_ADD");
+            MvcResult denied = mockMvc.perform(delete(
+                            "/api/classrooms/" + classroomId + "/roster/"
+                                    + pending.get("id").asLong())
+                            .header("Authorization", "Bearer " + teacherToken))
+                    .andReturn();
+            assertThat(denied.getResponse().getStatus())
+                    .as("REMOVE-only owner cannot withdraw a PENDING invitation").isEqualTo(403);
+            assertThat(rosterRepository.findById(pending.get("id").asLong()))
+                    .hasValueSatisfying(e -> assertThat(e.getStatus())
+                            .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+        } finally {
+            restorePermission("CLASSROOM_MEMBER_ADD");
+        }
+    }
+
     /** Removes a permission code from the TEACHER role (test-scoped). */
     private void revokePermission(String code) {
         jdbcTemplate.update("""
@@ -1121,20 +1167,38 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         assertThat(row.get("email").isNull()).as("learner must not see raw email echo").isTrue();
         assertThat(row.get("status").asText()).isEqualTo("LINKED");
 
-        // Decline → re-invite (PENDING) → /roster/invitations equally redacted.
+        // Decline → re-invite (PENDING, WITH sensitive data) → the
+        // invitations listing and — critically — the ACCEPT response must be
+        // equally redacted (review M3-FINAL-03 P1: accept is learner-facing).
         mockMvc.perform(post("/api/classrooms/roster/" + linked.get("id").asLong() + "/decline")
                         .header("Authorization", "Bearer " + learnerToken))
                 .andReturn();
         JsonNode pending = addRoster(teacherToken, classroomId, "Private Me", email,
-                null, null);
+                "2011-06-07", "+84993334455");
         MvcResult invites = mockMvc.perform(get("/api/classrooms/roster/invitations")
                         .header("Authorization", "Bearer " + learnerToken))
                 .andReturn();
         JsonNode inviteRows = objectMapper.readTree(invites.getResponse().getContentAsString());
         assertThat(inviteRows.size()).isEqualTo(1);
         assertThat(inviteRows.get(0).get("dob").isNull()).isTrue();
+        assertThat(inviteRows.get(0).get("phone").isNull()).isTrue();
         assertThat(inviteRows.get(0).get("parentPhone").isNull()).isTrue();
         assertThat(inviteRows.get(0).get("email").isNull()).isTrue();
+
+        // The ACCEPT response carries identifiers + lifecycle ONLY.
+        MvcResult accepted = mockMvc.perform(post(
+                        "/api/classrooms/roster/" + pending.get("id").asLong() + "/accept")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        assertThat(accepted.getResponse().getStatus()).isEqualTo(200);
+        JsonNode acceptBody = objectMapper.readTree(accepted.getResponse().getContentAsString());
+        assertThat(acceptBody.get("status").asText()).isEqualTo("LINKED");
+        assertThat(acceptBody.get("dob").isNull()).as("accept response redacts DOB").isTrue();
+        assertThat(acceptBody.get("phone").isNull()).as("accept response redacts phone").isTrue();
+        assertThat(acceptBody.get("parentPhone").isNull())
+                .as("accept response redacts parent phone").isTrue();
+        assertThat(acceptBody.get("email").isNull())
+                .as("accept response redacts raw email").isTrue();
 
         // Owner-facing projection still returns the data it entered.
         MvcResult ownerList = mockMvc.perform(get("/api/classrooms/" + classroomId + "/roster")

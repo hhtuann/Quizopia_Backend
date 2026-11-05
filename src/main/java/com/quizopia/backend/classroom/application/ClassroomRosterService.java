@@ -144,30 +144,25 @@ public class ClassroomRosterService {
     }
 
     /**
-     * Teacher withdrawal (review M3-01): PENDING -> REVOKED (invitation
-     * withdrawn) and LINKED -> REVOKED (member removed + membership deleted).
+     * Teacher withdrawal (review M3-01 + M3-FINAL-01): PENDING -> REVOKED
+     * (invitation withdrawal — requires CLASSROOM_MEMBER_ADD) and LINKED ->
+     * REVOKED (membership deletion — requires CLASSROOM_MEMBER_REMOVE). The
+     * action permission is evaluated UNDER the entry lock against live
+     * DB-backed grants, so a grant revoked while the request waits on the
+     * lock is honored (no pre-captured boolean).
      *
      * <p>Review R5 deadlock P1 (STRUCTURAL fix): the removal notification is
      * sent AFTER the transaction commits. Its users-FK check takes a
-     * key-share lock on the learner row -- the same row decline/accept/
-     * reconcile lock FOR UPDATE -- so notifying while holding the entry lock
-     * could always cycle with a concurrent decline, no matter which user
-     * lock revoke tried to pre-acquire (every pre-read is an unlocked
-     * snapshot; a PENDING row can be linked in between, and even a verified
-     * owner can appear after a null lookup). With the notification outside,
-     * the transaction only ever locks the ENTRY row: no user->entry /
-     * entry->user cycle is possible in any interleaving. This mirrors
-     * reconciliation, which also notifies after commit.
+     * key-share lock on the learner row — the same row decline/accept/
+     * reconcile lock FOR UPDATE — so notifying while holding the entry lock
+     * could always cycle with a concurrent decline. With the notification
+     * outside, the transaction only ever locks the ENTRY row.
      */
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
-        // Review M3-FINAL-01 permission split: withdrawing a PENDING
-        // invitation is roster management (CLASSROOM_MEMBER_ADD — checked
-        // here); DELETING a LINKED learner's membership requires
-        // CLASSROOM_MEMBER_REMOVE, enforced against live DB-backed
-        // permissions under the entry lock below.
-        classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
-        boolean canRemoveMembers = classroomService.hasRosterPermission(
-                teacherUserId, "CLASSROOM_MEMBER_REMOVE");
+        // Baseline: ownership + READ (action permission is status-dependent —
+        // checked under the lock below). REMOVE-only owners may remove LINKED
+        // members; ADD-only owners may withdraw PENDING invitations.
+        classroomService.requireOwnedClassroomForRevoke(teacherUserId, classroomId);
         // Existence pre-check via SCALAR read; the locking finder below is the
         // entry's FIRST entity load (review R2 P1: no stale managed state).
         rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
@@ -184,13 +179,18 @@ public class ClassroomRosterService {
             }
             RemovedMember result = null;
             if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
-                // Membership deletion is REMOVE-gated even for the owner
-                // (same rule as the legacy member endpoint).
-                if (!canRemoveMembers) {
+                // Membership deletion is REMOVE-gated (live check under the
+                // lock — review M3-FINAL-01 P2).
+                if (!classroomService.hasRosterPermission(
+                        teacherUserId, "CLASSROOM_MEMBER_REMOVE")) {
                     throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
                 }
                 memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
                 result = new RemovedMember(locked.getUserId(), locked.getId(), classroomId);
+            } else if (!classroomService.hasRosterPermission(
+                    teacherUserId, "CLASSROOM_MEMBER_ADD")) {
+                // PENDING withdrawal is ADD-gated (live check under the lock).
+                throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
             }
             locked.revoke(Instant.now(clock));
             rosterRepository.saveAndFlush(locked);
@@ -288,7 +288,9 @@ public class ClassroomRosterService {
             memberRepository.insertMembershipIfAbsent(classroomId, userId);
             locked.linkTo(userId, Instant.now(clock));
             rosterRepository.saveAndFlush(locked);
-            return toResponse(locked, null);
+            // Learner-facing response (review M3-FINAL-03 P1): the accept
+            // endpoint is learner-reachable — sensitive fields stay redacted.
+            return toLearnerResponse(locked);
         });
         return result;
     }
