@@ -800,6 +800,78 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
                         .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
     }
 
+    // ---------- R5: revoke cannot deadlock with a concurrent decline ----------
+
+    @Test
+    void revokeCompletesWhileDeclineHoldsTheUserLock() throws Exception {
+        String username = unique("r5");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        Long userId = jdbcTemplate.queryForObject(
+                "SELECT id FROM users WHERE username = ?", Long.class, username);
+        String teacherToken = teacherWithClassroom("R5");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode entry = addRoster(teacherToken, classroomId, "R5 Member", email, null, null);
+        assertThat(entry.get("status").asText()).isEqualTo("LINKED");
+
+        org.springframework.transaction.PlatformTransactionManager tm =
+                applicationContext.getBean(
+                        org.springframework.transaction.PlatformTransactionManager.class);
+        org.springframework.transaction.support.TransactionTemplate txA =
+                new org.springframework.transaction.support.TransactionTemplate(tm);
+        com.quizopia.backend.identity.repository.UserRepository users =
+                applicationContext.getBean(com.quizopia.backend.identity.repository.UserRepository.class);
+
+        java.util.concurrent.CountDownLatch userLocked = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            // A concurrent decline-like transaction HOLDS the learner's user
+            // lock (FOR UPDATE) without committing.
+            Future<?> holder = pool.submit(() -> txA.executeWithoutResult(st -> {
+                users.findByIdForUpdate(userId);
+                userLocked.countDown();
+                try {
+                    release.await(15, TimeUnit.SECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(userLocked.await(15, TimeUnit.SECONDS)).isTrue();
+
+            // Teacher revoke on the LINKED entry: with the notification moved
+            // AFTER commit, the transaction locks ONLY the entry — it must
+            // COMPLETE (no wait on the user row, no deadlock, no abort).
+            com.quizopia.backend.classroom.application.ClassroomRosterService rosterSvc =
+                    applicationContext.getBean(
+                            com.quizopia.backend.classroom.application.ClassroomRosterService.class);
+            Future<Long> revoker = pool.submit(() -> {
+                long t0 = System.nanoTime();
+                rosterSvc.revokeRosterEntry(
+                        jdbcTemplate.queryForObject(
+                                "SELECT owner_user_id FROM classrooms WHERE id = ?",
+                                Long.class, classroomId),
+                        classroomId, entry.get("id").asLong());
+                return System.nanoTime() - t0;
+            });
+            // Must finish while the user lock is still held.
+            long elapsedMs = revoker.get(5, TimeUnit.SECONDS) / 1_000_000;
+            assertThat(elapsedMs).as("revoke completed without touching the user row").isLessThan(5000);
+
+            release.countDown();
+            holder.get(15, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        // Removal fully applied: REVOKED + membership gone (the notification
+        // itself is post-commit best-effort and may arrive after).
+        assertThat(rosterRepository.findById(entry.get("id").asLong()))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.REVOKED));
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+    }
+
     // ---------- authorization error shapes (review M3-QA) ----------
 
     @Test
