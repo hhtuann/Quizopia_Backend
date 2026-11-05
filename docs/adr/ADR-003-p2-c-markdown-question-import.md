@@ -81,10 +81,12 @@ rollback, identical to the Excel path.
 - `MAX_MARKDOWN_CHARS = 262_144` (256 KiB) → 413 `QUESTION_IMPORT_MARKDOWN_TOO_LARGE`
   (client mirrors the cap).
 - `MAX_MARKDOWN_QUESTIONS = 200` → 413 `QUESTION_IMPORT_MARKDOWN_TOO_MANY_QUESTIONS`.
-- Blank document → 400 `QUESTION_IMPORT_FILE_INVALID`.
-- The endpoint declares **no `consumes`**: a non-JSON body fails message conversion and is
-  mapped by the global 400 validation handler. (A `consumes` mismatch fails at handler
-  mapping where no controller-scoped advice applies and would surface as a generic 500.)
+- The endpoint declares **no `consumes`**: a non-JSON body reaches argument
+  resolution, fails message conversion there and is mapped to **415
+  `QUESTION_IMPORT_FILE_INVALID`** by the controller-scoped
+  `QuestionImportHttpExceptionHandler`. (Declaring `consumes` would instead fail
+  at handler mapping, where no controller-scoped advice applies, surfacing as a
+  generic 500.) An oversized `Content-Length` is rejected before body reads.
 
 ### 2.5 Persistence conventions (unchanged from Excel)
 

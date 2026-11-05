@@ -174,12 +174,34 @@ public class QuestionImportController {
     public ResponseEntity<ImportResponse> importMarkdownQuestions(
             @PathVariable Long bankId,
             @RequestBody ImportMarkdownRequest request,
-            @AuthenticationPrincipal Jwt jwt) {
+            @AuthenticationPrincipal Jwt jwt,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
         Long userId = Long.valueOf(jwt.getSubject());
 
         // Phase 0: preflight authorization (before parsing the document).
         markdownImportService.authorizeImportAccess(userId, bankId);
+
+        // Early size gate on the declared body length (defense in depth:
+        // argument resolution precedes this method, so this cannot prevent
+        // the JSON read — it only rejects implausibly large bodies before
+        // any parse work; the authoritative char cap runs below).
+        String contentLength = httpRequest.getHeader("Content-Length");
+        if (contentLength != null) {
+            try {
+                long declared = Long.parseLong(contentLength.trim());
+                long envelopeAllowance = 4096; // JSON escaping + field names
+                if (declared - envelopeAllowance > MarkdownQuestionImportService.MAX_MARKDOWN_CHARS) {
+                    throw new QuestionImportHttpException(
+                            QuestionErrorCode.QUESTION_IMPORT_MARKDOWN_TOO_LARGE,
+                            HttpStatus.PAYLOAD_TOO_LARGE,
+                            "Markdown source exceeds "
+                                    + MarkdownQuestionImportService.MAX_MARKDOWN_CHARS + " characters");
+                }
+            } catch (NumberFormatException ignored) {
+                // Malformed Content-Length is the server's problem, not ours.
+            }
+        }
 
         // Phase 1: body validation — explicit server-side limits.
         String markdown = request == null ? null : request.markdown();

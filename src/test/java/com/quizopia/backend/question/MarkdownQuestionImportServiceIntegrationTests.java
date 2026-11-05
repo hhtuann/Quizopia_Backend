@@ -260,6 +260,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
         ImportResponse response = importDoc(teacherUserId, bankId, doc);
 
+        assertThat(response.totalRows()).isEqualTo(2);
         assertThat(response.importedRows()).isZero();
         assertThat(response.invalidRows()).isEqualTo(1);
         assertThat(response.errors()).hasSize(1);
@@ -281,6 +282,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
         ImportResponse response = importDoc(teacherUserId, bankId, doc);
 
+        assertThat(response.totalRows()).isEqualTo(1);
         assertThat(response.importedRows()).isZero();
         assertThat(response.errors()).hasSize(1);
         assertThat(response.errors().get(0).code()).isEqualTo("NUMERIC_ANSWER_BANK_CONTRACT");

@@ -412,6 +412,7 @@ class MarkdownQuestionImportApiIntegrationTests {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody(doc)))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(1))
                 .andExpect(jsonPath("$.importedRows").value(0))
                 .andExpect(jsonPath("$.invalidRows").value(1))
                 .andExpect(jsonPath("$.errors[0].rowNumber").value(1))
@@ -432,6 +433,7 @@ class MarkdownQuestionImportApiIntegrationTests {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody(doc)))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(1))
                 .andExpect(jsonPath("$.importedRows").value(0))
                 .andExpect(jsonPath("$.errors[0].code").value("NUMERIC_ANSWER_BANK_CONTRACT"));
 
@@ -447,8 +449,32 @@ class MarkdownQuestionImportApiIntegrationTests {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody(doc)))
                 .andExpect(status().isOk())
+                // Parser is all-or-nothing: the question count of an invalid
+                // document is unknown → totalRows 0.
+                .andExpect(jsonPath("$.totalRows").value(0))
                 .andExpect(jsonPath("$.importedRows").value(0))
                 .andExpect(jsonPath("$.errors[0].code").value("QUESTION_NUMBER_MUST_START_AT_ONE"));
+
+        assertThat(questionCount()).isZero();
+    }
+
+    @Test
+    void documentLevelError_reportsRowZeroAndIsNotCountedAsQuestion() throws Exception {
+        mockMvc.perform(post(ENDPOINT, bankId)
+                        .with(jwtFor(teacherUserId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonBody("nothing recognizable here")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalRows").value(0))
+                .andExpect(jsonPath("$.importedRows").value(0))
+                .andExpect(jsonPath("$.invalidRows").value(0))
+                // Document-level diagnostics carry rowNumber 0 (order among
+                // them follows parser emission) and are NOT counted as
+                // rejected questions.
+                .andExpect(jsonPath("$.errors.length()").value(2))
+                .andExpect(jsonPath("$.errors[0].rowNumber").value(0))
+                .andExpect(jsonPath("$.errors[?(@.code == 'NO_QUESTIONS')]").exists())
+                .andExpect(jsonPath("$.errors[?(@.rowNumber > 0)]").isEmpty());
 
         assertThat(questionCount()).isZero();
     }

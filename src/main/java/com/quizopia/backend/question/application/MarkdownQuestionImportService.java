@@ -128,7 +128,9 @@ public class MarkdownQuestionImportService {
         QuestionBank bank = accessGuard.requireImportAccess(userId, bankId);
 
         if (!parsed.isValid()) {
-            return errorResponse(parsed.errors().stream()
+            // totalRows 0: the parser is all-or-nothing, so the question
+            // count of an invalid document is unknown.
+            return errorResponse(0, parsed.errors().stream()
                     .map(MarkdownQuestionImportService::toRowError)
                     .toList());
         }
@@ -140,7 +142,7 @@ public class MarkdownQuestionImportService {
 
         List<RowError> contractErrors = bankContractErrors(content);
         if (!contractErrors.isEmpty()) {
-            return errorResponse(contractErrors);
+            return errorResponse(content.questions().size(), contractErrors);
         }
 
         // --- Persist (all-or-nothing; codes auto-generated like Excel) ---
@@ -206,12 +208,17 @@ public class MarkdownQuestionImportService {
                 error.message());
     }
 
-    /** Sorted, nothing-persisted {@link ImportResponse} for a rejected document. */
-    private static ImportResponse errorResponse(List<RowError> rowErrors) {
+    /**
+     * Sorted, nothing-persisted {@link ImportResponse} for a rejected
+     * document. {@code invalidRows} counts distinct question numbers; a
+     * document-level error carries {@code rowNumber} 0 and is reported in
+     * {@code errors} but not counted as a rejected question.
+     */
+    private static ImportResponse errorResponse(int totalRows, List<RowError> rowErrors) {
         List<RowError> sorted = new ArrayList<>(rowErrors);
         sorted.sort(Comparator.comparingInt(RowError::rowNumber));
         int invalidRows = (int) sorted.stream().map(RowError::rowNumber).filter(n -> n > 0).distinct().count();
-        return new ImportResponse(0, 0, invalidRows, sorted);
+        return new ImportResponse(totalRows, 0, invalidRows, sorted);
     }
 
     // ============================================================
