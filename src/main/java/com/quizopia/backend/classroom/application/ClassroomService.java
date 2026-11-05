@@ -436,6 +436,16 @@ public class ClassroomService {
                 .orElse(null);
     }
 
+    /**
+     * Review M3-FINAL-01: permission predicate over the same DB-backed
+     * permission store as requirePermission (deny by default).
+     */
+    public boolean hasRosterPermission(Long userId, String permissionCode) {
+        return rolePermissionRepository
+                .findEffectivePermissionCodesByUserId(userId, Instant.now(clock))
+                .contains(permissionCode);
+    }
+
     /** Roster listing rides CLASSROOM_MEMBER_READ. */
     public Classroom requireOwnedClassroomForRosterRead(Long userId, Long classroomId) {
         requirePermission(userId, "CLASSROOM_MEMBER_READ");

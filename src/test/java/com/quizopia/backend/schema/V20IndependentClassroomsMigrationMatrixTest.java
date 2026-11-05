@@ -152,7 +152,7 @@ class V20IndependentClassroomsMigrationMatrixTest {
                 }
                 try (ResultSet rs = st.executeQuery("""
                         SELECT count(*) FROM pg_indexes
-                        WHERE indexname = 'uk_roster_pending_classroom_email'
+                        WHERE indexname = 'uk_roster_active_classroom_email'
                         """)) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getInt(1)).isEqualTo(1);
@@ -196,7 +196,23 @@ class V20IndependentClassroomsMigrationMatrixTest {
                         VALUES ((SELECT id FROM classrooms WHERE code='IND1'),
                                 'kid@example.com', 'PENDING', 'Kid Dup',
                                 (SELECT id FROM users WHERE username='m3_legacy'))
-                        """)).hasMessageContaining("uk_roster_pending_classroom_email");
+                        """)).hasMessageContaining("uk_roster_active_classroom_email");
+                // And a LINKED row blocks a second ACTIVE row of ANY state.
+                // (chk_roster_entries_linking: LINKED requires user_id.)
+                st.execute("""
+                        UPDATE classroom_roster_entries
+                        SET status = 'LINKED',
+                            user_id = (SELECT id FROM users WHERE username = 'm3_member')
+                        WHERE email_normalized = 'kid@example.com'
+                          AND classroom_id = (SELECT id FROM classrooms WHERE code='IND1')
+                        """);
+                assertThatThrownBy(() -> st.execute("""
+                        INSERT INTO classroom_roster_entries
+                            (classroom_id, email_normalized, status, full_name, created_by_user_id)
+                        VALUES ((SELECT id FROM classrooms WHERE code='IND1'),
+                                'kid@example.com', 'PENDING', 'Kid After Link',
+                                (SELECT id FROM users WHERE username='m3_legacy'))
+                        """)).hasMessageContaining("uk_roster_active_classroom_email");
             }
         } finally {
             try (Connection c = pg.createConnection(""); Statement st = c.createStatement()) {

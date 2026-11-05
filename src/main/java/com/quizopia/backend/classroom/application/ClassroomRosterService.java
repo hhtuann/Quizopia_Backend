@@ -90,8 +90,14 @@ public class ClassroomRosterService {
         Classroom classroom = classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
         String canonical = canonicalEmail(request.email());
 
+        // Review M3-FINAL-02: uniqueness covers ALL active states — a second
+        // invitation for an already-LINKED address would otherwise auto-link
+        // into a duplicate LINKED row (membership dedupes, roster state
+        // diverged). Backed by uk_roster_active_classroom_email.
         if (rosterRepository.existsByClassroomIdAndEmailNormalizedAndStatus(
-                classroomId, canonical, ClassroomRosterEntry.RosterStatus.PENDING)) {
+                        classroomId, canonical, ClassroomRosterEntry.RosterStatus.PENDING)
+                || rosterRepository.existsByClassroomIdAndEmailNormalizedAndStatus(
+                        classroomId, canonical, ClassroomRosterEntry.RosterStatus.LINKED)) {
             throw new ClassroomException(ClassroomErrorCode.ROSTER_DUPLICATE_PENDING);
         }
 
@@ -154,7 +160,14 @@ public class ClassroomRosterService {
      * reconciliation, which also notifies after commit.
      */
     public void revokeRosterEntry(Long teacherUserId, Long classroomId, Long entryId) {
+        // Review M3-FINAL-01 permission split: withdrawing a PENDING
+        // invitation is roster management (CLASSROOM_MEMBER_ADD — checked
+        // here); DELETING a LINKED learner's membership requires
+        // CLASSROOM_MEMBER_REMOVE, enforced against live DB-backed
+        // permissions under the entry lock below.
         classroomService.requireOwnedClassroomForRoster(teacherUserId, classroomId);
+        boolean canRemoveMembers = classroomService.hasRosterPermission(
+                teacherUserId, "CLASSROOM_MEMBER_REMOVE");
         // Existence pre-check via SCALAR read; the locking finder below is the
         // entry's FIRST entity load (review R2 P1: no stale managed state).
         rosterRepository.findEmailByIdAndClassroomId(entryId, classroomId)
@@ -171,6 +184,11 @@ public class ClassroomRosterService {
             }
             RemovedMember result = null;
             if (locked.getStatus() == ClassroomRosterEntry.RosterStatus.LINKED) {
+                // Membership deletion is REMOVE-gated even for the owner
+                // (same rule as the legacy member endpoint).
+                if (!canRemoveMembers) {
+                    throw new ClassroomException(ClassroomErrorCode.CLASSROOM_ACCESS_DENIED);
+                }
                 memberRepository.deleteByClassroomIdAndUserId(classroomId, locked.getUserId());
                 result = new RemovedMember(locked.getUserId(), locked.getId(), classroomId);
             }
@@ -204,9 +222,11 @@ public class ClassroomRosterService {
     // ============================================================
 
     public List<RosterEntryResponse> myLinkedEntries(Long userId) {
+        // Review M3-FINAL-03: LEARNER-facing projection — sensitive fields
+        // (DOB, phones, raw email) are owner-facing only and stay null here.
         return rosterRepository
                 .findAllByUserIdAndStatus(userId, ClassroomRosterEntry.RosterStatus.LINKED)
-                .stream().map(this::toResponse).toList();
+                .stream().map(this::toLearnerResponse).toList();
     }
 
     /**
@@ -288,7 +308,24 @@ public class ClassroomRosterService {
         return rosterRepository
                 .findAllByEmailNormalizedAndStatus(canonical,
                         ClassroomRosterEntry.RosterStatus.PENDING)
-                .stream().map(e -> toResponse(e, null)).toList();
+                .stream().map(this::toLearnerResponse).toList();
+    }
+
+    /**
+     * Learner projection (review M3-FINAL-03): identifiers + lifecycle only.
+     * DOB, student phone, parent phone and the raw teacher-entered email are
+     * never exposed to the learner through the API.
+     */
+    private RosterEntryResponse toLearnerResponse(ClassroomRosterEntry entry) {
+        return new RosterEntryResponse(
+                entry.getId(),
+                entry.getClassroomId(),
+                entry.getStatus().name(),
+                entry.getUserId(),
+                entry.getFullName(),
+                null, null, null, null, null, null,
+                entry.getCreatedAt(),
+                entry.getLinkedAt());
     }
 
     private boolean hasDeclinedHistory(Long classroomId, String canonicalEmail) {

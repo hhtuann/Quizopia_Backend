@@ -13,7 +13,7 @@ public enum ClassroomErrorCode {
 
     // ---------- Identity-M3 roster (issue #15) ----------
     ROSTER_NOT_FOUND(HttpStatus.NOT_FOUND, "Roster entry not found"),
-    ROSTER_DUPLICATE_PENDING(HttpStatus.CONFLICT, "A pending roster entry already exists for this email in this classroom"),
+    ROSTER_DUPLICATE_PENDING(HttpStatus.CONFLICT, "An active (pending or linked) roster entry already exists for this email in this classroom"),
     ROSTER_INVALID_STATE(HttpStatus.CONFLICT, "Roster entry is not in a state that allows this operation"),
     ROSTER_ACCESS_DENIED(HttpStatus.FORBIDDEN, "You cannot accept this invitation");
 
