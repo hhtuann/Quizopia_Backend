@@ -1,11 +1,12 @@
 # Quiz Markdown → Question Bank Mapping (P2-M1-D, Issue #9)
 
-Status: **Analysis only — no adapter, persistence, API or migration in P2-M1.**
-The mapping below documents how the structured output of the pure Markdown
-parser (`com.quizopia.backend.question.domain.markdown`, Backend PR #3) is
-expected to feed the existing Question domain in P2-M2. The future adapter
-will translate `QuizQuestion` values into the entities below exactly as the
-existing Excel import (`QuestionImportService`) does today.
+Status: **Implemented (P2-C, issue #18 + issue #10 resolution).** The adapter,
+API and persistence live in `MarkdownQuestionImportService` /
+`QuestionImportController.importMarkdownQuestions`
+(`POST /api/question-banks/{bankId}/questions/import-markdown`) — see
+[ADR-003](adr/ADR-003-p2-c-markdown-question-import.md) for the authorization
+boundary, the bank-contract preflight and the atomic all-or-nothing import
+decision. The mapping below remains the authoritative field-mapping reference.
 
 ## Structured output contract (parser → adapter)
 
@@ -40,68 +41,46 @@ canonical cross-language fixtures with SHA-256 parity live in
 
 ## Metadata NOT present in Markdown (adapter must not invent values)
 
-| Field | Current default | P2-M2 decision needed |
+| Field | Current default | Resolved (P2-C, ADR-003) |
 |---|---|---|
-| Question code | generated on create | Markdown carries no code; import must generate or derive (`bank-code`-based sequence per Excel behavior). |
-| `difficulty` | `MEDIUM` | Grammar has no difficulty markers; default or import-time choice. |
-| `defaultPoints` | `1.0` | Not in grammar; per-import default or bank setting. |
-| Bank identity / ownership | n/a | Which Question Bank a Markdown import targets is an application-service decision (auth + Workspace membership), deliberately outside the pure parser. |
-| `status` | draft lifecycle | Import creates draft questions like Excel import. |
-| `metadata` JSONB | `{}` | Reserved. |
+| Question code | generated on create | `QU` + 8 digits, same generator/scope as the Excel import. |
+| `difficulty` | `MEDIUM` | Grammar has no difficulty markers; imports default to MEDIUM (editable after import). |
+| `defaultPoints` | `1.0` | Not in grammar; constant 1.00 like the Excel import. |
+| Bank identity / ownership | n/a | Workspace boundary (ADR-003 §2.2): creator equality + `requireResourceManage` + ACTIVE bank. |
+| `status` | ACTIVE | Import creates ACTIVE questions like the Excel path (this doc previously said "draft" — that was drift; the code has set ACTIVE since the Excel import shipped). |
+| `metadata` JSONB | `{}` | Reserved, stored `{}`. |
 
-## Cross-layer compatibility differences (verified against origin/main @ 9a43e46; tracked in Quizopia_System issue #10)
+## Cross-layer compatibility — RESOLVED by issue #10 (ADR-003 §2.1)
 
-The Markdown grammar does **not** currently agree with the existing Question
-Bank editing, Excel Import and Exam publication rules. A Markdown source that
-the parser accepts is **not automatically importable or publishable**. These
-are facts of the current code, not decisions — grammar and validation are
-unchanged in P2-M1; unification is tracked in
-[Issue #10](https://github.com/hhtuann/Quizopia_System/issues/10) and decided
-in P2-M2. (Note: this table reflects this branch's snapshot of `origin/main`;
-the concurrently running Phase 1 worktree may introduce further changes that
-must be re-audited at merge time.)
+The pure parser keeps the donor grammar; the **import adapter preflight**
+(`MarkdownQuestionImportService.bankContractErrors`) enforces the established
+Question Bank / Exam publish contract before anything is persisted, with
+actionable per-question diagnostics and **no silent rewriting**:
 
-| Rule | Markdown<br>(`QuizMarkdownValidator` / `QuizNumericAnswer`) | Excel Import<br>(`ExcelQuestionParser`) | Question editing<br>(`QuestionService`) | Exam publication<br>(`ExamService.validatePublishedQuestionType`) |
+| Rule | Markdown grammar | Import preflight (P2-C) | Bank edit / Exam publish | Excel import |
 |---|---|---|---|---|
-| MULTIPLE_CHOICE min correct | **≥ 1** (`MULTIPLE_CHOICE_CORRECT_REQUIRED`) | **≥ 2** ("at least two correct answers") | **≥ 2** ("exactly 4 options with at least 2 correct") | **≥ 2** (`correct < 2` → `EXAM_VALIDATION_ERROR`) |
-| Choice option count | exactly A–D in order | exactly A–D | exactly 4 options | 4–6 options |
-| TRUE_FALSE_MATRIX option count | exactly A–D | exactly A–D (T/F strings) | exactly 4 | exactly 4 |
-| Numeric answer token | 4 chars over `[0-9]`, `-`, `.`; `-` only first; `.` not first/last; surrounding Java `strip()` whitespace | `^-?[0-9]+([,.][0-9]+)?$` + exactly 4 chars; comma normalized to dot | `^-?[0-9]+([.][0-9]+)?$` + exactly 4 chars | `^-?[0-9]+([.][0-9]+)?$` + exactly 4 chars |
-| `-.50` accepted? | **yes** (fixture `numeric-negative-and-leading-dot`) | no | **no** | **no** |
-| `2,50` accepted? | no (comma not in grammar) | **yes** (normalized to `2.50` on import) | **no** | **no** |
+| MULTIPLE_CHOICE min correct | ≥ 1 | **≥ 2** (`MULTIPLE_CHOICE_MIN_TWO_CORRECT`) | ≥ 2 | ≥ 2 |
+| `-.50` | parses | **rejected** (`NUMERIC_ANSWER_BANK_CONTRACT` — "write `-0.5`, not `-.5`") | rejected | rejected |
+| `2,50` | rejected by grammar | rejected (`NUMERIC_ANSWER_INVALID`) | rejected | **accepted** — Excel-only legacy input normalization to `2.50` (unchanged, documented) |
 
-Consequences, explicitly:
+Canonical NUMERIC_FILL answer (all persisting layers): exactly 4 characters
+matching `^-?[0-9]+([.][0-9]+)?$`. The frontend mirrors the same preflight in
+`quizopia_frontend/lib/quiz-markdown/bank-contract.ts` for live pre-confirm
+feedback; the backend re-checks authoritatively. E2E round-trip coverage
+(Markdown → import → edit → publish, including the `-.50` / one-star MULTIPLE
+rejections and verbatim `2.50` through publication) lives in
+`MarkdownQuestionImportServiceIntegrationTests`.
 
-1. **MULTIPLE_CHOICE:** a Markdown question with exactly one correct option
-   parses as valid (`MULTIPLE_CHOICE_CORRECT_REQUIRED` only fires at zero)
-   but is rejected by Excel Import validation, question editing and Exam
-   publication today.
-2. **`-.50`:** Markdown-accepted, downstream-rejected everywhere
-   (`-?[0-9]+` requires at least one leading digit before the decimal
-   point in the other three layers).
-3. **`2,50`:** Excel Import accepts (and normalizes) a comma decimal that
-   the Markdown grammar, question editing and Exam publication all reject.
-
-### P2-M2 adapter obligation (preflight before persistence/publication)
-
-The future Question Bank Markdown adapter must **not** assume
-parser-valid ⇒ import/publish-valid. It must re-check every parsed question
-against the final agreed domain policy (whatever Issue #10 resolves: unified
-grammar, stricter adapter rejection with actionable diagnostics, or relaxed
-service validation) before writing `QuestionVersion`/`QuestionOption` rows or
-allowing a question into a publishable exam version. Until then, Markdown
-authors can hit downstream rejections that the parser cannot currently
-predict — surfacing those conflicts early in the editor is a P2-M2 concern.
-
-### Other documented asymmetries (no conflict for Markdown input)
+### Other documented asymmetries (deliberate)
 
 - **Option count:** the Markdown grammar hard-requires exactly A–D in order —
-  narrower than Excel (A–D) and the DB (A–F), and narrower than Exam
-  publication (4–6). Adapter error messages should surface parser
-  diagnostics, not entity constraint errors.
-- **Numeric token storage:** the adapter should store the parser's
-  normalized token verbatim, like the Excel path ("preserved verbatim, no
-  reparse") — but only after the preflight above accepts it.
+  narrower than Excel (A–D), the DB (A–F) and Exam publication (4–6); no
+  adapter check is needed for Markdown input.
+- **Numeric token storage:** the adapter stores the parser's normalized token
+  verbatim, like the Excel path ("preserved verbatim, no reparse") — the
+  preflight guarantees it already satisfies the canonical bank grammar.
+- **Atomicity:** a Markdown document imports all-or-nothing (unlike Excel's
+  row-partial success) — see ADR-003 §2.3.
 
 ## Extension point: AI-generated Markdown
 

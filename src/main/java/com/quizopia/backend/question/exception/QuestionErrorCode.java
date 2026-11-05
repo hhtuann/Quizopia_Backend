@@ -28,7 +28,9 @@ public enum QuestionErrorCode {
     QUESTION_IMPORT_INVALID_CORRECT_ANSWERS(HttpStatus.BAD_REQUEST, "Invalid correct answers"),
     QUESTION_IMPORT_INVALID_TRUE_FALSE_MATRIX(HttpStatus.BAD_REQUEST, "Invalid true/false matrix"),
     QUESTION_IMPORT_INVALID_NUMERIC_ANSWER(HttpStatus.BAD_REQUEST, "Invalid numeric answer"),
-    QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED(HttpStatus.BAD_REQUEST, "Rounding instruction is required for numeric questions");
+    QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED(HttpStatus.BAD_REQUEST, "Rounding instruction is required for numeric questions"),
+    QUESTION_IMPORT_MARKDOWN_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "The Markdown source exceeds the size limit"),
+    QUESTION_IMPORT_MARKDOWN_TOO_MANY_QUESTIONS(HttpStatus.PAYLOAD_TOO_LARGE, "The Markdown source exceeds the maximum question count");
 
     private final HttpStatusCode status;
     private final String defaultMessage;

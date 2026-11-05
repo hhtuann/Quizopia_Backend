@@ -1,9 +1,5 @@
 package com.quizopia.backend.question.application;
 
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
-import com.quizopia.backend.identity.repository.RolePermissionRepository;
-import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.question.domain.model.*;
 import com.quizopia.backend.question.dto.QuestionDetailResponse;
 import com.quizopia.backend.question.dto.QuestionDetailResponse.OptionView;
@@ -17,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.node.JsonNodeFactory;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 
@@ -36,26 +31,20 @@ public class QuestionService {
     private final QuestionBankRepository questionBankRepository;
     private final QuestionVersionRepository versionRepository;
     private final QuestionOptionRepository optionRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final UserRoleRepository userRoleRepository;
-    private final RolePermissionRepository rolePermissionRepository;
+    private final QuestionBankImportAccessGuard accessGuard;
     private final Clock clock;
 
     public QuestionService(QuestionRepository questionRepository,
             QuestionBankRepository questionBankRepository,
             QuestionVersionRepository versionRepository,
             QuestionOptionRepository optionRepository,
-            TeacherProfileRepository teacherProfileRepository,
-            UserRoleRepository userRoleRepository,
-            RolePermissionRepository rolePermissionRepository,
+            QuestionBankImportAccessGuard accessGuard,
             Clock clock) {
         this.questionRepository = questionRepository;
         this.questionBankRepository = questionBankRepository;
         this.versionRepository = versionRepository;
         this.optionRepository = optionRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.userRoleRepository = userRoleRepository;
-        this.rolePermissionRepository = rolePermissionRepository;
+        this.accessGuard = accessGuard;
         this.clock = clock;
     }
 
@@ -168,46 +157,20 @@ public class QuestionService {
     }
 
     // ============================================================
-    // Authorization (deny by default — mirrors QuestionImportService)
+    // Authorization (deny by default — shared import/write boundary)
     // ============================================================
 
+    /**
+     * The question's bank must pass {@link QuestionBankImportAccessGuard}:
+     * active TEACHER role, QUESTION_CREATE permission, bank creator equality,
+     * Phase 1 workspace resource-manage check and ACTIVE bank state (P2-C;
+     * supersedes the legacy TeacherProfile/school checks, which could not
+     * express personal workspace banks).
+     */
     private Question requireOwnedQuestion(Long userId, Long questionId) {
-        Instant now = Instant.now(clock);
-        requireActiveTeacherRole(userId, now);
-        requirePermission(userId, "QUESTION_CREATE", now);
-        TeacherProfile profile = resolveTeacherProfile(userId, now);
-
         Question question = questionRepository.findById(questionId)
                 .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_NOT_FOUND));
-
-        QuestionBank bank = questionBankRepository.findById(question.getQuestionBankId())
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
-
-        if (!bank.getOwnerTeacherId().equals(profile.getId())) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        if (!bank.getSchoolId().equals(profile.getSchoolId())) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
+        accessGuard.requireImportAccess(userId, question.getQuestionBankId());
         return question;
-    }
-
-    private void requireActiveTeacherRole(Long userId, Instant now) {
-        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-        if (!roles.contains("TEACHER")) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-    }
-
-    private void requirePermission(Long userId, String permission, Instant now) {
-        List<String> perms = rolePermissionRepository.findEffectivePermissionCodesByUserId(userId, now);
-        if (!perms.contains(permission)) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-    }
-
-    private TeacherProfile resolveTeacherProfile(Long userId, Instant now) {
-        return teacherProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_TEACHER_PROFILE_NOT_FOUND));
     }
 }

@@ -1,10 +1,6 @@
 package com.quizopia.backend.question.application;
 
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.common.BusinessCodes;
-import com.quizopia.backend.identity.repository.RolePermissionRepository;
-import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.question.domain.model.*;
 import com.quizopia.backend.question.dto.*;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
@@ -16,59 +12,52 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
- * Application service that persists parser-validated question rows into a bank.
+ * Application service that persists parser-validated Excel question rows into
+ * a bank.
  *
  * <p>
- * Authorization (deny by default): active TEACHER role → QUESTION_CREATE
- * permission → TeacherProfile → bank ownership + school scope + ACTIVE state.
+ * Authorization (deny by default, P2-C workspace boundary): active TEACHER
+ * role → QUESTION_CREATE permission → bank creator equality → Phase 1
+ * workspace resource-manage check → ACTIVE state, via the shared
+ * {@link QuestionBankImportAccessGuard}. This supersedes the legacy
+ * TeacherProfile/school-same checks so a self-upgraded teacher without a
+ * TeacherProfile can import into their personal bank (issue #18 audit).
  *
  * <p>
- * Duplicate detection: existing bank codes are loaded in a single batch
- * query; parser-valid rows matching an existing code are reported as row errors
- * (not persisted). Concurrent duplicate race is caught at flush time via the
- * database unique constraint and rolls back the entire valid batch.
+ * Duplicate detection: question codes are generated at import time; a
+ * concurrent race is caught at flush time via the database unique constraint
+ * and rolls back the entire valid batch.
  *
  * <p>
- * Persistence is all-or-nothing: every row that survives both parser and
- * DB-duplicate checks is persisted in a single transaction.
+ * Persistence is all-or-nothing for the valid rows: every row that survives
+ * parser validation is persisted in a single transaction; parser-level row
+ * errors are reported per row (Excel partial-success semantics, unchanged).
  */
 @Service
 public class QuestionImportService {
 
     private static final String DUPLICATE_CONSTRAINT = "uk_questions_bank_code_ci";
 
-    private final UserRoleRepository userRoleRepository;
-    private final RolePermissionRepository rolePermissionRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final QuestionBankRepository questionBankRepository;
+    private final QuestionBankImportAccessGuard accessGuard;
     private final QuestionRepository questionRepository;
     private final QuestionVersionRepository versionRepository;
     private final QuestionOptionRepository optionRepository;
-    private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
 
-    public QuestionImportService(UserRoleRepository userRoleRepository,
-            RolePermissionRepository rolePermissionRepository,
-            TeacherProfileRepository teacherProfileRepository,
-            QuestionBankRepository questionBankRepository,
+    public QuestionImportService(QuestionBankImportAccessGuard accessGuard,
             QuestionRepository questionRepository,
             QuestionVersionRepository versionRepository,
             QuestionOptionRepository optionRepository,
-            Clock clock,
             com.quizopia.backend.notification.application.NotificationService notificationService) {
-        this.userRoleRepository = userRoleRepository;
-        this.rolePermissionRepository = rolePermissionRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.questionBankRepository = questionBankRepository;
+        this.accessGuard = accessGuard;
         this.questionRepository = questionRepository;
         this.versionRepository = versionRepository;
         this.optionRepository = optionRepository;
-        this.clock = clock;
         this.notificationService = notificationService;
     }
 
@@ -76,14 +65,7 @@ public class QuestionImportService {
     @Transactional
     public ImportResponse importParsedQuestions(Long userId, Long bankId, ImportResult parseResult) {
         // --- Authorization (deny by default) ---
-        Instant now = Instant.now(clock);
-        requireActiveTeacherRole(userId, now);
-        requirePermission(userId, "QUESTION_CREATE", now);
-        TeacherProfile profile = resolveTeacherProfile(userId, now);
-
-        QuestionBank bank = questionBankRepository.findById(bankId)
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
-        requireOwnershipAndSchool(bank, profile);
+        QuestionBank bank = accessGuard.requireImportAccess(userId, bankId);
 
         // --- Phase 2: persist (question codes are auto-generated; no pre-flight dup check) ---
         List<RowError> allErrors = new ArrayList<>(parseResult.errors());
@@ -137,59 +119,11 @@ public class QuestionImportService {
      * optimisation and security gate at the API layer.
      *
      * @throws QuestionException QUESTION_BANK_ACCESS_DENIED (role / permission /
-     *                           ownership / school / non-ACTIVE),
-     *                           QUESTION_TEACHER_PROFILE_NOT_FOUND,
-     *                           or QUESTION_BANK_NOT_FOUND
+     *                           creator / workspace / non-ACTIVE) or
+     *                           QUESTION_BANK_NOT_FOUND
      */
     public void authorizeImportAccess(Long userId, Long bankId) {
-        Instant now = Instant.now(clock);
-        requireActiveTeacherRole(userId, now);
-        requirePermission(userId, "QUESTION_CREATE", now);
-        TeacherProfile profile = resolveTeacherProfile(userId, now);
-        QuestionBank bank = questionBankRepository.findById(bankId)
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
-        requireOwnershipAndSchool(bank, profile);
-    }
-
-    // ============================================================
-    // Authorization helpers
-    // ============================================================
-
-    private void requireActiveTeacherRole(Long userId, Instant now) {
-        List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-        if (!roles.contains("TEACHER")) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-    }
-
-    private void requirePermission(Long userId, String permission, Instant now) {
-        List<String> perms = rolePermissionRepository.findEffectivePermissionCodesByUserId(userId, now);
-        if (!perms.contains(permission)) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-    }
-
-    private TeacherProfile resolveTeacherProfile(Long userId, Instant now) {
-        return teacherProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> {
-                    List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-                    if (roles.contains("TEACHER")) {
-                        return new QuestionException(QuestionErrorCode.QUESTION_TEACHER_PROFILE_NOT_FOUND);
-                    }
-                    return new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-                });
-    }
-
-    private void requireOwnershipAndSchool(QuestionBank bank, TeacherProfile profile) {
-        if (!bank.getOwnerTeacherId().equals(profile.getId())) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        if (!bank.getSchoolId().equals(profile.getSchoolId())) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        if (bank.getStatus() != QuestionBankStatus.ACTIVE) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
+        accessGuard.requireImportAccess(userId, bankId);
     }
 
     // ============================================================
@@ -280,9 +214,10 @@ public class QuestionImportService {
 
     // ============================================================
     // Concurrent-duplicate constraint detection
+    // (package-private: shared with MarkdownQuestionImportService)
     // ============================================================
 
-    private static boolean isBankCodeUniqueViolation(DataIntegrityViolationException ex) {
+    static boolean isBankCodeUniqueViolation(DataIntegrityViolationException ex) {
         Throwable cause = ex;
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {

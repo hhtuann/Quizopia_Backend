@@ -11,6 +11,7 @@ import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.question.application.QuestionImportService;
+import com.quizopia.backend.question.application.QuestionBankService;
 import com.quizopia.backend.question.domain.model.Question;
 import com.quizopia.backend.question.domain.model.QuestionBank;
 import com.quizopia.backend.question.domain.model.QuestionBankStatus;
@@ -65,8 +66,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>
  * Authorization is tested at the service layer (no MockMvc): active
- * TEACHER role -> QUESTION_CREATE permission -> TeacherProfile -> bank
- * ownership + school scope + ACTIVE state.
+ * TEACHER role -> QUESTION_CREATE permission -> bank creator equality ->
+ * workspace resource-manage boundary -> ACTIVE state (P2-C guard).
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -76,6 +77,8 @@ class QuestionImportServiceIntegrationTests {
 
         @Autowired
         private QuestionImportService importService;
+        @Autowired
+        private QuestionBankService bankService;
         @Autowired
         private ExcelQuestionParser parser;
         @Autowired
@@ -94,6 +97,8 @@ class QuestionImportServiceIntegrationTests {
         private QuestionRepository questionRepo;
         @Autowired
         private QuestionVersionRepository versionRepo;
+        @Autowired
+        private com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
         @Autowired
         private EntityManager entityManager;
         @Autowired
@@ -150,6 +155,12 @@ class QuestionImportServiceIntegrationTests {
                 // Detach trigger-filled fixtures so later loads see persisted
                 // ownership (transitional ownership fill, ADR-001 §2.2).
                 em.clear();
+
+        // Lazily provision the org workspace via the Java resolver so the
+        // teacher gets an ACTIVE EDITOR membership (mirrors the V10
+        // backfill; the raw SQL fixture path does not backfill) — required
+        // by the workspace resource-manage boundary (P2-C).
+        organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
         }
 
         /**
@@ -174,6 +185,11 @@ class QuestionImportServiceIntegrationTests {
                 jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
                 jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER'))");
                 jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER'))");
+                // Personal workspaces provisioned by the no-profile tests own
+                // FK rows referencing the test users — remove them first.
+                jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER')))");
+                jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER')))");
+                jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER'))");
                 jdbc.update("DELETE FROM users WHERE username IN ('import-teacher','auth-admin','teacher-no-profile','other-teacher','teacher-b','TX-FAIL-TEACHER','RACE-TEACHER')");
         }
 
@@ -621,7 +637,7 @@ class QuestionImportServiceIntegrationTests {
         }
 
         @Test
-        void teacherWithoutProfile_returns404() throws Exception {
+        void teacherWithoutProfileOnForeignBank_returns403() throws Exception {
                 User teacherNoProfile = userRepo.saveAndFlush(
                                 new User("teacher-no-profile", "teacher-no-profile@test.com", "hash", "Teacher No TP"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
@@ -644,7 +660,40 @@ class QuestionImportServiceIntegrationTests {
                                 teacherNoProfile.getId(), bankId, parse))
                                 .isInstanceOf(QuestionException.class)
                                 .extracting(e -> ((QuestionException) e).getErrorCode())
-                                .isEqualTo(QuestionErrorCode.QUESTION_TEACHER_PROFILE_NOT_FOUND);
+                                .isEqualTo(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
+        }
+
+        @Test
+        void teacherWithoutProfileOnOwnPersonalBank_importsSuccessfully() throws Exception {
+                // P2-C (issue #18 audit): a self-upgraded TEACHER without a
+                // TeacherProfile owns personal-workspace banks and can import
+                // into them; the legacy profile check silently denied them.
+                User teacherNoProfile = userRepo.saveAndFlush(
+                                new User("teacher-no-profile", "teacher-no-profile@test.com", "hash", "Teacher No TP"));
+                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherNoProfile.getId());
+
+                Long personalBankId = bankService.createBank(teacherNoProfile.getId(),
+                                new com.quizopia.backend.question.dto.CreateQuestionBankRequest(
+                                                null, "IMP-PERSONAL-BANK", "Personal Bank", null, null))
+                                .id();
+
+                ImportResult parse = parse(workbook(row -> {
+                        set(row, C_CODE, "AUTH-3P");
+                        set(row, C_TYPE, "SINGLE_CHOICE");
+                        set(row, C_CONTENT, "x");
+                        set(row, C_POINTS, "1");
+                        set(row, C_DIFFICULTY, "EASY");
+                        set(row, C_OPT_A, "a");
+                        set(row, C_OPT_B, "b");
+                        set(row, C_OPT_C, "c");
+                        set(row, C_OPT_D, "d");
+                        set(row, C_CORRECT, "A");
+                }));
+
+                ImportResponse response = importService.importParsedQuestions(
+                                teacherNoProfile.getId(), personalBankId, parse);
+                assertThat(response.importedRows()).isEqualTo(1);
         }
 
         @Test
@@ -658,6 +707,8 @@ class QuestionImportServiceIntegrationTests {
                                 new TeacherProfile(other.getId(), schoolId, "TC-OTHER"));
                 QuestionBank otherBank = bankRepo.saveAndFlush(new QuestionBank(
                                 schoolId, subjectId, otherTp.getId(), "OTHER-BANK", "Other Bank"));
+                // Detach trigger-filled ownership so the guard sees the persisted creator.
+                em.clear();
 
                 ImportResult parse = parse(workbook(row -> {
                         set(row, C_CODE, "AUTH-4");
