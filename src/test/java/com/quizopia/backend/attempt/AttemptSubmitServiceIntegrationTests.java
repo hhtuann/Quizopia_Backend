@@ -60,15 +60,15 @@ class AttemptSubmitServiceIntegrationTests {
         long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
         long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam')");
-        long ver = ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
-        long sec = ins("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),1)");
+        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
+        long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + studentUserId + ")");
-        long eq = ins("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
+        long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        long session = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES ("
-                + school + "," + ver + "," + tp + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "')");
+        long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + school + "," + exam + "," + tp + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + studentUserId + ")");
         attemptId = attemptService.startAttempt(studentUserId, session, new StartAttemptRequest(null)).attemptId();
         aqId = jdbc.queryForObject("SELECT id FROM attempt_questions WHERE attempt_id=" + attemptId + " LIMIT 1", Long.class);
@@ -99,17 +99,21 @@ class AttemptSubmitServiceIntegrationTests {
         assertThatThrownBy(() -> submit(admin, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void missingProfileRejected404() {
+    @Test void noProfileForeignAttemptRejected403() {
         long np = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + np + "," + roleId + ")");
-        assertThatThrownBy(() -> submit(np, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_STUDENT_PROFILE_NOT_FOUND"));
+        // Public learner passes the permission gate but does not own the attempt →
+        // ownership denial (issue #4 P0-1).
+        assertThatThrownBy(() -> submit(np, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void inactiveProfileRejected403() {
+    @Test void inactiveProfileStillAccepted() {
+        // Profile enrollment status no longer gates submit (issue #4 P0-1);
+        // permission + user ownership are the only gates.
         jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
         em.clear();
-        assertThatThrownBy(() -> submit(studentUserId, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+        assertThat(submit(studentUserId, KEY).status()).isEqualTo("SUBMITTED");
     }
 
     @Test void missingAttemptRejected404() {

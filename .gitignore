@@ -31,3 +31,16 @@ build/
 
 ### VS Code ###
 .vscode/
+*.log
+
+# Runtime logs never belong in git.
+logs/
+
+# Local E2E scaffolding (review M4-01): never commit env material, built
+# jars or ad-hoc docker files — see docs/e2e-local.md for the reproducible
+# from-source E2E recipe (secrets are generated at run time).
+.env.e2e
+build-docker/
+Dockerfile.e2e*
+*.log
+nohup.out

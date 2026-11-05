@@ -8,10 +8,11 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * JPA entity mapping the {@code question_banks} table. A bank belongs to a
- * subject and an owner teacher, both in the same school (enforced at DB level
- * by two composite foreign keys on {@code (school_id, subject_id)} and
- * {@code (school_id, owner_teacher_id)}).
+ * JPA entity mapping the {@code question_banks} table. A bank is owned by a
+ * workspace and a creating user (public platform foundation, ADR-001 §2.2).
+ * The legacy {@code schoolId}/{@code subjectId}/{@code ownerTeacherId} columns
+ * remain as nullable provenance for school-era rows; the DB composite FKs
+ * still enforce same-school for those rows.
  */
 @Entity
 @Table(name = "question_banks")
@@ -21,13 +22,24 @@ public class QuestionBank {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
+    /** Owning workspace (NOT NULL). */
+    @Column(name = "workspace_id", nullable = false)
+    private Long workspaceId;
+
+    /** Creating/owning user (NOT NULL). */
+    @Column(name = "created_by_user_id", nullable = false)
+    private Long createdByUserUserId;
+
+    /** Legacy provenance; null for banks created outside a school context. */
+    @Column(name = "school_id")
     private Long schoolId;
 
-    @Column(name = "subject_id", nullable = false)
+    /** Legacy/academic provenance; optional for personal-workspace banks. */
+    @Column(name = "subject_id")
     private Long subjectId;
 
-    @Column(name = "owner_teacher_id", nullable = false)
+    /** Legacy provenance (teacher_profiles.id); null for personal banks. */
+    @Column(name = "owner_teacher_id")
     private Long ownerTeacherId;
 
     @Column(name = "code", nullable = false, length = 80)
@@ -58,10 +70,27 @@ public class QuestionBank {
     protected QuestionBank() {
     }
 
+    public QuestionBank(Long workspaceId, Long createdByUserUserId, Long schoolId, Long subjectId,
+                        Long ownerTeacherId, String code, String name) {
+        this.workspaceId = requireNonNullId(workspaceId, "workspaceId");
+        this.createdByUserUserId = requireNonNullId(createdByUserUserId, "createdByUserUserId");
+        this.schoolId = schoolId;
+        this.subjectId = subjectId;
+        this.ownerTeacherId = ownerTeacherId;
+        this.code = requireNonBlank("code", code);
+        this.name = requireNonBlank("name", name);
+    }
+
+    /**
+     * Legacy-shape constructor (transitional, ADR-001 §2.2): workspace and
+     * creator are resolved by the V11 BEFORE INSERT trigger from the school /
+     * owner-teacher provenance. Intended for legacy fixtures and transitional
+     * writers; application services must use the explicit constructor.
+     */
     public QuestionBank(Long schoolId, Long subjectId, Long ownerTeacherId, String code, String name) {
-        this.schoolId = requireNonNullId(schoolId, "schoolId");
-        this.subjectId = requireNonNullId(subjectId, "subjectId");
-        this.ownerTeacherId = requireNonNullId(ownerTeacherId, "ownerTeacherId");
+        this.schoolId = schoolId;
+        this.subjectId = subjectId;
+        this.ownerTeacherId = ownerTeacherId;
         this.code = requireNonBlank("code", code);
         this.name = requireNonBlank("name", name);
     }
@@ -72,6 +101,14 @@ public class QuestionBank {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public Long getWorkspaceId() {
+        return workspaceId;
+    }
+
+    public Long getCreatedByUserUserId() {
+        return createdByUserUserId;
     }
 
     public Long getSchoolId() {

@@ -98,6 +98,8 @@ class QuestionImportServiceIntegrationTests {
         private EntityManager entityManager;
         @Autowired
         private JdbcTemplate jdbc;
+        @jakarta.persistence.PersistenceContext
+        private jakarta.persistence.EntityManager em;
         @Autowired
         private PlatformTransactionManager txManager;
 
@@ -145,6 +147,9 @@ class QuestionImportServiceIntegrationTests {
                 QuestionBank bank = bankRepo.saveAndFlush(new QuestionBank(
                                 schoolId, subjectId, teacherProfileId, "IMP-BANK", "Import Bank"));
                 bankId = bank.getId();
+                // Detach trigger-filled fixtures so later loads see persisted
+                // ownership (transitional ownership fill, ADR-001 §2.2).
+                em.clear();
         }
 
         /**

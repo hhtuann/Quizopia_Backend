@@ -39,8 +39,10 @@ public class RealtimeEventBroadcaster {
         try {
             long count = activeCountService.countActiveAttempts(sessionId);
             // Attempt event first, then active-count event (stable order).
-            sendSafe(sessionId, event.type(), event.attemptId(), event.studentProfileId(), event.occurredAt(), count);
-            sendSafe(sessionId, RealtimeEventType.ACTIVE_COUNT_CHANGED, null, null, event.occurredAt(), count);
+            sendSafe(sessionId, event.type(), event.attemptId(), event.userId(),
+                    event.studentProfileId(), event.occurredAt(), count);
+            sendSafe(sessionId, RealtimeEventType.ACTIVE_COUNT_CHANGED, null, null, null,
+                    event.occurredAt(), count);
         } catch (RuntimeException e) {
             // Log the failure category only — NEVER e.toString()/message: the exception message can
             // echo a payload/token/SQL and must not leak to logs (B1R4-B §17). The stable type name +
@@ -52,13 +54,14 @@ public class RealtimeEventBroadcaster {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = false)
     public void onSessionEvent(SessionRealtimeEvent event) {
-        sendSafe(event.sessionId(), event.type(), null, null, event.occurredAt(), null);
+        sendSafe(event.sessionId(), event.type(), null, null, null, event.occurredAt(), null);
     }
 
-    private void sendSafe(Long sessionId, RealtimeEventType type, Long attemptId, Long studentProfileId,
-                          Instant occurredAt, Long activeCount) {
+    private void sendSafe(Long sessionId, RealtimeEventType type, Long attemptId, Long userId,
+                          Long studentProfileId, Instant occurredAt, Long activeCount) {
         try {
-            publisher.sendToSessionTopic(sessionId, type, attemptId, studentProfileId, occurredAt, activeCount);
+            publisher.sendToSessionTopic(sessionId, type, attemptId, userId, studentProfileId,
+                    occurredAt, activeCount);
         } catch (RuntimeException e) {
             // Sanitized: class name only (the message could echo a payload/token/SQL — §17).
             log.warn("STOMP send failed for {} on session {} (isolated; continuing): {}", type, sessionId, e.getClass().getName());

@@ -7,13 +7,18 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * JPA entity mapping the {@code exam_session_participants} table. A participant
- * is a student explicitly added to a session. The {@code version} column is a
- * JPA optimistic-lock version.
+ * JPA entity mapping the {@code exam_session_participants} table. The
+ * participant identity is USER-based (V17, issue #4 P0-R8): {@code userId}
+ * is the primary identity and the authoritative BLOCKED key — an organizer
+ * can block any known participant, including PUBLIC profile-less learners.
+ * {@code studentProfileId}/{@code schoolId} remain as optional legacy
+ * provenance for school-era rows. The {@code version} column is a JPA
+ * optimistic-lock version.
  *
  * <p>Status: {@code ELIGIBLE} (default, may start attempts) or {@code BLOCKED}
- * (disabled). The DB CHECK {@code chk_exam_session_participants_blocked} enforces
- * the status ↔ blockedAt invariant at the database level.
+ * (denied new starts/discovery for both visibilities). The DB CHECK
+ * {@code chk_exam_session_participants_blocked} enforces the status ↔
+ * blockedAt invariant at the database level.
  */
 @Entity
 @Table(name = "exam_session_participants")
@@ -23,13 +28,19 @@ public class ExamSessionParticipant {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
+    /** Primary participant identity (NOT NULL, V17). */
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    /** Legacy provenance; null for participants added user-based / personal sessions. */
+    @Column(name = "school_id")
     private Long schoolId;
 
     @Column(name = "exam_session_id", nullable = false)
     private Long examSessionId;
 
-    @Column(name = "student_profile_id", nullable = false)
+    /** Legacy provenance; null for public profile-less participants. */
+    @Column(name = "student_profile_id")
     private Long studentProfileId;
 
     @Enumerated(EnumType.STRING)
@@ -53,8 +64,19 @@ public class ExamSessionParticipant {
     protected ExamSessionParticipant() {
     }
 
+    /** User-based factory (V17): profile/school provenance optional. */
+    public ExamSessionParticipant(Long userId, Long examSessionId, Long studentProfileId,
+                                   Long schoolId, Long addedBy) {
+        this.userId = ExamPurpose.requireNonNullId(userId, "userId");
+        this.examSessionId = ExamPurpose.requireNonNullId(examSessionId, "examSessionId");
+        this.studentProfileId = studentProfileId;
+        this.schoolId = schoolId;
+        this.addedBy = ExamPurpose.requireNonNullId(addedBy, "addedBy");
+    }
+
+    /** Legacy factory (profile-based): user is resolved by the transitional insert trigger. */
     public ExamSessionParticipant(Long schoolId, Long examSessionId, Long studentProfileId, Long addedBy) {
-        this.schoolId = ExamPurpose.requireNonNullId(schoolId, "schoolId");
+        this.schoolId = schoolId;
         this.examSessionId = ExamPurpose.requireNonNullId(examSessionId, "examSessionId");
         this.studentProfileId = ExamPurpose.requireNonNullId(studentProfileId, "studentProfileId");
         this.addedBy = ExamPurpose.requireNonNullId(addedBy, "addedBy");
@@ -62,6 +84,10 @@ public class ExamSessionParticipant {
 
     public Long getId() {
         return id;
+    }
+
+    public Long getUserId() {
+        return userId;
     }
 
     public Long getSchoolId() {
@@ -135,10 +161,11 @@ public class ExamSessionParticipant {
     public String toString() {
         return "ExamSessionParticipant{" +
                 "id=" + id +
-                ", schoolId=" + schoolId +
+                ", userId=" + userId +
                 ", examSessionId=" + examSessionId +
                 ", studentProfileId=" + studentProfileId +
                 ", status=" + status +
+                ", addedBy=" + addedBy +
                 ", addedAt=" + addedAt +
                 '}';
     }

@@ -5,6 +5,8 @@ import com.quizopia.backend.identity.domain.model.UserStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -20,6 +22,11 @@ import java.util.Optional;
  */
 public interface UserRepository extends JpaRepository<User, Long> {
 
+    /** Pessimistic row lock on one user — serializes per-account operations. */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select u from User u where u.id = :id")
+    Optional<User> findForUpdateById(@Param("id") Long id);
+
     Optional<User> findByUsernameIgnoreCase(String username);
 
     Optional<User> findByEmailIgnoreCase(String email);
@@ -27,6 +34,41 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByUsernameIgnoreCase(String username);
 
     boolean existsByEmailIgnoreCase(String email);
+
+    /**
+     * Atomically increments the failed-login counter and applies the lockout
+     * window once the threshold is reached (review M1-01 audit: the increment
+     * must survive the authentication error, and concurrent failures must not
+     * lose updates). Native UPDATE = row-level atomic, no lost increments.
+     *
+     * @return the failed-attempt count AFTER this increment
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query(value = """
+            UPDATE users
+               SET failed_login_attempts = failed_login_attempts + 1,
+                   locked_until = CASE
+                       WHEN failed_login_attempts + 1 >= :threshold THEN :lockUntil
+                       ELSE locked_until
+                   END
+             WHERE id = :userId
+            """, nativeQuery = true)
+    void incrementFailedLoginAttempts(
+            @Param("userId") Long userId,
+            @Param("threshold") int threshold,
+            @Param("lockUntil") java.time.Instant lockUntil);
+
+    /** Fresh lock deadline straight from the database (native = no L1 cache). */
+    @org.springframework.data.jpa.repository.Query(value = """
+            SELECT locked_until FROM users WHERE id = :userId
+            """, nativeQuery = true)
+    java.sql.Timestamp findLockedUntilById(@Param("userId") Long userId);
+
+    /** Committed failed-attempt count (read after the atomic increment). */
+    @org.springframework.data.jpa.repository.Query(value = """
+            SELECT failed_login_attempts FROM users WHERE id = :userId
+            """, nativeQuery = true)
+    int findFailedLoginAttempts(@Param("userId") Long userId);
 
     /**
      * Admin user search with optional filters (NULL-safe). Used by
@@ -56,4 +98,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
             @Param("roleCode") String roleCode,
             @Param("now") Instant now,
             Pageable pageable);
+
+    /**
+     * Identity-M3 reconciliation: fresh, row-locked user read. A locking
+     * query re-reads committed state (defeats a stale managed instance) and
+     * serializes against concurrent email changes through the update path.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> findByIdForUpdate(@Param("id") Long id);
 }

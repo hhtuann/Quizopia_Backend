@@ -51,11 +51,13 @@ public class AttemptResultService {
         private final AttemptQuestionRepository attemptQuestionRepo;
         private final AttemptAnswerRepository attemptAnswerRepo;
         private final JdbcTemplate jdbc;
+        private final SystemAdminResultAccessPolicy adminAccess;
 
         public AttemptResultService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                         GradeRepository gradeRepo, GradeItemRepository gradeItemRepo,
                         AttemptQuestionRepository attemptQuestionRepo,
-                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc) {
+                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc,
+                        SystemAdminResultAccessPolicy adminAccess) {
                 this.auth = auth;
                 this.attemptRepo = attemptRepo;
                 this.gradeRepo = gradeRepo;
@@ -63,54 +65,67 @@ public class AttemptResultService {
                 this.attemptQuestionRepo = attemptQuestionRepo;
                 this.attemptAnswerRepo = attemptAnswerRepo;
                 this.jdbc = jdbc;
+                this.adminAccess = adminAccess;
         }
 
-        /**
-         * Role-aware attempt result (reads persisted snapshot; no re-grading; no answer
-         * key).
-         */
-        public AttemptResultResponse getAttemptResult(Long userId, String primaryRole, Long attemptId) {
-                Attempt attempt = attemptRepo.findById(attemptId)
-                                .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
-                // Role-aware authorization
-                if ("STUDENT".equals(primaryRole)) {
-                        StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_READ");
-                        if (!Objects.equals(attempt.getStudentProfileId(), profile.getId())
-                                        || !Objects.equals(attempt.getSchoolId(), profile.getSchoolId())) {
-                                throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                        }
-                } else if ("TEACHER".equals(primaryRole)) {
-                        authorizeTeacherOwnsSession(userId, attempt.getExamSessionId());
-                } else if ("SYSTEM_ADMIN".equals(primaryRole) || "ACADEMIC_ADMIN".equals(primaryRole)) {
-                        // allowed
-                } else {
-                        throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                }
-                if (attempt.getStatus() != AttemptStatus.SUBMITTED && attempt.getStatus() != AttemptStatus.GRADED) {
-                        throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_SUBMITTED);
-                }
-                Grade grade = gradeRepo.findByAttemptId(attemptId)
-                                .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
-                return buildResponse(attempt, grade, attempt.getStudentProfileId());
-        }
+         /**
+          * Resource-based attempt result (reads persisted snapshot; no re-grading;
+          * no answer key). Policy (issue #4 P0-R1/R3) — the decision does NOT
+          * branch on the caller's resolved role:
+          * <ol>
+          *   <li>OWN attempt — any authorized learner holding ATTEMPT_READ may
+          *       read their own submitted/graded attempt ({@code attempt.userId}),
+          *       regardless of TEACHER/STUDENT capability mix;</li>
+          *   <li>SYSTEM_ADMIN — explicit, audited platform-operator access
+          *       (DB-verified active role, not a caller-supplied string);</li>
+          *   <li>organizer — the session creator (with valid workspace access)
+          *       or an ACTIVE OWNER/ADMIN member of the exam's workspace.</li>
+          * </ol>
+          */
+          public AttemptResultResponse getAttemptResult(Long userId, Long attemptId) {
+                 Attempt attempt = attemptRepo.findById(attemptId)
+                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
+                 if (attempt.getUserId().equals(userId)) {
+                         auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
+                  } else if (adminAccess.grantRead(userId, "ATTEMPT_RESULT", attemptId)) {
+                         // Explicit break-glass: platform operator, DB-verified.
+                 } else {
+                         authorizeOrganizerOwnsSession(userId, attempt.getExamSessionId());
+                 }
+                 if (attempt.getStatus() != AttemptStatus.SUBMITTED && attempt.getStatus() != AttemptStatus.GRADED) {
+                         throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_SUBMITTED);
+                 }
+                 Grade grade = gradeRepo.findByAttemptId(attemptId)
+                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
+                 return buildResponse(attempt, grade, attempt.getUserId());
+         }
 
-        private void authorizeTeacherOwnsSession(Long userId, Long sessionId) {
-                Integer owns = jdbc.queryForObject(
-                                "SELECT count(*) FROM exam_sessions s JOIN teacher_profiles tp ON tp.id = s.owner_teacher_id "
-                                                + "WHERE s.id = ? AND tp.user_id = ?",
-                                Integer.class, sessionId, userId);
-                if (owns == null || owns == 0) {
-                        throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                }
-        }
+         private void authorizeOrganizerOwnsSession(Long userId, Long sessionId) {
+                 // Session creator OR exam-workspace OWNER/ADMIN — both gated on
+                 // an ACTIVE membership for org workspaces (issue #4 P0-2/R3);
+                 // personal-workspace owners qualify via the workspace shape.
+                 Integer owns = jdbc.queryForObject(
+                                 "SELECT count(*) FROM exam_sessions s "
+                                                 + "JOIN exams e ON e.id = s.exam_id "
+                                                 + "JOIN workspaces w ON w.id = e.workspace_id "
+                                                 + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
+                                                 + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
+                                                 + "WHERE s.id = ? AND ("
+                                                 + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
+                                                 + "  OR wm.role IN ('OWNER','ADMIN'))",
+                                 Integer.class, userId, sessionId, userId);
+                 if (owns == null || owns == 0) {
+                         throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
+                 }
+         }
 
         /**
          * Student own BEST result for a session (RESULT_NOT_FOUND if no
          * submitted+graded attempt).
          */
-        public AttemptResultResponse getMyBestResult(Long userId, Long sessionId) {
-                StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_READ");
-                Long bestAttemptId = findBestAttemptId(sessionId, profile.getId());
+         public AttemptResultResponse getMyBestResult(Long userId, Long sessionId) {
+                auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
+                Long bestAttemptId = findBestAttemptId(sessionId, userId);
                 if (bestAttemptId == null) {
                         throw new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND);
                 }
@@ -118,11 +133,11 @@ public class AttemptResultService {
                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
                 Grade grade = gradeRepo.findByAttemptId(bestAttemptId)
                                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_GRADED));
-                return buildResponse(attempt, grade, profile.getId());
+                return buildResponse(attempt, grade, userId);
         }
 
         @SuppressWarnings("null")
-        private AttemptResultResponse buildResponse(Attempt attempt, Grade grade, Long studentProfileId) {
+        private AttemptResultResponse buildResponse(Attempt attempt, Grade grade, Long userId) {
                 List<GradeItem> items = gradeItemRepo.findByGradeIdOrderByIdAsc(grade.getId());
                 List<AttemptQuestion> questions = attemptQuestionRepo
                                 .findByAttemptIdOrderByDisplayOrderAsc(attempt.getId());
@@ -132,9 +147,9 @@ public class AttemptResultService {
                                 .map(AttemptAnswer::getAttemptQuestionId)
                                 .collect(Collectors.toSet());
                 // isBest + attemptCount — batch load grades for all submitted attempts of this
-                // (session, student).
-                List<Attempt> allAttempts = attemptRepo.findByExamSessionIdAndStudentProfileId(
-                                attempt.getExamSessionId(), studentProfileId);
+                // (session, user).
+                List<Attempt> allAttempts = attemptRepo.findByExamSessionIdAndUserId(
+                                attempt.getExamSessionId(), userId);
                 List<Long> submittedIds = allAttempts.stream()
                                 .filter(a -> a.getStatus() == AttemptStatus.SUBMITTED
                                                 || a.getStatus() == AttemptStatus.GRADED)
@@ -177,12 +192,12 @@ public class AttemptResultService {
         }
 
         /**
-         * Finds the BEST attempt id for (session, student) using the frozen comparator,
+         * Finds the BEST attempt id for (session, user) using the frozen comparator,
          * or null if none.
          */
         @SuppressWarnings("null")
-        private Long findBestAttemptId(Long sessionId, Long studentProfileId) {
-                List<Attempt> all = attemptRepo.findByExamSessionIdAndStudentProfileId(sessionId, studentProfileId);
+        private Long findBestAttemptId(Long sessionId, Long userId) {
+                List<Attempt> all = attemptRepo.findByExamSessionIdAndUserId(sessionId, userId);
                 List<Long> submittedIds = all.stream()
                                 .filter(a -> a.getStatus() == AttemptStatus.SUBMITTED
                                                 || a.getStatus() == AttemptStatus.GRADED)

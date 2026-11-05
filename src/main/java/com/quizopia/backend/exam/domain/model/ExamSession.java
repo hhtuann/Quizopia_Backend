@@ -9,12 +9,16 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping the {@code exam_sessions} table. A session is a sitting
- * that pins one PUBLISHED exam version. The {@code version} column is a JPA
- * optimistic-lock version.
+ * of one PUBLISHED exam, referenced directly by {@code examId} (Task B
+ * redesign, issue #2). The {@code version} column is a JPA optimistic-lock
+ * version.
  *
  * <p>State machine: DRAFT → SCHEDULED → OPEN → CLOSED; DRAFT/SCHEDULED → CANCELLED.
  * The DB CHECK {@code chk_exam_sessions_state_timestamps} enforces the
  * status ↔ timestamps invariant at the database level.
+ *
+ * <p>Session duration is session-owned (materialized at migration; 0 =
+ * unlimited, capped by {@code endsAt}); there is no exam-version fallback.
  */
 @Entity
 @Table(name = "exam_sessions")
@@ -24,13 +28,16 @@ public class ExamSession {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
+    /** The PUBLISHED exam this session sits (direct relation, NOT NULL). */
+    @Column(name = "exam_id", nullable = false)
+    private Long examId;
+
+    /** Legacy provenance; null for sessions of personal-workspace exams. */
+    @Column(name = "school_id")
     private Long schoolId;
 
-    @Column(name = "exam_version_id", nullable = false)
-    private Long examVersionId;
-
-    @Column(name = "owner_teacher_id", nullable = false)
+    /** Legacy provenance; null for sessions created without a teacher profile. */
+    @Column(name = "owner_teacher_id")
     private Long ownerTeacherId;
 
     @Column(name = "code", nullable = false, length = 30)
@@ -56,8 +63,8 @@ public class ExamSession {
     @Column(name = "max_attempts", nullable = false)
     private Integer maxAttempts = 1;
 
-    /** Session-level duration override (minutes). NULL = use exam version's duration. 0 = unlimited. */
-    @Column(name = "duration_minutes")
+    /** Session-owned duration in minutes (0 = unlimited; no exam fallback). */
+    @Column(name = "duration_minutes", nullable = false)
     private Integer durationMinutes;
 
     @Column(name = "created_by", nullable = false)
@@ -84,12 +91,12 @@ public class ExamSession {
     protected ExamSession() {
     }
 
-    public ExamSession(Long schoolId, Long examVersionId, Long ownerTeacherId,
+    public ExamSession(Long examId, Long schoolId, Long ownerTeacherId,
                        String code, String title, Instant startsAt, Instant endsAt,
-                       Integer maxAttempts, Long createdBy) {
-        this.schoolId = ExamPurpose.requireNonNullId(schoolId, "schoolId");
-        this.examVersionId = ExamPurpose.requireNonNullId(examVersionId, "examVersionId");
-        this.ownerTeacherId = ExamPurpose.requireNonNullId(ownerTeacherId, "ownerTeacherId");
+                       Integer maxAttempts, Integer durationMinutes, Long createdBy) {
+        this.examId = ExamPurpose.requireNonNullId(examId, "examId");
+        this.schoolId = schoolId;
+        this.ownerTeacherId = ownerTeacherId;
         this.code = ExamPurpose.requireNonBlank("code", code);
         this.title = ExamPurpose.requireNonBlank("title", title);
         this.startsAt = Objects.requireNonNull(startsAt, "startsAt must not be null");
@@ -98,6 +105,10 @@ public class ExamSession {
             throw new IllegalArgumentException("endsAt must be after startsAt");
         }
         this.maxAttempts = requirePositive(maxAttempts, "maxAttempts");
+        this.durationMinutes = Objects.requireNonNull(durationMinutes, "durationMinutes must not be null");
+        if (durationMinutes < 0) {
+            throw new IllegalArgumentException("durationMinutes must be >= 0");
+        }
         this.createdBy = ExamPurpose.requireNonNullId(createdBy, "createdBy");
     }
 
@@ -105,12 +116,12 @@ public class ExamSession {
         return id;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
+    public Long getExamId() {
+        return examId;
     }
 
-    public Long getExamVersionId() {
-        return examVersionId;
+    public Long getSchoolId() {
+        return schoolId;
     }
 
     public Long getOwnerTeacherId() {
@@ -154,6 +165,9 @@ public class ExamSession {
     }
 
     public void setDurationMinutes(Integer durationMinutes) {
+        if (durationMinutes == null || durationMinutes < 0) {
+            throw new IllegalArgumentException("durationMinutes must be >= 0");
+        }
         this.durationMinutes = durationMinutes;
     }
 
@@ -272,7 +286,7 @@ public class ExamSession {
         return "ExamSession{" +
                 "id=" + id +
                 ", schoolId=" + schoolId +
-                ", examVersionId=" + examVersionId +
+                ", examId=" + examId +
                 ", ownerTeacherId=" + ownerTeacherId +
                 ", code='" + code + '\'' +
                 ", status=" + status +

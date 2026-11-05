@@ -110,6 +110,8 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
             assertThat(java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ACTIVE_COUNT_CHANGED.name().equals(e.eventType())).count()).isEqualTo(1L);
             RealtimeEventEnvelope startedEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ATTEMPT_STARTED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(startedEv.attemptId()).isNotNull();
+            assertThat(startedEv.userId()).as("user-based attempt identity (issue #4 P0-1)").isEqualTo(studentId);
+            assertThat(startedEv.studentProfileId()).as("legacy profile provenance still carried").isNotNull();
             RealtimeEventEnvelope countEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ACTIVE_COUNT_CHANGED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(countEv.attemptId()).isNull();
             assertThat(attemptCount()).isEqualTo(attemptsBefore + 1);
@@ -157,10 +159,10 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
     void sessionOpenEmitsEventOnlyAfterCommit() throws Exception {
         // A SCHEDULED session that the teacher owns (open transition SCHEDULED→OPEN).
         long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long ver = jdbc.queryForObject("SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long sched = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by) VALUES ("
-                + school + "," + ver + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'SCH2','t','SCHEDULED','"
-                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2," + teacherId + ")");
+        long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
+        long sched = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + school + "," + exam + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'SCH2','t','SCHEDULED','"
+                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2,60," + teacherId + ")");
         try (StompTestConnection teacher = connect(teacherToken);
              EventSink sink = subscribeTopic(teacher, sched, 1)) {
             awaitAccepted(acceptedDestination(topic(sched)), 5);
@@ -170,7 +172,7 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
             ExecutorService pool = Executors.newSingleThreadExecutor();
             try {
                 Future<?> f = pool.submit(() -> new TransactionTemplate(txm).executeWithoutResult(status -> {
-                    examSessionService.openSession(teacherId, sched);
+                    examSessionService.openSession(teacherId, null, sched);
                     held.countDown();
                     awaitRelease(release);
                 }));
@@ -213,17 +215,17 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
     @Test
     void rollbackSessionOpenEmitsNoEventAndDoesNotPersist() throws Exception {
         long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long ver = jdbc.queryForObject("SELECT exam_version_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long sched = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by) VALUES ("
-                + school + "," + ver + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'RB','t','SCHEDULED','"
-                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2," + teacherId + ")");
+        long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
+        long sched = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + school + "," + exam + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'RB','t','SCHEDULED','"
+                + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2,60," + teacherId + ")");
         try (StompTestConnection teacher = connect(teacherToken);
              EventSink sink = subscribeTopic(teacher, sched, 1)) {
             awaitAccepted(acceptedDestination(topic(sched)), 5);
             outboundProbe.clear();
 
             new TransactionTemplate(txm).executeWithoutResult(status -> {
-                examSessionService.openSession(teacherId, sched);
+                examSessionService.openSession(teacherId, null, sched);
                 status.setRollbackOnly();
             });
 
@@ -307,9 +309,11 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
     private static void assertNoLeak(List<byte[]> payloads) {
         String joined = payloads.stream().map(p -> new String(p, java.nio.charset.StandardCharsets.UTF_8))
                 .reduce("", String::concat);
+        // userId is the primary attempt-owner identity on ATTEMPT_* events (issue #4 P0-1) and is
+        // therefore allowed; every other identity/answer/grading field remains forbidden.
         assertThat(joined).doesNotContain("answerPayload").doesNotContain("answerKey")
                 .doesNotContain("isCorrect").doesNotContain("score").doesNotContain("grade")
-                .doesNotContain("studentCode").doesNotContain("username").doesNotContain("userId")
+                .doesNotContain("studentCode").doesNotContain("username").doesNotContain("email")
                 .doesNotContain("submissionIdempotencyKey").doesNotContain("clientInstanceId")
                 .doesNotContain("schoolId");
     }

@@ -58,10 +58,10 @@ public class SecurityProperties {
     @NotNull
     private final Cors cors = new Cors();
 
-    @Valid
-    @NotNull
-    private final TeacherInvite teacherInvite = new TeacherInvite();
 
+    // Identity-M1: the teacher-invite code is gone. Public registration is
+    // STUDENT-only; teacher access comes from the authenticated self-upgrade
+    // flow (M2). QUIZOPIA_TEACHER_INVITE_CODE is ignored when still supplied.
     public boolean isProduction() {
         return production;
     }
@@ -94,9 +94,6 @@ public class SecurityProperties {
         return cors;
     }
 
-    public TeacherInvite getTeacherInvite() {
-        return teacherInvite;
-    }
 
     /**
      * JWT access-token settings.
@@ -324,24 +321,4 @@ public class SecurityProperties {
         }
     }
 
-    /**
-     * Teacher-invite settings. Governs TEACHER account provisioning (Batch 2).
-     */
-    public static class TeacherInvite {
-
-        /**
-         * Invite code required to create a TEACHER account via public
-         * registration. Read from {@code QUIZOPIA_TEACHER_INVITE_CODE}.
-         */
-        @NotBlank
-        private String code;
-
-        public String getCode() {
-            return code;
-        }
-
-        public void setCode(String code) {
-            this.code = code;
-        }
-    }
 }

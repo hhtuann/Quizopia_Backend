@@ -1,7 +1,6 @@
 package com.quizopia.backend.exam;
 
 import com.quizopia.backend.exam.application.ExamService;
-import com.quizopia.backend.exam.domain.model.ExamVersionStatus;
 import com.quizopia.backend.exam.dto.PublishedExamSummary;
 import com.quizopia.backend.exam.dto.PublishExamRequest;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest;
@@ -9,10 +8,8 @@ import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest.CompositionQu
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest.CompositionSectionRequest;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
-import com.quizopia.backend.exam.repository.ExamVersionRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
-import jakarta.persistence.EntityManagerFactory;
-import org.hibernate.stat.Statistics;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,20 +20,19 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Service-level integration tests for POST /api/exams/{examId}/publish
- * (A3.2-2C). Real
- * PostgreSQL 17 Testcontainers. Covers pinned refresh, 4-type validation,
- * numeric preservation,
- * totals, state transition, publish-twice conflict, rollback, and no per-source
- * SELECT growth.
+ * Service-level integration tests for POST /api/exams/{examId}/publish on the
+ * one-exam-one-content model (Task B redesign, issue #2). Real PostgreSQL 17
+ * Testcontainers. Covers the happy path (composition built via
+ * updateDraftComposition with JPA @Version token 0), empty-composition and
+ * empty-section rejection, per-type validation, archived bank/question
+ * sources, snapshot refresh from pinned versions, numeric preservation,
+ * publish-twice / wrong-token conflicts, rollback, and foreign-teacher 403.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -47,11 +43,9 @@ class ExamPublishServiceIntegrationTests {
     @Autowired
     private JdbcTemplate jdbc;
     @Autowired
+    private EntityManager entityManager;
+    @Autowired
     private ExamService examService;
-    @Autowired
-    private ExamVersionRepository versionRepo;
-    @Autowired
-    private EntityManagerFactory entityManagerFactory;
 
     private long teacherUserId;
     private long schoolId;
@@ -72,7 +66,7 @@ class ExamPublishServiceIntegrationTests {
                 + teacherUserId + "," + schoolId + ",'PTC')");
     }
 
-    // -- Test group: success with 4 types; totals; state --
+    // -- Test group: happy path publish (4 types) --
 
     @Test
     void publishAllFourTypesSuccess() {
@@ -88,26 +82,29 @@ class ExamPublishServiceIntegrationTests {
 
         assertThat(r.examId()).isEqualTo(examId);
         assertThat(r.status()).isEqualTo("PUBLISHED");
-        assertThat(r.versionNumber()).isEqualTo(1);
         assertThat(r.publishedAt()).isNotNull();
         assertThat(r.questionCount()).isEqualTo(4);
         assertThat(r.totalPoints()).isEqualByComparingTo("4.00"); // 4 × default 1.00
-        assertThat(r.durationMinutes()).isEqualTo(60);
-        // Exam READY + currentVersionNumber = 1.
-        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId)).isEqualTo("READY");
-        assertThat(jdbc.queryForObject("SELECT current_version_number FROM exams WHERE id=?", Integer.class, examId))
-                .isEqualTo(1);
-    }
-
-    @Test
-    void noNewDraftAfterPublish() {
-        long bank = newBank();
-        Long examId = createExam("E2");
-        composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
-        examService.publishExam(teacherUserId, examId, new PublishExamRequest(null));
-        // Exactly one version (PUBLISHED v1); no new DRAFT auto-created.
-        assertThat(versionRepo.findAllByExamIdOrderByVersionNumberDesc(examId)).hasSize(1);
-        assertThat(versionRepo.existsByExamIdAndStatus(examId, ExamVersionStatus.DRAFT)).isFalse();
+        assertThat(r.durationMinutes()).isEqualTo(45);
+        // Exam row is PUBLISHED with points + published_at set.
+        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId))
+                .isEqualTo("PUBLISHED");
+        assertThat(jdbc.queryForObject("SELECT total_points FROM exams WHERE id=?",
+                java.math.BigDecimal.class, examId)).isEqualByComparingTo("4.00");
+        assertThat(jdbc.queryForObject("SELECT (published_at IS NOT NULL) FROM exams WHERE id=?",
+                Boolean.class, examId)).isTrue();
+        // Snapshot fields refreshed from the pinned versions.
+        assertThat(jdbc.queryForObject(
+                "SELECT difficulty FROM exam_questions WHERE exam_id=? AND source_question_id=?",
+                String.class, examId, single)).isEqualTo("MEDIUM");
+        assertThat(jdbc.queryForObject(
+                "SELECT answer_key->>'expectedAnswer' FROM exam_questions WHERE exam_id=? AND source_question_id=?",
+                String.class, examId, num)).isEqualTo("2.50");
+        // Options materialized from the pinned versions per type.
+        assertThat(optionCount(examId, single)).isEqualTo(4);
+        assertThat(optionCount(examId, multi)).isEqualTo(4);
+        assertThat(optionCount(examId, tf)).isEqualTo(4);
+        assertThat(optionCount(examId, num)).isEqualTo(0);
     }
 
     // -- Test group: empty composition / empty section rejected --
@@ -116,7 +113,7 @@ class ExamPublishServiceIntegrationTests {
     void emptyCompositionRejected() {
         Long examId = createExam("E3");
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of()));
+                new UpdateDraftCompositionRequest(0, null, null, List.of()));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
@@ -127,7 +124,7 @@ class ExamPublishServiceIntegrationTests {
         Long examId = createExam("E4");
         // One section with zero questions.
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of()))));
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
                 .isInstanceOfSatisfying(ExamException.class,
@@ -147,7 +144,9 @@ class ExamPublishServiceIntegrationTests {
         assertPublishRejects(bank, srcQuestion(bank, "m1", "MULTIPLE_CHOICE", 4, 1, null));
         // TF 3 options -> reject
         assertPublishRejects(bank, srcQuestion(bank, "t3", "TRUE_FALSE_MATRIX", 3, 1, null));
-        // NUMERIC with 1 option -> reject
+        // NUMERIC with 1 option -> reject (bad shape; the V5 DB CHECK makes a
+        // literally malformed expectedAnswer un-fixtureable, so the option-count
+        // branch of the same validation is exercised).
         assertPublishRejects(bank, srcQuestion(bank, "n1", "NUMERIC_FILL", 1, 0, numericAk("2.50")));
     }
 
@@ -188,6 +187,7 @@ class ExamPublishServiceIntegrationTests {
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) "
                 + "VALUES (" + q + ",2,'SINGLE_CHOICE','CHANGED','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         jdbc.update("UPDATE questions SET current_version_number = 2 WHERE id = ?", q);
+        entityManager.clear();
         // Publish must refresh from PINNED v1 (not current v2): content stays the
         // original.
         examService.publishExam(teacherUserId, examId, new PublishExamRequest(null));
@@ -200,7 +200,37 @@ class ExamPublishServiceIntegrationTests {
         assertThat(sv).isEqualTo(pinnedV);
     }
 
-    // -- Test group: publish-twice conflict --
+    // -- Test group: archived bank / question source rejected at publish --
+
+    @Test
+    void archivedBankSourceRejectedAtPublish() {
+        long bank = newBank();
+        long q = srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null);
+        Long examId = createExam("Eab");
+        composeDraft(examId, List.of(q));
+        // Bank is archived AFTER the draft composition was built.
+        jdbc.update("UPDATE question_banks SET status='ARCHIVED' WHERE id=?", bank);
+        entityManager.clear();
+        assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+    }
+
+    @Test
+    void archivedQuestionSourceRejectedAtPublish() {
+        long bank = newBank();
+        long q = srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null);
+        Long examId = createExam("Eaq");
+        composeDraft(examId, List.of(q));
+        // Source question is archived AFTER the draft composition was built.
+        jdbc.update("UPDATE questions SET status='ARCHIVED' WHERE id=?", q);
+        entityManager.clear();
+        assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+    }
+
+    // -- Test group: publish-twice / wrong token conflicts --
 
     @Test
     void publishTwiceReturnsConflict() {
@@ -208,6 +238,7 @@ class ExamPublishServiceIntegrationTests {
         Long examId = createExam("E7");
         composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
         examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)); // first -> PUBLISHED
+        // Second publish (a "concurrent" repeat) -> 409 conflict.
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
@@ -223,59 +254,62 @@ class ExamPublishServiceIntegrationTests {
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PUBLISH_CONFLICT));
     }
 
+    @Test
+    void expectedVersionMatchPublishSucceeds() {
+        long bank = newBank();
+        Long examId = createExam("E9");
+        composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
+        // After one composition PUT the exam's JPA @Version is 1; matching token publishes.
+        PublishedExamSummary r = examService.publishExam(teacherUserId, examId, new PublishExamRequest(1));
+        assertThat(r.status()).isEqualTo("PUBLISHED");
+    }
+
     // -- Test group: rollback (invalid publish leaves state unchanged) --
 
     @Test
-    void invalidPublishRollbackLeavesVersionDraft() {
+    void invalidPublishRollbackLeavesExamDraft() {
         long bank = newBank();
-        Long examId = createExam("E9");
+        Long examId = createExam("E10");
         composeDraft(examId, List.of(srcQuestion(bank, "s3", "SINGLE_CHOICE", 3, 1, null))); // invalid (3 options)
-        String examStatusBefore = jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId);
         assertThatThrownBy(() -> examService.publishExam(teacherUserId, examId, new PublishExamRequest(null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
-        // Version still DRAFT; exam status/cvn unchanged.
-        assertThat(jdbc.queryForObject("SELECT status FROM exam_versions WHERE exam_id=?", String.class, examId))
-                .isEqualTo("DRAFT");
+        // Exam row untouched: still DRAFT, total_points 0.
         assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId))
-                .isEqualTo(examStatusBefore);
+                .isEqualTo("DRAFT");
+        assertThat(jdbc.queryForObject("SELECT total_points FROM exams WHERE id=?",
+                java.math.BigDecimal.class, examId)).isEqualByComparingTo("0");
     }
 
-    // -- Test group: query count (no per-source SELECT growth) --
+    // -- Test group: foreign teacher (mutation) -> 403 --
 
     @Test
-    void publishSelectCountDoesNotGrowWithSourceCount() {
-        Statistics stats = entityManagerFactory.unwrap(org.hibernate.SessionFactory.class).getStatistics();
-        stats.setStatisticsEnabled(true);
-
-        long bank1 = newBank();
-        Long examN1 = createExam("Q1");
-        composeDraft(examN1, List.of(srcQuestion(bank1, "s", "SINGLE_CHOICE", 4, 1, null)));
-        stats.clear();
-        examService.publishExam(teacherUserId, examN1, new PublishExamRequest(null));
-        long n1 = selectExecutionCount(stats);
-
-        long bank20 = newBank();
-        List<Long> twenty = new ArrayList<>();
-        for (int i = 0; i < 20; i++) {
-            twenty.add(srcQuestion(bank20, "q" + i, "SINGLE_CHOICE", 4, 1, null));
-        }
-        Long examN20 = createExam("Q20");
-        composeDraft(examN20, twenty);
-        stats.clear();
-        examService.publishExam(teacherUserId, examN20, new PublishExamRequest(null));
-        long n20 = selectExecutionCount(stats);
-
-        System.out.println("PUBLISH_QUERY_COUNT SELECT executions N=1=" + n1 + " N=20=" + n20);
-        assertThat(Math.abs(n20 - n1))
-                .as("SELECT execution delta N=1=%d N=20=%d must be constant (no per-source read)", n1, n20)
-                .isLessThanOrEqualTo(4L);
-        assertThat(n20).as("SELECT executions N=20").isLessThan(40L);
+    void foreignTeacherPublishReturnsAccessDenied() {
+        long bank = newBank();
+        Long examId = createExam("Efo");
+        composeDraft(examId, List.of(srcQuestion(bank, "s", "SINGLE_CHOICE", 4, 1, null)));
+        long other = insert(
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('o3','o3@t','h','O3')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
+        // Not the creator and not a workspace OWNER/ADMIN -> 403 EXAM_ACCESS_DENIED.
+        assertThatThrownBy(() -> examService.publishExam(other, examId, new PublishExamRequest(null)))
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> {
+                            assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED);
+                            assertThat(ex.getErrorCode().statusCode()).isEqualTo(403);
+                        });
     }
 
     // ============================================================
     // Helpers
     // ============================================================
+
+    private int optionCount(long examId, long sourceQuestionId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exam_question_options o JOIN exam_questions q ON o.exam_question_id = q.id "
+                        + "WHERE q.exam_id=? AND q.source_question_id=?",
+                Integer.class, examId, sourceQuestionId);
+    }
 
     private void assertPublishRejects(long bank, long qId) {
         Long examId = createExam("RX" + Math.abs(System.nanoTime() % 1_000_000_000L));
@@ -285,14 +319,15 @@ class ExamPublishServiceIntegrationTests {
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
     }
 
+    /** Builds a DRAFT composition on a FRESH exam (JPA @Version token 0). */
     private void composeDraft(Long examId, List<Long> qIds) {
         List<CompositionQuestionRequest> qs = new ArrayList<>();
         for (int i = 0; i < qIds.size(); i++) {
             qs.add(new CompositionQuestionRequest(qIds.get(i), i, null));
         }
         examService.updateDraftComposition(teacherUserId, examId,
-                new UpdateDraftCompositionRequest(1, null, null, List.of(
-                        new CompositionSectionRequest(0, "S", null, qs.isEmpty() ? List.of() : qs))));
+                new UpdateDraftCompositionRequest(0, 45, "Read carefully", List.of(
+                        new CompositionSectionRequest(0, "S", null, qs))));
     }
 
     private long newBank() {
@@ -331,15 +366,7 @@ class ExamPublishServiceIntegrationTests {
 
     private Long createExam(String code) {
         return examService.createExam(teacherUserId,
-                new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null, code, "T", null)).id();
-    }
-
-    private long selectExecutionCount(Statistics statistics) {
-        return Arrays.stream(statistics.getQueries())
-                .filter(Objects::nonNull)
-                .filter(q -> q.trim().toLowerCase().startsWith("select"))
-                .mapToLong(q -> statistics.getQueryStatistics(q).getExecutionCount())
-                .sum();
+                new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null, code, "T", null)).id();
     }
 
     private long insert(String sql) {

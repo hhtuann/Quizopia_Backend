@@ -23,8 +23,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests for the 8 exam repository interfaces: derived queries,
+ * Integration tests for the exam repository interfaces: derived queries,
  * pessimistic lock, and optimistic lock (@Version) on real PostgreSQL 17.
+ * One-exam-one-content model (issue #2): no version repositories.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -37,7 +38,6 @@ class ExamRepositoryIntegrationTests {
     @Autowired private EntityManager entityManager;
     @Autowired private ExamPurposeRepository purposeRepo;
     @Autowired private ExamRepository examRepo;
-    @Autowired private ExamVersionRepository versionRepo;
     @Autowired private ExamSectionRepository sectionRepo;
     @Autowired private ExamQuestionRepository questionRepo;
     @Autowired private ExamQuestionOptionRepository optionRepo;
@@ -101,10 +101,33 @@ class ExamRepositoryIntegrationTests {
     }
 
     @Test
+    void examExistsByWorkspaceCreatorAndCodeIgnoreCase() {
+        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "WSUNIQ", "T"));
+        Long workspaceId = jdbc.queryForObject(
+                "SELECT workspace_id FROM exams WHERE id = " + e.getId(), Long.class);
+        assertThat(examRepo.existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(
+                workspaceId, userId, "wsuniq")).isTrue();
+        assertThat(examRepo.existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(
+                workspaceId, userId, "OTHER")).isFalse();
+    }
+
+    @Test
     void examFindAllByOwner() {
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "EX2", "T"));
         examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "EX3", "T"));
         assertThat(examRepo.findAllByOwnerTeacherId(teacherProfileId)).hasSize(2);
+    }
+
+    @Test
+    void examCreatedByUserPagingAndFilter() {
+        examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "CR1", "Alpha"));
+        examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "CR2", "Beta"));
+        Long workspaceId = jdbc.queryForObject(
+                "SELECT workspace_id FROM exams WHERE code = 'CR1'", Long.class);
+        var page = examRepo.findCreatedByUser(userId, "alpha", null, null,
+                List.of(workspaceId), org.springframework.data.domain.PageRequest.of(0, 10));
+        assertThat(page.getTotalElements()).isEqualTo(1);
+        assertThat(page.getContent().get(0).getCode()).isEqualTo("CR1");
     }
 
     // -- Exam pessimistic lock --
@@ -119,37 +142,18 @@ class ExamRepositoryIntegrationTests {
         assertThat(locked.getCode()).isEqualTo("PL");
     }
 
-    // -- Version queries --
+    // -- Exam lifecycle transitions --
 
     @Test
-    void versionFindByExamAndNumber() {
-        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "V1", "T"));
-        versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        assertThat(versionRepo.findByExamIdAndVersionNumber(e.getId(), 1)).isPresent();
-        assertThat(versionRepo.findByExamIdAndVersionNumber(e.getId(), 2)).isEmpty();
-    }
-
-    @Test
-    void versionLatestPublished() {
-        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "V2", "T"));
-        ExamVersion v1 = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        v1.markPublished(Instant.now(), BigDecimal.TEN);
-        versionRepo.saveAndFlush(v1);
-        ExamVersion v2 = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 2, userId));
-        v2.markPublished(Instant.now(), BigDecimal.valueOf(20));
-        versionRepo.saveAndFlush(v2);
-        // Latest PUBLISHED by version_number DESC = v2
-        ExamVersion latest = versionRepo.findFirstByExamIdAndStatusOrderByVersionNumberDesc(
-                e.getId(), ExamVersionStatus.PUBLISHED).orElseThrow();
-        assertThat(latest.getVersionNumber()).isEqualTo(2);
-    }
-
-    @Test
-    void versionExistsByExamAndStatus() {
-        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "V3", "T"));
-        versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        assertThat(versionRepo.existsByExamIdAndStatus(e.getId(), ExamVersionStatus.DRAFT)).isTrue();
-        assertThat(versionRepo.existsByExamIdAndStatus(e.getId(), ExamVersionStatus.PUBLISHED)).isFalse();
+    void examPublishAndArchiveLifecycle() {
+        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "LC", "T"));
+        assertThat(e.getStatus()).isEqualTo(ExamStatus.DRAFT);
+        e.markPublished(Instant.now(), BigDecimal.TEN);
+        examRepo.saveAndFlush(e);
+        assertThat(examRepo.findById(e.getId()).orElseThrow().getStatus()).isEqualTo(ExamStatus.PUBLISHED);
+        e.markArchived();
+        examRepo.saveAndFlush(e);
+        assertThat(examRepo.findById(e.getId()).orElseThrow().getStatus()).isEqualTo(ExamStatus.ARCHIVED);
     }
 
     // -- Section ordering --
@@ -157,23 +161,21 @@ class ExamRepositoryIntegrationTests {
     @Test
     void sectionOrderingByPosition() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "S1", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        sectionRepo.saveAndFlush(new ExamSection(v.getId(), "C", 2));
-        sectionRepo.saveAndFlush(new ExamSection(v.getId(), "A", 0));
-        sectionRepo.saveAndFlush(new ExamSection(v.getId(), "B", 1));
-        List<ExamSection> ordered = sectionRepo.findAllByExamVersionIdOrderByPositionAsc(v.getId());
+        sectionRepo.saveAndFlush(new ExamSection(e.getId(), "C", 2));
+        sectionRepo.saveAndFlush(new ExamSection(e.getId(), "A", 0));
+        sectionRepo.saveAndFlush(new ExamSection(e.getId(), "B", 1));
+        List<ExamSection> ordered = sectionRepo.findAllByExamIdOrderByPositionAsc(e.getId());
         assertThat(ordered).extracting(ExamSection::getTitle).containsExactly("A", "B", "C");
     }
 
     @Test
-    void sectionDeleteAllByVersion() {
+    void sectionDeleteAllByExam() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "S2", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        sectionRepo.saveAndFlush(new ExamSection(v.getId(), "A", 0));
-        sectionRepo.saveAndFlush(new ExamSection(v.getId(), "B", 1));
-        sectionRepo.deleteAllByExamVersionId(v.getId());
+        sectionRepo.saveAndFlush(new ExamSection(e.getId(), "A", 0));
+        sectionRepo.saveAndFlush(new ExamSection(e.getId(), "B", 1));
+        sectionRepo.deleteAllByExamId(e.getId());
         sectionRepo.flush();
-        assertThat(sectionRepo.findAllByExamVersionIdOrderByPositionAsc(v.getId())).isEmpty();
+        assertThat(sectionRepo.findAllByExamIdOrderByPositionAsc(e.getId())).isEmpty();
     }
 
     // -- Question/Option ordering --
@@ -181,9 +183,8 @@ class ExamRepositoryIntegrationTests {
     @Test
     void optionOrderingByPosition() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "QO1", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        ExamSection s = sectionRepo.saveAndFlush(new ExamSection(v.getId(), "Sec", 0));
-        ExamQuestion q = questionRepo.saveAndFlush(new ExamQuestion(v.getId(), s.getId(), questionIdA, questionVersionIdA,
+        ExamSection s = sectionRepo.saveAndFlush(new ExamSection(e.getId(), "Sec", 0));
+        ExamQuestion q = questionRepo.saveAndFlush(new ExamQuestion(e.getId(), s.getId(), questionIdA, questionVersionIdA,
                 "QC", QuestionType.SINGLE_CHOICE, "c", BigDecimal.ONE, 0));
         optionRepo.saveAndFlush(new ExamQuestionOption(q.getId(), "C", "third", false, 2));
         optionRepo.saveAndFlush(new ExamQuestionOption(q.getId(), "A", "first", true, 0));
@@ -192,20 +193,45 @@ class ExamRepositoryIntegrationTests {
         assertThat(ordered).extracting(ExamQuestionOption::getOptionKey).containsExactly("A", "B", "C");
     }
 
+    @Test
+    void questionCountByExamIds() {
+        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "QCNT", "T"));
+        ExamSection s = sectionRepo.saveAndFlush(new ExamSection(e.getId(), "Sec", 0));
+        long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES ("
+                + "(SELECT question_bank_id FROM questions WHERE id = " + questionIdA + "),'rqB'," + userId + ")");
+        long v2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c2','MEDIUM',1,'{}'::jsonb," + userId + ")");
+        questionRepo.saveAndFlush(new ExamQuestion(e.getId(), s.getId(), questionIdA, questionVersionIdA,
+                "QC", QuestionType.SINGLE_CHOICE, "c", BigDecimal.ONE, 0));
+        questionRepo.saveAndFlush(new ExamQuestion(e.getId(), s.getId(), q2, v2,
+                "QC2", QuestionType.SINGLE_CHOICE, "c2", BigDecimal.ONE, 1));
+        List<Object[]> counts = questionRepo.countByExamIdsIn(List.of(e.getId()));
+        assertThat(counts).hasSize(1);
+        assertThat((Long) counts.get(0)[1]).isEqualTo(2L);
+    }
+
     // -- Session owner lookup --
 
     @Test
     void sessionOwnerLookup() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "SS1", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        v.markPublished(Instant.now(), BigDecimal.TEN);
-        versionRepo.saveAndFlush(v);
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         ExamSession session = sessionRepo.saveAndFlush(new ExamSession(
-                schoolId, v.getId(), teacherProfileId, "CODE", "T", starts, ends, 1, userId));
+                e.getId(), schoolId, teacherProfileId, "CODE", "T", starts, ends, 1, 60, userId));
         assertThat(sessionRepo.findByIdAndOwnerTeacherId(session.getId(), teacherProfileId)).isPresent();
         assertThat(sessionRepo.findByIdAndOwnerTeacherId(session.getId(), 99999L)).isEmpty();
+    }
+
+    @Test
+    void sessionsOfExamPaging() {
+        Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "SSP", "T"));
+        Instant starts = Instant.now();
+        Instant ends = starts.plusSeconds(3600);
+        sessionRepo.saveAndFlush(new ExamSession(e.getId(), schoolId, teacherProfileId, "P1", "T1", starts, ends, 1, 60, userId));
+        sessionRepo.saveAndFlush(new ExamSession(e.getId(), schoolId, teacherProfileId, "P2", "T2", starts, ends, 1, 60, userId));
+        var page = sessionRepo.findAllByExamIdOrderByIdDesc(e.getId(),
+                org.springframework.data.domain.PageRequest.of(0, 10));
+        assertThat(page.getTotalElements()).isEqualTo(2);
     }
 
     // -- Participant existence + batch --
@@ -213,13 +239,10 @@ class ExamRepositoryIntegrationTests {
     @Test
     void participantExistenceAndBatchLookup() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "P1", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        v.markPublished(Instant.now(), BigDecimal.TEN);
-        versionRepo.saveAndFlush(v);
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         ExamSession session = sessionRepo.saveAndFlush(new ExamSession(
-                schoolId, v.getId(), teacherProfileId, "PC", "T", starts, ends, 1, userId));
+                e.getId(), schoolId, teacherProfileId, "PC", "T", starts, ends, 1, 60, userId));
         participantRepo.saveAndFlush(new ExamSessionParticipant(schoolId, session.getId(), studentProfileId, userId));
         assertThat(participantRepo.existsByExamSessionIdAndStudentProfileId(session.getId(), studentProfileId)).isTrue();
         assertThat(participantRepo.findAllByExamSessionIdAndStudentProfileIdIn(
@@ -247,13 +270,10 @@ class ExamRepositoryIntegrationTests {
     @Test
     void sessionOptimisticLockRejectsStaleUpdate() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "OL2", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        v.markPublished(Instant.now(), BigDecimal.TEN);
-        versionRepo.saveAndFlush(v);
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         ExamSession saved = sessionRepo.saveAndFlush(new ExamSession(
-                schoolId, v.getId(), teacherProfileId, "OL2C", "T", starts, ends, 1, userId));
+                e.getId(), schoolId, teacherProfileId, "OL2C", "T", starts, ends, 1, 60, userId));
         entityManager.clear();
         ExamSession managed = entityManager.find(ExamSession.class, saved.getId());
         assertThat(managed.getVersion()).isZero();
@@ -269,13 +289,10 @@ class ExamRepositoryIntegrationTests {
     @Test
     void participantVersionIncrementsAfterBlock() {
         Exam e = examRepo.saveAndFlush(new Exam(schoolId, subjectId, teacherProfileId, "PV1", "T"));
-        ExamVersion v = versionRepo.saveAndFlush(new ExamVersion(schoolId, e.getId(), 1, userId));
-        v.markPublished(Instant.now(), BigDecimal.TEN);
-        versionRepo.saveAndFlush(v);
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         ExamSession session = sessionRepo.saveAndFlush(new ExamSession(
-                schoolId, v.getId(), teacherProfileId, "PVC", "T", starts, ends, 1, userId));
+                e.getId(), schoolId, teacherProfileId, "PVC", "T", starts, ends, 1, 60, userId));
         ExamSessionParticipant p = participantRepo.saveAndFlush(
                 new ExamSessionParticipant(schoolId, session.getId(), studentProfileId, userId));
         assertThat(p.getVersion()).isZero();

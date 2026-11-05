@@ -69,14 +69,19 @@ class Day8R1RemediationTests {
         ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + school + ",'TC" + tag + "')");
         long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC" + tag + "')");
         long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam')");
-        long ver = ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
-        long sec = ins("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + ver + ",'S',0)");
+        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam','PUBLISHED',now(),1)");
+        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
+        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
+        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
+                + "SELECT workspace_id, " + teacherUserId + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
+                + " ON CONFLICT DO NOTHING");
+        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
+        long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + tag + "'," + teacherUserId + ")");
         ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherUserId + ")");
-        long eq = ins("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + ver + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
+        long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at) VALUES (" + school + "," + ver + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "')");
+        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
         jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + teacherUserId + ")");
         attemptId = attemptService.startAttempt(studentUserId, sessionId, new com.quizopia.backend.attempt.dto.StartAttemptRequest(null)).attemptId();
         em.flush(); em.clear();
@@ -87,7 +92,7 @@ class Day8R1RemediationTests {
     void teacherOwnerCanViewAttemptResult() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1-key-" + tag));
         em.flush(); em.clear();
-        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, "TEACHER", attemptId);
+        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, attemptId);
         assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
@@ -98,7 +103,7 @@ class Day8R1RemediationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + otherTeacher + "," + tr + ")");
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1b-key-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(otherTeacher, "TEACHER", attemptId))
+        assertThatThrownBy(() -> resultService.getAttemptResult(otherTeacher, attemptId))
                 .isInstanceOf(AttemptException.class);
     }
 
@@ -109,7 +114,7 @@ class Day8R1RemediationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + admin + "," + ar + ")");
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r1c-key-" + tag));
         em.flush(); em.clear();
-        AttemptResultResponse r = resultService.getAttemptResult(admin, "SYSTEM_ADMIN", attemptId);
+        AttemptResultResponse r = resultService.getAttemptResult(admin, attemptId);
         assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
@@ -169,35 +174,42 @@ class Day8R1RemediationTests {
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.INVALID_RESULT_QUERY);
     }
 
-    // R2: Fail-closed — unsupported/null roles denied
+    // R2: Fail-closed — unrelated callers denied (resource-based policy; the
+    // resolved role string no longer participates in the decision)
     @Test
-    void unsupportedRoleDeniedAttemptResult() {
+    void unrelatedCallerDeniedAttemptResult() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r2unsup-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(teacherUserId, "GHOST_ROLE", attemptId))
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('str" + tag + "','str" + tag + "@t.com','h','Stranger')");
+        assertThatThrownBy(() -> resultService.getAttemptResult(stranger, attemptId))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.RESULT_ACCESS_DENIED);
     }
 
     @Test
-    void nullRoleDeniedAttemptResult() {
+    void organizerAllowedWithoutRoleString() {
         submitService.submitAttempt(studentUserId, attemptId, new SubmitRequest("r2null-" + tag));
         em.flush(); em.clear();
-        assertThatThrownBy(() -> resultService.getAttemptResult(teacherUserId, null, attemptId))
-                .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
-                .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.RESULT_ACCESS_DENIED);
+        // The session organizer may read the attempt result regardless of any
+        // role resolution (resource-based path).
+        AttemptResultResponse r = resultService.getAttemptResult(teacherUserId, attemptId);
+        assertThat(r.attemptId()).isEqualTo(attemptId);
     }
 
     @Test
-    void nullRoleDeniedSessionResults() {
-        assertThatThrownBy(() -> sessionResultService.getSessionResults(teacherUserId, null, sessionId, 0, 20, null, null, null, null, null))
+    void strangerDeniedSessionResults() {
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sr2" + tag + "','sr2" + tag + "@t.com','h','Stranger2')");
+        assertThatThrownBy(() -> sessionResultService.getSessionResults(stranger, null, sessionId, 0, 20, null, null, null, null, null))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
     }
 
     @Test
-    void unsupportedRoleDeniedSessionResults() {
-        assertThatThrownBy(() -> sessionResultService.getSessionResults(teacherUserId, "GHOST", sessionId, 0, 20, null, null, null, null, null))
+    void unsupportedRoleStillDeniedForNonOrganizer() {
+        // Resource-based policy (issue #4 P0-R3): the role string is ignored;
+        // a caller with no organizer relationship is denied regardless.
+        long stranger = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('gh" + tag + "','gh" + tag + "@t.com','h','Ghost')");
+        assertThatThrownBy(() -> sessionResultService.getSessionResults(stranger, "GHOST", sessionId, 0, 20, null, null, null, null, null))
                 .isInstanceOf(AttemptException.class).extracting(e -> ((AttemptException) e).getErrorCode())
                 .isEqualTo(com.quizopia.backend.attempt.exception.AttemptErrorCode.SESSION_RESULTS_ACCESS_DENIED);
     }

@@ -8,6 +8,10 @@ import java.time.Instant;
  * business transaction. The {@link RealtimeEventBroadcaster} only delivers the STOMP message
  * {@code AFTER_COMMIT} (a rolled-back transition publishes nothing).
  *
+ * <p>User-based identity (issue #4 P0-1): {@code userId} is the primary attempt owner.
+ * {@code studentProfileId} is optional legacy provenance (null for public users) kept for
+ * school-era roster correlation.
+ *
  * <p>Carries the business {@code occurredAt} instant (the single post-lock {@code now} of the transition);
  * {@code serverTime} is recomputed at dispatch time.
  */
@@ -15,6 +19,13 @@ public record AttemptRealtimeEvent(
         RealtimeEventType type,
         Long sessionId,
         Long attemptId,
+        Long userId,
         Long studentProfileId,
         Instant occurredAt) {
+
+    /** Transitional overload for callers that only have the legacy profile id. */
+    public AttemptRealtimeEvent(RealtimeEventType type, Long sessionId, Long attemptId,
+                                 Long studentProfileId, Instant occurredAt) {
+        this(type, sessionId, attemptId, null, studentProfileId, occurredAt);
+    }
 }

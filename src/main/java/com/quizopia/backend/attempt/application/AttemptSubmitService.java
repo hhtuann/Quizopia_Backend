@@ -57,7 +57,8 @@ public class AttemptSubmitService {
     private static final Set<String> IDEMPOTENCY_CONFLICT_CONSTRAINTS = Set.of(
             "uk_idempotency_user_operation_key",   // cross-attempt key reuse (user, operation, key)
             "uk_idempotency_attempt_operation",    // a second cache for the same attempt (D26)
-            "uk_attempts_student_submit_key");     // partial UQ (student_profile, submission_key) on attempts
+            "uk_attempts_user_submit_key",         // partial UQ (user, submission_key) on attempts (V16)
+            "uk_attempts_student_submit_key");     // legacy name kept during transition
 
     private final AttemptAuthorizationService auth;
     private final AttemptRepository attemptRepo;
@@ -88,7 +89,7 @@ public class AttemptSubmitService {
 
     @Transactional
     public SubmitResponse submitAttempt(Long userId, Long attemptId, SubmitRequest request) {
-        StudentProfile profile = auth.requireStudentWithPermission(userId, "ATTEMPT_SUBMIT");
+        auth.requireLearnerWithPermission(userId, "ATTEMPT_SUBMIT");
 
         // Basic request validation (fail fast, before locking). A null request (JSON literal `null`
         // body or a direct service call) must not NPE into a 500.
@@ -104,9 +105,8 @@ public class AttemptSubmitService {
         Attempt attempt = attemptRepo.findByIdForUpdate(attemptId)
                 .orElseThrow(() -> new AttemptException(AttemptErrorCode.ATTEMPT_NOT_FOUND));
 
-        // 2. Ownership + school (foreign/cross-school → 403 — this is a write).
-        if (!Objects.equals(attempt.getStudentProfileId(), profile.getId())
-                || !Objects.equals(attempt.getSchoolId(), profile.getSchoolId())) {
+        // 2. Ownership (user-based, issue #4 P0-1; foreign user → 403 — this is a write).
+        if (!Objects.equals(attempt.getUserId(), userId)) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_ACCESS_DENIED);
         }
 
@@ -175,7 +175,7 @@ public class AttemptSubmitService {
         // duplicate/spurious event and the immutable cached response is untouched.
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
-                attempt.getStudentProfileId(), now));
+                userId, attempt.getStudentProfileId(), now));
         // Notify the student that their result is graded.
         notificationService.create(userId,
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
@@ -230,21 +230,18 @@ public class AttemptSubmitService {
         String key = "auto-timeout-" + attemptId;
         attempt.submit(deadline, key);
         com.quizopia.backend.attempt.domain.model.Grade grade = gradingService.gradeAndPersist(attempt);
-        attemptRepo.saveAndFlush(attempt); // surface uk_attempts_student_submit_key etc.
+        attemptRepo.saveAndFlush(attempt); // surface uk_attempts_user_submit_key etc.
 
-        // Realtime + notification mirror the manual submit path.
+        // Realtime + notification mirror the manual submit path (user-based).
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
-                attempt.getStudentProfileId(), deadline));
-        StudentProfile profile = studentProfileRepo.findById(attempt.getStudentProfileId()).orElse(null);
-        if (profile != null) {
-            notificationService.create(profile.getUserId(),
-                    com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
-                    "Result available",
-                    "Time ran out — your exam was auto-submitted and graded: "
-                            + grade.getFinalScore() + "/" + grade.getMaxScore(),
-                    "/attempts/" + attemptId + "/result");
-        }
+                attempt.getUserId(), attempt.getStudentProfileId(), deadline));
+        notificationService.create(attempt.getUserId(),
+                com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
+                "Result available",
+                "Time ran out — your exam was auto-submitted and graded: "
+                        + grade.getFinalScore() + "/" + grade.getMaxScore(),
+                "/attempts/" + attemptId + "/result");
     }
 
     /**

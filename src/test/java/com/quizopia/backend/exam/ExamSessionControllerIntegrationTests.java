@@ -60,7 +60,7 @@ class ExamSessionControllerIntegrationTests {
         mockMvc.perform(post("/api/exam-sessions")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"examId\":" + examId + ",\"examVersionNumber\":1,\"code\":\"S1\",\"title\":\"Session\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
+                        .content("{\"examId\":" + examId + ",\"code\":\"S1\",\"title\":\"Session\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("DRAFT"))
                 .andExpect(jsonPath("$.code").value("S1"))
@@ -135,11 +135,9 @@ class ExamSessionControllerIntegrationTests {
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
+                        .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
                 .andExpect(status().isOk());
-        Long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
         entityManager.clear();
         return examId;
     }
@@ -150,7 +148,7 @@ class ExamSessionControllerIntegrationTests {
         String body = mockMvc.perform(post("/api/exam-sessions")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"examId\":" + examId + ",\"examVersionNumber\":1,\"code\":\"" + code + "\",\"title\":\"T\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
+                        .content("{\"examId\":" + examId + ",\"code\":\"" + code + "\",\"title\":\"T\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         return Long.parseLong(body.substring(body.indexOf("\"id\":") + 5).replaceAll("[^0-9].*$", "").trim());
     }

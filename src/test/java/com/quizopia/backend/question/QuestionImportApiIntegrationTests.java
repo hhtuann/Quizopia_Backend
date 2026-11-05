@@ -84,6 +84,8 @@ class QuestionImportApiIntegrationTests {
         private QuestionVersionRepository versionRepo;
         @Autowired
         private JdbcTemplate jdbc;
+        @jakarta.persistence.PersistenceContext
+        private jakarta.persistence.EntityManager em;
 
         private Long teacherUserId;
         private Long teacherProfileId;
@@ -126,6 +128,9 @@ class QuestionImportApiIntegrationTests {
                 QuestionBank bank = bankRepo.saveAndFlush(new QuestionBank(
                                 schoolId, subjectId, teacherProfileId, "API-IMP-BANK", "API Import Bank"));
                 bankId = bank.getId();
+                // Detach trigger-filled fixtures so request-scoped loads see the
+                // persisted ownership (transitional ownership fill, ADR-001 §2.2).
+                em.clear();
         }
 
         @AfterEach

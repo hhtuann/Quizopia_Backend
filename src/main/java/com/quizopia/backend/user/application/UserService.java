@@ -66,6 +66,7 @@ public class UserService {
     private final SensitiveDataEncryptor encryptor;
     private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
 
     public UserService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -77,6 +78,7 @@ public class UserService {
             StudentProfileRepository studentProfileRepository,
             Clock clock,
             com.quizopia.backend.notification.application.NotificationService notificationService,
+            com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
             @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
@@ -85,6 +87,7 @@ public class UserService {
         this.encryptor = encryptor;
         this.clock = clock;
         this.notificationService = notificationService;
+        this.workspaceProvisioningService = workspaceProvisioningService;
     }
 
     // ============================================================
@@ -152,6 +155,10 @@ public class UserService {
                         "Required role '" + roleCode + "' is not seeded; check Flyway V3"));
         userRoleRepository.saveAndFlush(new UserRole(user, role, null, null));
 
+        // Public platform foundation (issue #1 A1): admin-created users also get a
+        // personal workspace, provisioned transactionally and idempotently.
+        workspaceProvisioningService.ensurePersonalWorkspace(user);
+
         // NOTE: No auto-profile creation (V11 Student Onboarding). Admin-created users
         // are assigned to a school via the StudentOnboardingService endpoints.
         return toResponse(user);
@@ -171,11 +178,16 @@ public class UserService {
         }
         if (request.email() != null && !request.email().isBlank()) {
             String email = request.email().trim();
-            if (!email.equalsIgnoreCase(user.getEmail())
-                    && userRepository.existsByEmailIgnoreCase(email)) {
-                throw new UserException(UserErrorCode.USER_EMAIL_ALREADY_EXISTS);
+            if (!email.equalsIgnoreCase(user.getEmail())) {
+                if (userRepository.existsByEmailIgnoreCase(email)) {
+                    throw new UserException(UserErrorCode.USER_EMAIL_ALREADY_EXISTS);
+                }
+                // Identity-M3 (review M3-SEC): the verified-email proof belongs
+                // to the OLD address. Keeping it would let pending roster
+                // invitations for the NEW address link without verification.
+                user.setEmail(email);
+                user.setEmailVerifiedAt(null);
             }
-            user.setEmail(email);
         }
         userRepository.saveAndFlush(user);
         return toResponse(user);

@@ -57,20 +57,26 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
     }
 
     @Test
-    void teacherRegistersWithCorrectInviteCode() throws Exception {
-        MvcResultHolder result = registerTeacher(unique("teacher"), TEACHER_INVITE);
+    void teacherSelfSelectionIsRejected() throws Exception {
+        // Identity-M1: the public form is STUDENT-only. A client-supplied
+        // TEACHER account type is rejected before any write, regardless of
+        // any invite code it may still send.
+        String json = teacherRegisterJson(unique("teacher"), emailFor(unique("teacher")),
+                "Passw0rd!", "Teach", "+84991234567")
+                .replace("}", ",\"teacherInviteCode\":\"anything\"}");
+        MvcResultHolder result = performRegister(json);
 
-        assertThat(result.status()).isEqualTo(201);
-        assertThat(result.body().get("roles").get(0).asString()).isEqualTo("TEACHER");
+        assertThat(result.status()).isEqualTo(403);
+        assertThat(result.body().get("code").asString()).isEqualTo("AUTH_TEACHER_REGISTRATION_DISABLED");
     }
 
     @Test
-    void teacherWithWrongInviteCodeIsRejected() throws Exception {
-        registerTeacher(unique("teacher-ok"), TEACHER_INVITE); // first teacher succeeds
-        MvcResultHolder result = registerTeacherRaw(unique("teacher-bad"), "wrong-invite");
+    void registerReportsPendingEmailVerification() throws Exception {
+        MvcResultHolder result = registerStudentRaw(unique("otp"), emailFor(unique("otp")));
 
-        assertThat(result.status()).isEqualTo(403);
-        assertThat(result.body().get("code").asString()).isEqualTo("AUTH_TEACHER_INVITE_INVALID");
+        assertThat(result.status()).isEqualTo(201);
+        assertThat(result.body().get("emailVerificationRequired").asBoolean()).isTrue();
+        assertThat(result.body().get("emailSent").asBoolean()).isTrue();
     }
 
     @Test
@@ -149,14 +155,6 @@ class RegisterIntegrationTests extends AbstractAuthenticationIntegrationTests {
         return performRegister(json);
     }
 
-    private MvcResultHolder registerTeacher(String username, String invite) throws Exception {
-        return registerTeacherRaw(username, invite);
-    }
-
-    private MvcResultHolder registerTeacherRaw(String username, String invite) throws Exception {
-        String json = teacherRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567", invite);
-        return performRegister(json);
-    }
 
     private MvcResultHolder performRegister(String json) throws Exception {
         var result = register(json);

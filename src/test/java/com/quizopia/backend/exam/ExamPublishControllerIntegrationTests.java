@@ -65,7 +65,7 @@ class ExamPublishControllerIntegrationTests {
                         .content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PUBLISHED"))
-                .andExpect(jsonPath("$.versionNumber").value(1))
+                .andExpect(jsonPath("$.totalPoints").value(1))
                 .andExpect(jsonPath("$.questionCount").value(1))
                 .andExpect(jsonPath("$.publishedAt").exists())
                 .andExpect(jsonPath("$.answerKey").doesNotExist())
@@ -121,7 +121,7 @@ class ExamPublishControllerIntegrationTests {
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"expectedVersionNumber\":1,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":"
+                        .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":"
                                 + "[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
                 .andExpect(status().isOk());
         return examId;

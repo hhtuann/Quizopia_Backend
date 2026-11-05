@@ -113,8 +113,9 @@ class StudentOnboardingIntegrationTests {
                 assertThat(resp.schoolId()).isEqualTo(schoolId);
                 assertThat(resp.userId()).isEqualTo(pendingStudentUserId);
                 assertThat(resp.enrollmentStatus()).isEqualTo("ACTIVE");
-                // Code format: prefix (3 alpha from school code) + 4-digit zero-padded counter.
-                assertThat(resp.studentCode()).matches("[A-Z]{1,3}\\d{4}");
+                // Code format: BusinessCodes convention — STU + 8-digit zero-padded
+                // counter (StudentOnboardingService.generateStudentCode, DemoDataSeeder).
+                assertThat(resp.studentCode()).matches("STU\\d{8}");
         }
 
         @Test

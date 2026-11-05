@@ -85,6 +85,7 @@ class OriginCorsIntegrationTests extends AbstractAuthenticationIntegrationTests 
     private void registerStudent(String username) throws Exception {
         String json = studentRegisterJson(username, emailFor(username), "Passw0rd!", username + " Name", "+84991234567");
         mockMvc.perform(post("/api/auth/register").contentType(MediaType.APPLICATION_JSON).content(json));
+        verifyEmail(emailFor(username)); // Identity-M1: verified accounts only
     }
 
     private static String unique(String base) {

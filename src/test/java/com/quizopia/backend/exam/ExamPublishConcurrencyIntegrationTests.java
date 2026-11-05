@@ -64,8 +64,8 @@ class ExamPublishConcurrencyIntegrationTests {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
         examId = examService.createExam(teacherUserId,
-                new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null, "CXE", "T", null)).id();
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
+                new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null, "CXE", "T", null)).id();
+        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
     }
 
@@ -96,12 +96,10 @@ class ExamPublishConcurrencyIntegrationTests {
         assertThat(ok).as("exactly one publish succeeded").isEqualTo(1L);
         assertThat(conflict).as("exactly one publish conflicted").isEqualTo(1L);
 
-        // Single DRAFT->PUBLISHED transition; no partial snapshot (1 PUBLISHED, 0 DRAFT).
-        Integer published = jdbc.queryForObject("SELECT COUNT(*) FROM exam_versions WHERE exam_id=? AND status='PUBLISHED'", Integer.class, examId);
-        Integer draft = jdbc.queryForObject("SELECT COUNT(*) FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Integer.class, examId);
-        assertThat(published).isEqualTo(1);
-        assertThat(draft).isEqualTo(0);
-        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId)).isEqualTo("READY");
+        // Single DRAFT->PUBLISHED transition; publish invariants hold (points + published_at set).
+        assertThat(jdbc.queryForObject("SELECT status FROM exams WHERE id=?", String.class, examId)).isEqualTo("PUBLISHED");
+        assertThat(jdbc.queryForObject("SELECT total_points FROM exams WHERE id=?", Double.class, examId)).isEqualTo(1.0);
+        assertThat(jdbc.queryForObject("SELECT published_at FROM exams WHERE id=?", java.sql.Timestamp.class, examId)).isNotNull();
     }
 
     private long insert(String sql) {

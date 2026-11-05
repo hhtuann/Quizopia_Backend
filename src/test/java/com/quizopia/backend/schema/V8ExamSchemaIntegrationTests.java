@@ -80,17 +80,20 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
                         + "('1','2','3','4','5','6','7','8')", Integer.class);
         assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; latest version is 9 (pre-release consolidation: V1–V15 → V1–V9).
+        // V1–V8 are all applied; Phase 1 Task A adds V10–V12 (workspace foundation),
+        // Task B adds V13–V15 (exam redesign: expand/backfill/contract), and issue #4
+        // P0-1 adds V16 (user-based attempts).
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("9");
+        assertThat(current).isEqualTo("20");
     }
 
     @Test
     void allExamTablesExistAndNoOutOfScope() {
         for (String t : new String[]{"exam_purposes", "exams", "exam_versions", "exam_sections",
-                "exam_questions", "exam_question_options", "exam_sessions", "exam_session_participants"}) {
+                "exam_questions", "exam_question_options", "exam_sessions", "exam_session_participants",
+                "organizations", "workspaces", "workspace_memberships", "legacy_exam_content_map"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
@@ -200,19 +203,17 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void examQuestionRejectsSectionFromDifferentVersion() {
+    void examQuestionRejectsSectionFromDifferentExam() {
         long exam = newExam("EQ1");
-        long v = newDraftVersion(exam, 1);
-        long secA = newSection(v, 0);
+        long secA = newSection(exam, 0);
         long exam2 = newExam("EQ2");
-        long v2 = newDraftVersion(exam2, 1);
-        // Section belongs to v, not v2 -> composite FK violation.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        // Section belongs to exam, not exam2 -> composite FK violation.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v2 + "," + secA + "," + questionId + ","
+                        + "default_points, position, metadata) VALUES (" + exam2 + "," + secA + "," + questionId + ","
                         + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
-        // (Same-version section acceptance is exercised by many other tests that create questions.)
+        // (Same-exam section acceptance is exercised by many other tests that create questions.)
     }
 
     @Test
@@ -220,43 +221,28 @@ class V8ExamSchemaIntegrationTests {
         // H1: composite FK fk_exam_questions_source_pair requires the pinned source version to belong
         // to the source question. qA (questionId) + vB (a version of qB) must be REJECTED.
         long exam = newExam("H1");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
+        long sec = newSection(exam, 0);
         long qB = insert("INSERT INTO questions (question_bank_id, code, created_by) "
                 + "VALUES (" + bankId + ",'H1B'," + userId + ")");
         long vB = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + qB + ",1,'SINGLE_CHOICE','cb',1,'{}'::jsonb,"
                 + userId + ")");
         // All other fields are valid; the ONLY violation is the source-pair provenance composite FK.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v + "," + sec + "," + questionId + "," + vB
+                        + "default_points, position, metadata) VALUES (" + exam + "," + sec + "," + questionId + "," + vB
                         + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class)
                 .hasMessageContaining("fk_exam_questions_source_pair");
     }
 
     @Test
-    void sessionRejectsCrossSchoolVersion() {
-        SchoolFixture b = secondSchool();
-        long examB = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + b.schoolId() + "," + b.subjectId() + "," + b.teacherProfileId() + ",'EB','t')");
-        long vB = newPublishedVersionIn(b.schoolId(), examB, 1);
-        // Session in school A pinning version from school B -> FK violation.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, created_by) VALUES (" + schoolId + "," + vB + ","
-                        + teacherProfileId + ",'X','t',now(),now()+interval '1 hour'," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
     void sessionRejectsCrossSchoolOwner() {
         SchoolFixture b = secondSchool();
         long exam = newExam("SO1");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, created_by) VALUES (" + schoolId + "," + v + ","
-                        + b.teacherProfileId() + ",'X','t',now(),now()+interval '1 hour'," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
+                        + "code, title, starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
+                        + b.teacherProfileId() + ",'X','t',now(),now()+interval '1 hour',60," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -265,13 +251,18 @@ class V8ExamSchemaIntegrationTests {
         SchoolFixture b = secondSchool();
         long examB = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
                 + "VALUES (" + b.schoolId() + "," + b.subjectId() + "," + b.teacherProfileId() + ",'PB','t')");
-        long vB = newPublishedVersionIn(b.schoolId(), examB, 1);
-        long sessionB = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, created_by) VALUES (" + b.schoolId() + "," + vB + "," + b.teacherProfileId()
-                + ",'SB','t',now(),now()+interval '1 hour'," + userId + ")");
-        // Participant row claims school A but session is in school B -> composite FK violation.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES (" + schoolId + "," + sessionB + "," + studentProfileId
+        long sessionB = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + b.schoolId() + "," + examB + "," + b.teacherProfileId()
+                + ",'SB','t',now(),now()+interval '1 hour',60," + userId + ")");
+        // V17: the legacy same-school composite session FK was replaced by a
+        // simple session FK (user-based rows may be school-less). A row whose
+        // school contradicts the session's school is no longer DB-rejected —
+        // cross-school assignment is enforced at the service layer. The
+        // schema-level guard that REMAINS is session existence: a participant
+        // row pointing at a missing session is still rejected.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
+                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
+                        + studentProfileId + ")," + schoolId + ",99999999," + studentProfileId
                         + "," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -280,11 +271,14 @@ class V8ExamSchemaIntegrationTests {
     void participantRejectsCrossSchoolStudent() {
         SchoolFixture b = secondSchool();
         long exam = newExam("PS1");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "SS1");
-        // Student from school B cannot be added to a session in school A.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES (" + schoolId + "," + session + "," + b.studentProfileId()
+        long session = newSession(exam, "SS1");
+        // V17: student-side same-school composite FK replaced by a simple
+        // profile FK (provenance only); cross-school ADD is enforced at the
+        // service layer (addParticipants same-school validation). The
+        // schema-level guard that REMAINS is profile existence.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
+                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
+                        + b.studentProfileId() + ")," + schoolId + "," + session + ",99999999"
                         + "," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -321,32 +315,32 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void sessionCodeSameOwnerDifferentCaseRejected() {
         long exam = newExam("SC1");
-        long v = newPublishedVersion(exam, 1);
-        newSession(v, "SESS-1");
-        assertThatThrownBy(() -> newSession(v, "sess-1"))
+        newSession(exam, "SESS-1");
+        assertThatThrownBy(() -> newSession(exam, "sess-1"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void sessionCodeTwoOwnersSameSchoolSameCodeAccepted() {
         long exam = newExam("SC2");
-        long v = newPublishedVersion(exam, 1);
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) "
                 + "VALUES ('u2b','u2b@t.com','h','U2B')");
         long tp2a = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
                 + "VALUES (" + u2 + "," + schoolId + ",'TC2B')");
-        long s1 = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, created_by) VALUES (" + schoolId + "," + v + "," + teacherProfileId
-                + ",'SHARED','t',now(),now()+interval '1 hour'," + userId + ")");
-        long s2 = insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, created_by) VALUES (" + schoolId + "," + v + "," + tp2a
-                + ",'SHARED','t',now(),now()+interval '1 hour'," + userId + ")");
+        long s1 = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + "," + teacherProfileId
+                + ",'SHARED','t',now(),now()+interval '1 hour',60," + userId + ")");
+        long s2 = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + "," + tp2a
+                + ",'SHARED','t',now(),now()+interval '1 hour',60," + userId + ")");
         assertThat(s1).isPositive();
         assertThat(s2).isPositive();
     }
 
     // ============================================================
-    // GROUP 5 — Version constraints
+    // GROUP 5 — Version constraints (exam_versions: retained legacy
+    // audit table after the Task B redesign; its own CHECK/unique
+    // constraints still apply to audit inserts)
     // ============================================================
 
     @Test
@@ -477,64 +471,59 @@ class V8ExamSchemaIntegrationTests {
     // ============================================================
 
     @Test
-    void sectionPositionDuplicateInSameVersionRejected() {
+    void sectionPositionDuplicateInSameExamRejected() {
         long exam = newExam("Q1");
-        long v = newDraftVersion(exam, 1);
-        newSection(v, 0);
-        assertThatThrownBy(() -> newSection(v, 0))
+        newSection(exam, 0);
+        assertThatThrownBy(() -> newSection(exam, 0))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void questionPositionDuplicateInSameSectionRejected() {
         long exam = newExam("Q2");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        newChoiceQuestion(v, sec, 0);
-        assertThatThrownBy(() -> newChoiceQuestion(v, sec, 0))
+        long sec = newSection(exam, 0);
+        newChoiceQuestion(exam, sec, 0);
+        assertThatThrownBy(() -> newChoiceQuestion(exam, sec, 0))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void questionPositionZeroInDifferentSectionsAccepted() {
         long exam = newExam("Q3");
-        long v = newDraftVersion(exam, 1);
-        long secA = newSection(v, 0);
-        long secB = newSection(v, 1);
-        // Two DISTINCT source questions (same source twice in one version would trip
-        // uk_exam_questions_version_source); both at local position 0 in different sections.
-        long qa = newChoiceQuestion(v, secA, 0);
+        long secA = newSection(exam, 0);
+        long secB = newSection(exam, 1);
+        // Two DISTINCT source questions (same source twice in one exam would trip
+        // uk_exam_questions_exam_source); both at local position 0 in different sections.
+        long qa = newChoiceQuestion(exam, secA, 0);
         long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) "
                 + "VALUES (" + bankId + ",'Q3b'," + userId + ")");
         long q2v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','c2',1,'{}'::jsonb,"
                 + userId + ")");
-        long qb = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long qb = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + v + "," + secB + "," + q2 + "," + q2v + ",'QC','SINGLE_CHOICE','c2',1,0,'{}'::jsonb)");
+                + "VALUES (" + exam + "," + secB + "," + q2 + "," + q2v + ",'QC','SINGLE_CHOICE','c2',1,0,'{}'::jsonb)");
         assertThat(qa).isPositive();
         assertThat(qb).isPositive();
     }
 
     @Test
-    void duplicateSourceQuestionInSameVersionRejected() {
+    void duplicateSourceQuestionInSameExamRejected() {
         long exam = newExam("Q4");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        newChoiceQuestion(v, sec, 0);
-        assertThatThrownBy(() -> newChoiceQuestion(v, sec, 1))
+        long sec = newSection(exam, 0);
+        newChoiceQuestion(exam, sec, 0);
+        assertThatThrownBy(() -> newChoiceQuestion(exam, sec, 1))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    void sameSourceQuestionInDifferentVersionsAccepted() {
-        long exam = newExam("Q5");
-        long v1 = newPublishedVersion(exam, 1);
-        long v2 = newDraftVersion(exam, 2);
-        long sec1 = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + v1 + ",'s',0)");
-        long sec2 = insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES (" + v2 + ",'s',0)");
-        long q1 = newChoiceQuestion(v1, sec1, 0);
-        long q2 = newChoiceQuestion(v2, sec2, 0);
+    void sameSourceQuestionInDifferentExamsAccepted() {
+        long exam1 = newExam("Q5");
+        long exam2 = newExam("Q5B");
+        long sec1 = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam1 + ",'s',0)");
+        long sec2 = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam2 + ",'s',0)");
+        long q1 = newChoiceQuestion(exam1, sec1, 0);
+        long q2 = newChoiceQuestion(exam2, sec2, 0);
         assertThat(q1).isPositive();
         assertThat(q2).isPositive();
     }
@@ -542,11 +531,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void sourceQuestionIdNullRejected() {
         long exam = newExam("Q6");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        long sec = newSection(exam, 0);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_version_id, question_code, question_type, content, default_points, position, "
-                        + "metadata) VALUES (" + v + "," + sec + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
+                        + "metadata) VALUES (" + exam + "," + sec + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
                         + "'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -554,10 +542,9 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void examSectionIdNullRejected() {
         long exam = newExam("Q7");
-        long v = newDraftVersion(exam, 1);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v + ",NULL," + questionId + ","
+                        + "default_points, position, metadata) VALUES (" + exam + ",NULL," + questionId + ","
                         + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -565,11 +552,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void invalidQuestionTypeRejected() {
         long exam = newExam("Q8");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        long sec = newSection(exam, 0);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v + "," + sec + "," + questionId + ","
+                        + "default_points, position, metadata) VALUES (" + exam + "," + sec + "," + questionId + ","
                         + questionVersionId + ",'QC','ESSAY','c',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -577,11 +563,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void difficultyNullAccepted() {
         long exam = newExam("Q9");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        long q = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long sec = newSection(exam, 0);
+        long q = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + v + "," + sec + "," + questionId + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
+                + "VALUES (" + exam + "," + sec + "," + questionId + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
                 + "'{}'::jsonb)");
         assertThat(q).isPositive();
     }
@@ -589,11 +574,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void invalidDifficultyRejected() {
         long exam = newExam("Q10");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        long sec = newSection(exam, 0);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, difficulty, position, metadata) VALUES (" + v + "," + sec + "," + questionId
+                        + "default_points, difficulty, position, metadata) VALUES (" + exam + "," + sec + "," + questionId
                         + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,'IMPOSSIBLE',0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -601,11 +585,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void metadataObjectAccepted() {
         long exam = newExam("Q11");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        long q = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long sec = newSection(exam, 0);
+        long q = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + v + "," + sec + "," + questionId + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
+                + "VALUES (" + exam + "," + sec + "," + questionId + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
                 + "'{\"tag\":\"x\"}'::jsonb)");
         assertThat(q).isPositive();
     }
@@ -613,11 +596,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void metadataArrayRejected() {
         long exam = newExam("Q12");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        long sec = newSection(exam, 0);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v + "," + sec + "," + questionId + ","
+                        + "default_points, position, metadata) VALUES (" + exam + "," + sec + "," + questionId + ","
                         + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,'[1,2]'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -640,24 +622,22 @@ class V8ExamSchemaIntegrationTests {
 
     private void assertNumericAccepted(String answerKeyLiteral) {
         long exam = newExam("N-OK");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
+        long sec = newSection(exam, 0);
         NumSource src = numericSource();
-        long q = insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+        long q = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, "
-                + "answer_key, metadata) VALUES (" + v + "," + sec + "," + src.questionId() + "," + src.versionId()
+                + "answer_key, metadata) VALUES (" + exam + "," + sec + "," + src.questionId() + "," + src.versionId()
                 + ",'QC','NUMERIC_FILL','n',1,0," + answerKeyLiteral + ",'{}'::jsonb)");
         assertThat(q).isPositive();
     }
 
     private void assertNumericRejected(String answerKeyLiteral) {
         long exam = newExam("N-BAD");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
+        long sec = newSection(exam, 0);
         NumSource src = numericSource();
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, answer_key, metadata) VALUES (" + v + "," + sec + ","
+                        + "default_points, position, answer_key, metadata) VALUES (" + exam + "," + sec + ","
                         + src.questionId() + "," + src.versionId() + ",'QC','NUMERIC_FILL','n',1,0," + answerKeyLiteral
                         + ",'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -702,11 +682,10 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void choiceWithNonNullAnswerKeyRejected() {
         long exam = newExam("N-CH");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        long sec = newSection(exam, 0);
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, answer_key, metadata) VALUES (" + v + "," + sec + "," + questionId
+                        + "default_points, position, answer_key, metadata) VALUES (" + exam + "," + sec + "," + questionId
                         + "," + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,"
                         + "'{\"expectedAnswer\":\"2.50\"}'::jsonb,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -715,12 +694,11 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void numericWithNullAnswerKeyRejected() {
         long exam = newExam("N-NULL");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
+        long sec = newSection(exam, 0);
         NumSource src = numericSource();
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_version_id, exam_section_id, "
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_questions (exam_id, exam_section_id, "
                         + "source_question_id, source_question_version_id, question_code, question_type, content, "
-                        + "default_points, position, metadata) VALUES (" + v + "," + sec + "," + src.questionId() + ","
+                        + "default_points, position, metadata) VALUES (" + exam + "," + sec + "," + src.questionId() + ","
                         + src.versionId() + ",'QC','NUMERIC_FILL','n',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -732,9 +710,8 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void optionInvalidKeyRejected() {
         long exam = newExam("O1");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        long eq = newChoiceQuestion(v, sec, 0);
+        long sec = newSection(exam, 0);
+        long eq = newChoiceQuestion(exam, sec, 0);
         assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, "
                         + "position) VALUES (" + eq + ",'G','o',0)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -743,9 +720,8 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void optionDuplicateKeyRejected() {
         long exam = newExam("O2");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        long eq = newChoiceQuestion(v, sec, 0);
+        long sec = newSection(exam, 0);
+        long eq = newChoiceQuestion(exam, sec, 0);
         newOption(eq, "A", 0);
         assertThatThrownBy(() -> newOption(eq, "A", 1))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -754,9 +730,8 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void optionDuplicatePositionRejected() {
         long exam = newExam("O3");
-        long v = newDraftVersion(exam, 1);
-        long sec = newSection(v, 0);
-        long eq = newChoiceQuestion(v, sec, 0);
+        long sec = newSection(exam, 0);
+        long eq = newChoiceQuestion(exam, sec, 0);
         newOption(eq, "A", 0);
         assertThatThrownBy(() -> newOption(eq, "B", 0))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -766,41 +741,38 @@ class V8ExamSchemaIntegrationTests {
     // GROUP 9 — Session + M1 (status<->timestamps)
     // ============================================================
 
-    private long insertSessionWith(long versionId, String statusLit, String openedLit, String closedLit) {
+    private long insertSessionWith(long examId, String statusLit, String openedLit, String closedLit) {
         // Derive a unique owner-scoped code from the status so the multi-state acceptance test
         // (5 inserts, same owner) does not trip uk_exam_sessions_owner_code_ci.
         String code = "S-" + statusLit.replace("'", "");
-        return insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, created_by, opened_at, closed_at) VALUES (" + schoolId + "," + versionId + ","
-                + teacherProfileId + ",'" + code + "','t'," + statusLit + ",now(),now()+interval '1 hour'," + userId + ","
+        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+                + "starts_at, ends_at, duration_minutes, created_by, opened_at, closed_at) VALUES (" + schoolId + "," + examId + ","
+                + teacherProfileId + ",'" + code + "','t'," + statusLit + ",now(),now()+interval '1 hour',60," + userId + ","
                 + openedLit + "," + closedLit + ")");
     }
 
     @Test
     void sessionInvalidStatusRejected() {
         long exam = newExam("SS1");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'BOGUS'", "NULL", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'BOGUS'", "NULL", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void sessionEndsBeforeStartsRejected() {
         long exam = newExam("SS2");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, created_by) VALUES (" + schoolId + "," + v + ","
-                        + teacherProfileId + ",'S','t',now()+interval '2 hour',now()," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
+                        + "code, title, starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
+                        + teacherProfileId + ",'S','t',now()+interval '2 hour',now(),60," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void sessionMaxAttemptsNegativeRejected() {
         long exam = newExam("SS3");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, max_attempts, created_by) VALUES (" + schoolId + "," + v + ","
-                        + teacherProfileId + ",'S','t',now(),now()+interval '1 hour',-1," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
+                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
+                        + teacherProfileId + ",'S','t',now(),now()+interval '1 hour',-1,60," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -808,10 +780,9 @@ class V8ExamSchemaIntegrationTests {
     void sessionMaxAttemptsZeroAccepted() {
         // max_attempts = 0 means unlimited (absorbed from legacy V14); the DB CHECK is >= 0.
         long exam = newExam("SS3A");
-        long v = newPublishedVersion(exam, 1);
-        long sessionId = jdbc.queryForObject("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, max_attempts, created_by) VALUES (" + schoolId + "," + v + ","
-                        + teacherProfileId + ",'S0','t',now(),now()+interval '1 hour',0," + userId
+        long sessionId = jdbc.queryForObject("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
+                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
+                        + teacherProfileId + ",'S0','t',now(),now()+interval '1 hour',0,60," + userId
                         + ") RETURNING id", Long.class);
         assertThat(sessionId).isPositive();
     }
@@ -820,84 +791,74 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void m1DraftWithOpenedAtRejected() {
         long exam = newExam("M1A");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'DRAFT'", "now()", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'DRAFT'", "now()", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1ScheduledWithOpenedAtRejected() {
         long exam = newExam("M1B");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'SCHEDULED'", "now()", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'SCHEDULED'", "now()", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1ScheduledWithClosedAtRejected() {
         long exam = newExam("M1C");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'SCHEDULED'", "NULL", "now()"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'SCHEDULED'", "NULL", "now()"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1OpenMissingOpenedAtRejected() {
         long exam = newExam("M1D");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'OPEN'", "NULL", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'OPEN'", "NULL", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1OpenWithClosedAtRejected() {
         long exam = newExam("M1E");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'OPEN'", "now()", "now()"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'OPEN'", "now()", "now()"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1ClosedMissingOpenedAtRejected() {
         long exam = newExam("M1F");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'CLOSED'", "NULL", "now()"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'CLOSED'", "NULL", "now()"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1ClosedMissingClosedAtRejected() {
         long exam = newExam("M1G");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'CLOSED'", "now()", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'CLOSED'", "now()", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1CancelledWithOpenedAtRejected() {
         long exam = newExam("M1H");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'CANCELLED'", "now()", "NULL"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'CANCELLED'", "now()", "NULL"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1CancelledWithClosedAtRejected() {
         long exam = newExam("M1I");
-        long v = newPublishedVersion(exam, 1);
-        assertThatThrownBy(() -> insertSessionWith(v, "'CANCELLED'", "NULL", "now()"))
+        assertThatThrownBy(() -> insertSessionWith(exam, "'CANCELLED'", "NULL", "now()"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void m1AllValidStatesAccepted() {
         long exam = newExam("M1J");
-        long v = newPublishedVersion(exam, 1);
-        assertThat(insertSessionWith(v, "'DRAFT'", "NULL", "NULL")).isPositive();
-        assertThat(insertSessionWith(v, "'SCHEDULED'", "NULL", "NULL")).isPositive();
-        assertThat(insertSessionWith(v, "'OPEN'", "now()", "NULL")).isPositive();
-        assertThat(insertSessionWith(v, "'CLOSED'", "now()", "now()")).isPositive();
-        assertThat(insertSessionWith(v, "'CANCELLED'", "NULL", "NULL")).isPositive();
+        assertThat(insertSessionWith(exam, "'DRAFT'", "NULL", "NULL")).isPositive();
+        assertThat(insertSessionWith(exam, "'SCHEDULED'", "NULL", "NULL")).isPositive();
+        assertThat(insertSessionWith(exam, "'OPEN'", "now()", "NULL")).isPositive();
+        assertThat(insertSessionWith(exam, "'CLOSED'", "now()", "now()")).isPositive();
+        assertThat(insertSessionWith(exam, "'CANCELLED'", "NULL", "NULL")).isPositive();
     }
 
     // ============================================================
@@ -907,8 +868,7 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void duplicateSessionStudentRejected() {
         long exam = newExam("P1");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "P1");
+        long session = newSession(exam, "P1");
         newParticipant(session, studentProfileId);
         assertThatThrownBy(() -> newParticipant(session, studentProfileId))
                 .isInstanceOf(DataIntegrityViolationException.class);
@@ -917,8 +877,7 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void participantInvalidStatusRejected() {
         long exam = newExam("P2");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "P2");
+        long session = newSession(exam, "P2");
         assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
                         + "student_profile_id, status, added_by) VALUES (" + schoolId + "," + session + ","
                         + studentProfileId + ",'REMOVED'," + userId + ")"))
@@ -928,8 +887,7 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void m2EligibleWithNullBlockedAtAccepted() {
         long exam = newExam("M2A");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "M2A");
+        long session = newSession(exam, "M2A");
         long p = newParticipant(session, studentProfileId);
         assertThat(p).isPositive();
     }
@@ -937,8 +895,7 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void m2EligibleWithNonNullBlockedAtRejected() {
         long exam = newExam("M2B");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "M2B");
+        long session = newSession(exam, "M2B");
         assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
                         + "student_profile_id, status, added_by, blocked_at) VALUES (" + schoolId + "," + session + ","
                         + studentProfileId + ",'ELIGIBLE'," + userId + ",now())"))
@@ -948,10 +905,9 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void m2BlockedWithNonNullBlockedAtAccepted() {
         long exam = newExam("M2C");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "M2C");
-        long p = insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, status, "
-                + "added_by, blocked_at) VALUES (" + schoolId + "," + session + "," + studentProfileId + ",'BLOCKED',"
+        long session = newSession(exam, "M2C");
+        long p = insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, status, "
+                + "added_by, blocked_at) VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentProfileId + ")," + schoolId + "," + session + "," + studentProfileId + ",'BLOCKED',"
                 + userId + ",now())");
         assertThat(p).isPositive();
     }
@@ -959,8 +915,7 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void m2BlockedWithNullBlockedAtRejected() {
         long exam = newExam("M2D");
-        long v = newPublishedVersion(exam, 1);
-        long session = newSession(v, "M2D");
+        long session = newSession(exam, "M2D");
         assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
                         + "student_profile_id, status, added_by) VALUES (" + schoolId + "," + session + ","
                         + studentProfileId + ",'BLOCKED'," + userId + ")"))
@@ -981,30 +936,33 @@ class V8ExamSchemaIntegrationTests {
                 + schoolId + "," + subjectId + "," + teacherProfileId + ",'" + code + "','t')");
     }
 
+    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
     private long newDraftVersion(long examId, int versionNumber) {
         return insert("INSERT INTO exam_versions (school_id, exam_id, version_number, created_by) VALUES ("
                 + schoolId + "," + examId + "," + versionNumber + "," + userId + ")");
     }
 
+    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
     private long newPublishedVersion(long examId, int versionNumber) {
         return newPublishedVersionIn(schoolId, examId, versionNumber);
     }
 
+    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
     private long newPublishedVersionIn(long school, long examId, int versionNumber) {
         return insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
                 + "published_at, created_by) VALUES (" + school + "," + examId + "," + versionNumber + ",'PUBLISHED',10,"
                 + "now()," + userId + ")");
     }
 
-    private long newSection(long versionId, int position) {
-        return insert("INSERT INTO exam_sections (exam_version_id, title, position) VALUES ("
-                + versionId + ",'Sec'," + position + ")");
+    private long newSection(long examId, int position) {
+        return insert("INSERT INTO exam_sections (exam_id, title, position) VALUES ("
+                + examId + ",'Sec'," + position + ")");
     }
 
-    private long newChoiceQuestion(long versionId, long sectionId, int position) {
-        return insert("INSERT INTO exam_questions (exam_version_id, exam_section_id, source_question_id, "
+    private long newChoiceQuestion(long examId, long sectionId, int position) {
+        return insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
-                + "VALUES (" + versionId + "," + sectionId + "," + questionId + "," + questionVersionId
+                + "VALUES (" + examId + "," + sectionId + "," + questionId + "," + questionVersionId
                 + ",'QC','SINGLE_CHOICE','c',1," + position + ",'{}'::jsonb)");
     }
 
@@ -1013,14 +971,14 @@ class V8ExamSchemaIntegrationTests {
                 + questionId + ",'" + key + "','o'," + position + ")");
     }
 
-    private long newSession(long versionId, String code) {
-        return insert("INSERT INTO exam_sessions (school_id, exam_version_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, created_by) VALUES (" + schoolId + "," + versionId + "," + teacherProfileId
-                + ",'" + code + "','t',now(),now()+interval '1 hour'," + userId + ")");
+    private long newSession(long examId, String code) {
+        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + examId + "," + teacherProfileId
+                + ",'" + code + "','t',now(),now()+interval '1 hour',60," + userId + ")");
     }
 
     private long newParticipant(long sessionId, long studentId) {
-        return insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) "
-                + "VALUES (" + schoolId + "," + sessionId + "," + studentId + "," + userId + ")");
+        return insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, added_by) "
+                + "VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentId + ")," + schoolId + "," + sessionId + "," + studentId + "," + userId + ")");
     }
 }

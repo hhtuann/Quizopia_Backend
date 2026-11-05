@@ -88,16 +88,14 @@ class ExamSessionParticipantConcurrencyIntegrationTests {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
         // Published exam
-        examId = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "RCE" + u, "T", null)).id();
-        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(1, null, null, List.of(
+        examId = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "RCE" + u, "T", null)).id();
+        examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(questionId, 0, null))))));
-        long v1 = jdbc.queryForObject("SELECT id FROM exam_versions WHERE exam_id=? AND status='DRAFT'", Long.class, examId);
-        jdbc.update("UPDATE exam_versions SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", v1);
-        jdbc.update("UPDATE exams SET status='READY' WHERE id=?", examId);
+        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
         // Shared DRAFT session (future window)
         Instant starts = Instant.now().plusSeconds(3600);
-        sharedSessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, "RCS" + u, "RC Session", starts, starts.plusSeconds(7200), 1)).id();
+        sharedSessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, "RCS" + u, "RC Session", starts, starts.plusSeconds(7200), 1, null, null, null)).id();
         // Students
         student1 = createStudent("RC01" + u, "S1");
         student2 = createStudent("RC02" + u, "S2");
@@ -182,8 +180,8 @@ class ExamSessionParticipantConcurrencyIntegrationTests {
     void blockWaitsForSessionLockAndRejectsWhenSessionClosedConcurrently() throws Exception {
         // Dedicated session so the CLOSED flip never leaks into other tests.
         Instant starts = Instant.now().plusSeconds(3600);
-        long sessionId = sessionService.createSession(teacherUserId,
-                new CreateExamSessionRequest(examId, 1, "RC5", "State Race", starts, starts.plusSeconds(7200), 1)).id();
+        long sessionId = sessionService.createSession(teacherUserId, null,
+                new CreateExamSessionRequest(examId, "RC5", "State Race", starts, starts.plusSeconds(7200), 1, null, null, null)).id();
         long pid = jdbc.queryForObject(
                 "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, status, added_by, version) "
                         + "VALUES (?,?,?,?,?,0) RETURNING id", Long.class, schoolId, sessionId, student1, "ELIGIBLE", teacherUserId);
