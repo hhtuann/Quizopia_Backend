@@ -130,12 +130,16 @@ CREATE TABLE classroom_roster_entries (
         )
 );
 
--- One ACTIVE (PENDING) invitation per (classroom, email). Re-inviting a
--- REVOKED/DECLINED address creates a NEW row (history preserved), so the
--- partial index only covers PENDING.
-CREATE UNIQUE INDEX uk_roster_pending_classroom_email
+-- One ACTIVE entry (PENDING *or* LINKED) per (classroom, email) — review
+-- M3-FINAL-02: without LINKED in the active set, a repeated manual add of an
+-- already-linked verified email created a duplicate LINKED roster row (the
+-- membership itself stayed deduped, but the learner's My Classes view and
+-- decline semantics diverged from actual access). Terminal states
+-- (REVOKED/DECLINED) stay outside the index, so legal re-invitation after a
+-- withdrawal or opt-out keeps working and history is preserved.
+CREATE UNIQUE INDEX uk_roster_active_classroom_email
     ON classroom_roster_entries (classroom_id, email_normalized)
-    WHERE status = 'PENDING';
+    WHERE status IN ('PENDING', 'LINKED');
 
 CREATE INDEX idx_roster_entries_user
     ON classroom_roster_entries (user_id)

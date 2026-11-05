@@ -619,20 +619,25 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         registerAndVerify(username, email, "Passw0rd!");
         Long userId = jdbcTemplate.queryForObject(
                 "SELECT id FROM users WHERE username = ?", Long.class, username);
-        String teacherToken = teacherWithClassroom("OVL");
-        Long classroomId = firstClassroomId(teacherToken);
 
-        // OLD entry: invite → auto-LINK (verified learner, no history).
-        JsonNode old = addRoster(teacherToken, classroomId, "Overlapped", email, null, null);
-        assertThat(old.get("status").asText()).isEqualTo("LINKED");
-        // NEW PENDING entry for the same (classroom, email): manufactured
-        // directly via the repository — the sequential add-path auto-links a
-        // verified email instantly, so this is the test fixture for the
-        // cross-entry invariant (not a claim about production insert paths).
-        Long freshId = txInsertPending(classroomId, email, userId);
-        assertThat(rosterRepository.findById(freshId))
-                .hasValueSatisfying(e -> assertThat(e.getStatus())
-                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
+        // Classroom A: LINKED entry (verified learner, first-time auto-link).
+        String teacherToken = teacherWithClassroom("OVL");
+        Long classA = firstClassroomId(teacherToken);
+        JsonNode linked = addRoster(teacherToken, classA, "Overlapped", email, null, null);
+        assertThat(linked.get("status").asText()).isEqualTo("LINKED");
+
+        // Classroom B (same teacher, different class): a PENDING invitation
+        // for the same email — with active-per-classroom uniqueness this is
+        // the legal remaining multi-entry state, and reconciliation for a
+        // verify event would target it.
+        MvcResult created = mockMvc.perform(post("/api/classrooms")
+                        .header("Authorization", "Bearer " + teacherToken)
+                        .contentType("application/json")
+                        .content("{\"code\":\"OVL2\",\"name\":\"Second\"}"))
+                .andReturn();
+        Long classB = objectMapper.readTree(created.getResponse().getContentAsString())
+                .get("id").asLong();
+        Long pendingB = txInsertPending(classB, email, userId);
 
         org.springframework.transaction.PlatformTransactionManager tm =
                 applicationContext.getBean(
@@ -647,10 +652,10 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            // Thread A: the REAL decline runs inside an open transaction —
-            // user+entry locks held, membership deleted, DECLINED uncommitted.
+            // Thread A: the REAL decline of A's entry runs inside an open
+            // transaction (user+entry locks held, DECLINED uncommitted).
             Future<?> decliner = pool.submit(() -> txA.executeWithoutResult(st -> {
-                rosterSvc.declineEntry(userId, old.get("id").asLong());
+                rosterSvc.declineEntry(userId, linked.get("id").asLong());
                 declineReady.countDown();
                 try {
                     release.await(15, TimeUnit.SECONDS);
@@ -661,10 +666,9 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
             assertThat(declineReady.await(15, TimeUnit.SECONDS))
                     .as("decline reached its locks").isTrue();
 
-            // Thread B: reconciliation targeting the NEW PENDING entry. With
-            // the shared user-lock serialization it MUST block behind the
-            // uncommitted decline — early completion here means the opt-out
-            // could be raced (regression signal, not success).
+            // Thread B: reconciliation (a verify event would call this) must
+            // serialize behind the user lock — early completion means the
+            // shared serialization point regressed.
             Future<Boolean> reconciler = pool.submit(() -> {
                 reconciliationService.reconcile(userId, email);
                 return true;
@@ -682,13 +686,18 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
             pool.shutdownNow();
         }
 
-        // After both commit: decline won the race window, the NEW invitation
-        // must NOT have been linked without consent.
-        assertThat(rosterRepository.findById(freshId))
+        // Serialization held: A's entry is DECLINED (opt-out recorded) and
+        // B's invitation — a DIFFERENT classroom with no declined history —
+        // linked only AFTER the decline committed.
+        assertThat(rosterRepository.findById(linked.get("id").asLong()))
                 .hasValueSatisfying(e -> assertThat(e.getStatus())
-                        .isEqualTo(ClassroomRosterEntry.RosterStatus.PENDING));
-        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId))
-                .as("no membership without learner consent").isEmpty();
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.DECLINED));
+        assertThat(rosterRepository.findById(pendingB))
+                .hasValueSatisfying(e -> assertThat(e.getStatus())
+                        .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
+        // Memberships: A lost its member (decline), B gained exactly one.
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classA)).isEmpty();
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classB)).hasSize(1);
     }
     @Test
     void declineCommitsThenReconciliationRespectsOptOutConcurrently() throws Exception {
@@ -902,6 +911,246 @@ class ClassroomRosterIntegrationTests extends AbstractAuthenticationIntegrationT
             pool.shutdownNow();
         }
     }
+    // ---------- M3-FINAL-02: single active roster row per (classroom,email) ----------
+
+    @Test
+    void repeatedManualAddOfLinkedEmailYieldsNoDuplicateLinkedRow() throws Exception {
+        String username = unique("dupl");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("DUPL");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        JsonNode first = addRoster(teacherToken, classroomId, "Once Only", email, null, null);
+        assertThat(first.get("status").asText()).isEqualTo("LINKED");
+
+        // Repeated manual add of the SAME verified email: 409, and the active
+        // roster still holds exactly ONE row for the address.
+        MvcResult dup = mockMvc.perform(post("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + teacherToken)
+                        .contentType("application/json")
+                        .content(rosterJson("Once Only", email, null, null)))
+                .andReturn();
+        assertThat(dup.getResponse().getStatus()).isEqualTo(409);
+        assertThat(dup.getResponse().getContentAsString()).contains("ROSTER_DUPLICATE_PENDING");
+        Integer activeRows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM classroom_roster_entries "
+                        + "WHERE classroom_id = ? AND email_normalized = ? "
+                        + "AND status IN ('PENDING','LINKED')",
+                Integer.class, classroomId, email);
+        assertThat(activeRows).as("exactly one active row").isEqualTo(1);
+    }
+
+    @Test
+    void concurrentManualAddsOfSameVerifiedEmailLeaveOneActiveRow() throws Exception {
+        String username = unique("conc3");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        final String teacherToken = teacherWithClassroom("CONC3");
+        final Long classroomId = firstClassroomId(teacherToken);
+        final String body = rosterJson("Racer", email, null, null);
+
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            List<Future<Integer>> adds = new java.util.ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                adds.add(pool.submit(() -> mockMvc.perform(
+                                post("/api/classrooms/" + classroomId + "/roster")
+                                        .header("Authorization", "Bearer " + teacherToken)
+                                        .contentType("application/json")
+                                        .content(body))
+                        .andReturn().getResponse().getStatus()));
+            }
+            int created = 0, conflicts = 0;
+            for (Future<Integer> f : adds) {
+                int status = f.get(20, TimeUnit.SECONDS);
+                if (status == 201) {
+                    created++;
+                } else if (status == 409) {
+                    conflicts++;
+                } else {
+                    org.assertj.core.api.Assertions.fail("unexpected status " + status);
+                }
+            }
+            assertThat(created).as("exactly one create wins").isEqualTo(1);
+            assertThat(conflicts).isEqualTo(2);
+        } finally {
+            pool.shutdownNow();
+        }
+        Integer activeRows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM classroom_roster_entries "
+                        + "WHERE classroom_id = ? AND email_normalized = ? "
+                        + "AND status IN ('PENDING','LINKED')",
+                Integer.class, classroomId, email);
+        assertThat(activeRows).isEqualTo(1);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+    }
+
+    @Test
+    void revokeThenReinviteIsStillLegalUnderActiveUniqueness() throws Exception {
+        String username = unique("rr");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("RR");
+        Long classroomId = firstClassroomId(teacherToken);
+        JsonNode first = addRoster(teacherToken, classroomId, "Back Again", email, null, null);
+        assertThat(first.get("status").asText()).isEqualTo("LINKED");
+
+        // Owner removes the LINKED member (teacher has both permissions).
+        mockMvc.perform(delete("/api/classrooms/" + classroomId + "/roster/"
+                        + first.get("id").asLong())
+                        .header("Authorization", "Bearer " + teacherToken))
+                .andReturn();
+
+        // REVOKED is terminal → re-invite is legal; verified owner auto-links.
+        JsonNode second = addRoster(teacherToken, classroomId, "Back Again", email, null, null);
+        assertThat(second.get("status").asText()).isEqualTo("LINKED");
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).hasSize(1);
+    }
+
+    // ---------- M3-FINAL-01: RBAC split on LINKED removal ----------
+
+    @Test
+    void linkedRemovalRequiresRemovePermissionPendingWithdrawalOnlyAdd() throws Exception {
+        String username = unique("rbac");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("RBAC");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        // PENDING invitation: withdrawing it is roster management (ADD) —
+        // revoke ADD's sibling REMOVE and it must still succeed.
+        String pendingEmail = emailFor(unique("pend"));
+        JsonNode pending = addRoster(teacherToken, classroomId, "Pending One",
+                pendingEmail, null, null);
+        assertThat(pending.get("status").asText()).isEqualTo("PENDING");
+        revokePermission("CLASSROOM_MEMBER_REMOVE");
+        try {
+            MvcResult withdraw = mockMvc.perform(delete(
+                            "/api/classrooms/" + classroomId + "/roster/"
+                                    + pending.get("id").asLong())
+                            .header("Authorization", "Bearer " + teacherToken))
+                    .andReturn();
+            assertThat(withdraw.getResponse().getStatus())
+                    .as("PENDING withdrawal needs ADD only").isEqualTo(204);
+        } finally {
+            restorePermission("CLASSROOM_MEMBER_REMOVE");
+        }
+
+        // LINKED member: removal needs REMOVE — ADD alone must get 403.
+        JsonNode linked = addRoster(teacherToken, classroomId, "Linked One",
+                email, null, null);
+        assertThat(linked.get("status").asText()).isEqualTo("LINKED");
+        revokePermission("CLASSROOM_MEMBER_REMOVE");
+        try {
+            MvcResult denied = mockMvc.perform(delete(
+                            "/api/classrooms/" + classroomId + "/roster/"
+                                    + linked.get("id").asLong())
+                            .header("Authorization", "Bearer " + teacherToken))
+                    .andReturn();
+            assertThat(denied.getResponse().getStatus())
+                    .as("LINKED removal is REMOVE-gated").isEqualTo(403);
+            // State untouched: still LINKED with the membership.
+            assertThat(rosterRepository.findById(linked.get("id").asLong()))
+                    .hasValueSatisfying(e -> assertThat(e.getStatus())
+                            .isEqualTo(ClassroomRosterEntry.RosterStatus.LINKED));
+            assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId))
+                    .isNotEmpty();
+        } finally {
+            restorePermission("CLASSROOM_MEMBER_REMOVE");
+        }
+
+        // With REMOVE restored, the same removal succeeds.
+        MvcResult ok = mockMvc.perform(delete(
+                        "/api/classrooms/" + classroomId + "/roster/"
+                                + linked.get("id").asLong())
+                        .header("Authorization", "Bearer " + teacherToken))
+                .andReturn();
+        assertThat(ok.getResponse().getStatus()).isEqualTo(204);
+        assertThat(memberRepository.findAllByClassroomIdOrderByIdAsc(classroomId)).isEmpty();
+    }
+
+    /** Removes a permission code from the TEACHER role (test-scoped). */
+    private void revokePermission(String code) {
+        jdbcTemplate.update("""
+                DELETE FROM role_permissions
+                WHERE role_id = (SELECT id FROM roles WHERE code = 'TEACHER')
+                  AND permission_id = (SELECT id FROM permissions WHERE code = ?)
+                """, code);
+    }
+
+    private void restorePermission(String code) {
+        jdbcTemplate.update("""
+                INSERT INTO role_permissions (role_id, permission_id)
+                SELECT (SELECT id FROM roles WHERE code = 'TEACHER'),
+                       (SELECT id FROM permissions WHERE code = ?)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM role_permissions rp
+                    WHERE rp.role_id = (SELECT id FROM roles WHERE code = 'TEACHER')
+                      AND rp.permission_id = (SELECT id FROM permissions WHERE code = ?))
+                """, code, code);
+    }
+
+    // ---------- M3-FINAL-03: learner-facing redaction ----------
+
+    @Test
+    void learnerEndpointsNeverExposeSensitiveRosterFields() throws Exception {
+        String username = unique("priv");
+        String email = emailFor(username);
+        registerAndVerify(username, email, "Passw0rd!");
+        String teacherToken = teacherWithClassroom("PRIV");
+        Long classroomId = firstClassroomId(teacherToken);
+
+        // Linked entry WITH sensitive data.
+        JsonNode linked = addRoster(teacherToken, classroomId, "Private Me", email,
+                "2010-04-01", "+84991112233");
+        assertThat(linked.get("status").asText()).isEqualTo("LINKED");
+
+        String learnerToken = extractAccessToken(login(email, "Passw0rd!"));
+
+        // /roster/my: sensitive fields are null for the learner.
+        MvcResult mine = mockMvc.perform(get("/api/classrooms/roster/my")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode myRows = objectMapper.readTree(mine.getResponse().getContentAsString());
+        assertThat(myRows.size()).isEqualTo(1);
+        JsonNode row = myRows.get(0);
+        assertThat(row.get("dob").isNull()).as("learner must not see DOB").isTrue();
+        assertThat(row.get("phone").isNull()).as("learner must not see phone").isTrue();
+        assertThat(row.get("parentPhone").isNull()).as("learner must not see parent phone").isTrue();
+        assertThat(row.get("email").isNull()).as("learner must not see raw email echo").isTrue();
+        assertThat(row.get("status").asText()).isEqualTo("LINKED");
+
+        // Decline → re-invite (PENDING) → /roster/invitations equally redacted.
+        mockMvc.perform(post("/api/classrooms/roster/" + linked.get("id").asLong() + "/decline")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode pending = addRoster(teacherToken, classroomId, "Private Me", email,
+                null, null);
+        MvcResult invites = mockMvc.perform(get("/api/classrooms/roster/invitations")
+                        .header("Authorization", "Bearer " + learnerToken))
+                .andReturn();
+        JsonNode inviteRows = objectMapper.readTree(invites.getResponse().getContentAsString());
+        assertThat(inviteRows.size()).isEqualTo(1);
+        assertThat(inviteRows.get(0).get("dob").isNull()).isTrue();
+        assertThat(inviteRows.get(0).get("parentPhone").isNull()).isTrue();
+        assertThat(inviteRows.get(0).get("email").isNull()).isTrue();
+
+        // Owner-facing projection still returns the data it entered.
+        MvcResult ownerList = mockMvc.perform(get("/api/classrooms/" + classroomId + "/roster")
+                        .header("Authorization", "Bearer " + teacherToken))
+                .andReturn();
+        JsonNode ownerRows = objectMapper.readTree(ownerList.getResponse().getContentAsString())
+                .get("items");
+        assertThat(ownerRows.size()).isGreaterThanOrEqualTo(1);
+        JsonNode ownerLinked = java.util.stream.IntStream.range(0, ownerRows.size())
+                .mapToObj(ownerRows::get)
+                .filter(r -> r.get("id").asLong() == linked.get("id").asLong()
+                        || "DECLINED".equals(r.get("status").asText()))
+                .findFirst().orElse(ownerRows.get(0));
+        assertThat(ownerLinked.get("dob")).isNotNull();
+    }
+
     // ---------- authorization error shapes (review M3-QA) ----------
 
     @Test
