@@ -24,6 +24,10 @@ import tools.jackson.databind.JsonNode;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -696,6 +700,67 @@ class RosterImportIntegrationTests extends AbstractAuthenticationIntegrationTest
                         List.of("Declined Importer", "", "", "", "", "", email)))));
         assertThat(retry.imported()).isZero();
         assertThat(retry.duplicates()).isEqualTo(1);
+    }
+
+    // ---------- M4 dependency regressions (M3 active-entry uniqueness) ----------
+
+    @Test
+    void importingAnAlreadyLinkedEmailCountsAsDuplicateNotNewRow() throws Exception {
+        Teacher t = teacherWithClassroom("IMPL");
+        Long owner = ownerOf(t.classroomId());
+        String email = emailFor(unique("impl"));
+        registerAndVerify(unique("impl"), email, "Passw0rd!");
+
+        // First import auto-links the verified learner.
+        RosterImportService.ConfirmResult first = importService.confirm(owner,
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("Imported Linked", "", "", "", "", "", email)))));
+        assertThat(first.imported()).isEqualTo(1);
+
+        // Re-import of the now-LINKED address: duplicate (LINKED counts as
+        // active under the M3 uniqueness) — never a second active row.
+        RosterImportService.ConfirmResult second = importService.confirm(owner,
+                t.classroomId(), xlsx(workbook(List.of(
+                        List.of("Imported Linked", "", "", "", "", "", email)))));
+        assertThat(second.imported()).isZero();
+        assertThat(second.duplicates()).isEqualTo(1);
+        Integer activeRows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM classroom_roster_entries "
+                        + "WHERE classroom_id = ? AND email_normalized = ? "
+                        + "AND status IN ('PENDING','LINKED')",
+                Integer.class, t.classroomId(), email);
+        assertThat(activeRows).as("single active row after re-import").isEqualTo(1);
+    }
+
+    @Test
+    void concurrentImportsOfTheSameWorkbookImportEachRowOnce() throws Exception {
+        Teacher t = teacherWithClassroom("CONCI");
+        Long owner = ownerOf(t.classroomId());
+        String a = emailFor(unique("ca"));
+        String b = emailFor(unique("cb"));
+        MockMultipartFile book = xlsx(workbook(List.of(
+                List.of("Concurrent A", "", "", "", "", "", a),
+                List.of("Concurrent B", "", "", "", "", "", b))));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<RosterImportService.ConfirmResult>> runs = new java.util.ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                runs.add(pool.submit(() -> importService.confirm(owner, t.classroomId(), book)));
+            }
+            int imported = 0;
+            for (Future<RosterImportService.ConfirmResult> f : runs) {
+                imported += f.get(30, TimeUnit.SECONDS).imported();
+            }
+            assertThat(imported).as("each row imported exactly once across both confirms")
+                    .isEqualTo(2);
+        } finally {
+            pool.shutdownNow();
+        }
+        Integer rows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM classroom_roster_entries WHERE classroom_id = ?",
+                Integer.class, t.classroomId());
+        assertThat(rows).isEqualTo(2);
     }
 
     // ---------- HTTP contract ----------
