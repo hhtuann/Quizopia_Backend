@@ -102,23 +102,24 @@ public class AttemptService {
      * the server-authorized state for ONE session without starting an
      * attempt and without side effects (no locks, no lazy-open).
      *
-     * <p>Policy mirrors {@link #startAttempt} exactly: permission
-     * EXAM_SESSION_READ → 404 when the session does not exist → 403
-     * ATTEMPT_NOT_ELIGIBLE when the user is not eligible (BLOCKED, or
-     * CLASS_RESTRICTED without an assigned-classroom/ACTIVE-workspace
-     * membership). Eligible users get the same learner-safe fields the
-     * discovery listing exposes, plus a landing {@code state} (START /
+     * <p>Policy mirrors {@link #startAttempt} exactly: permissions
+     * EXAM_SESSION_READ + ATTEMPT_START (callers without the start
+     * capability, e.g. ACADEMIC_ADMIN, get 403 ATTEMPT_ACCESS_DENIED) → 404
+     * when the session does not exist → 403 ATTEMPT_NOT_ELIGIBLE when the
+     * user is not eligible (BLOCKED, or CLASS_RESTRICTED without an
+     * assigned-classroom/ACTIVE-workspace membership). Eligible users get the
+     * same learner-safe fields the discovery listing exposes, plus a landing
      * RESUME / NOT_YET_STARTED / NO_ATTEMPTS_LEFT / ATTEMPT_EXPIRED /
      * ENDED). A shareable URL is never permission: every rule of
      * {@code startAttempt} still applies when the user actually starts.
      */
     @Transactional(readOnly = true)
     public SessionEligibilityResponse getSessionEligibility(Long userId, Long sessionId) {
-        auth.requireLearnerWithPermission(userId, "EXAM_SESSION_READ");
         // TL D-BE-01: the pre-flight must not promise a start the caller
         // cannot perform — require the same capability startAttempt does
-        // (ACADEMIC_ADMIN holds EXAM_SESSION_READ but not ATTEMPT_START).
-        auth.requireLearnerWithPermission(userId, "ATTEMPT_START");
+        // (ACADEMIC_ADMIN holds EXAM_SESSION_READ but not ATTEMPT_START),
+        // resolved in ONE permission fetch.
+        auth.requireLearnerWithPermissions(userId, "EXAM_SESSION_READ", "ATTEMPT_START");
         Instant now = Instant.now(clock);
 
         ExamSession session = sessionRepo.findById(sessionId)
