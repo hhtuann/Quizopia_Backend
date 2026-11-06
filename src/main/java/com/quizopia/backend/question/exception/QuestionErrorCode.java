@@ -13,7 +13,6 @@ public enum QuestionErrorCode {
     QUESTION_BANK_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this question bank resource"),
     QUESTION_SUBJECT_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Subject does not belong to the caller's school"),
     QUESTION_SUBJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "Subject not found"),
-    QUESTION_TEACHER_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "Teacher profile not found for the current user"),
     QUESTION_BANK_NOT_FOUND(HttpStatus.NOT_FOUND, "Question bank not found"),
     QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Question not found"),
     QUESTION_BANK_CODE_CONFLICT(HttpStatus.CONFLICT, "Question bank code already exists for this owner"),
@@ -28,7 +27,9 @@ public enum QuestionErrorCode {
     QUESTION_IMPORT_INVALID_CORRECT_ANSWERS(HttpStatus.BAD_REQUEST, "Invalid correct answers"),
     QUESTION_IMPORT_INVALID_TRUE_FALSE_MATRIX(HttpStatus.BAD_REQUEST, "Invalid true/false matrix"),
     QUESTION_IMPORT_INVALID_NUMERIC_ANSWER(HttpStatus.BAD_REQUEST, "Invalid numeric answer"),
-    QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED(HttpStatus.BAD_REQUEST, "Rounding instruction is required for numeric questions");
+    QUESTION_IMPORT_ROUNDING_INSTRUCTION_REQUIRED(HttpStatus.BAD_REQUEST, "Rounding instruction is required for numeric questions"),
+    QUESTION_IMPORT_MARKDOWN_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "The Markdown source exceeds the size limit"),
+    QUESTION_IMPORT_MARKDOWN_TOO_MANY_QUESTIONS(HttpStatus.PAYLOAD_TOO_LARGE, "The Markdown source exceeds the maximum question count");
 
     private final HttpStatusCode status;
     private final String defaultMessage;

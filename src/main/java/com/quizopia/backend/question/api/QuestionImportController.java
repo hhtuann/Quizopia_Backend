@@ -1,6 +1,10 @@
 package com.quizopia.backend.question.api;
 
+import com.quizopia.backend.question.application.MarkdownQuestionImportService;
 import com.quizopia.backend.question.application.QuestionImportService;
+import com.quizopia.backend.question.domain.markdown.QuizMarkdownParseResult;
+import com.quizopia.backend.question.domain.markdown.QuizMarkdownParser;
+import com.quizopia.backend.question.dto.ImportMarkdownRequest;
 import com.quizopia.backend.question.dto.ImportResponse;
 import com.quizopia.backend.question.dto.ImportResult;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
@@ -16,8 +20,9 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
@@ -38,10 +43,10 @@ import java.util.Locale;
  * the row errors in the body; only hard pre-conditions (auth, file metadata,
  * unrecoverable structure) return 4xx.
  */
-// NOTE: no class-level @RequestMapping. The two endpoints live under DIFFERENT
+// NOTE: no class-level @RequestMapping. The three endpoints live under DIFFERENT
 // base paths (/api/questions and /api/question-banks), so each method carries
 // its own full-path mapping. Keeping them in ONE controller lets the scoped
-// QuestionImportHttpExceptionHandler cover both.
+// QuestionImportHttpExceptionHandler cover all of them.
 @RestController
 public class QuestionImportController {
 
@@ -55,16 +60,20 @@ public class QuestionImportController {
 
     private final QuestionTemplateService templateService;
     private final QuestionImportService importService;
+    private final MarkdownQuestionImportService markdownImportService;
     private final ExcelQuestionParser parser;
+    /** Pure parser (P2-M1): stateless, instantiated directly like the domain intends. */
+    private final QuizMarkdownParser markdownParser = new QuizMarkdownParser();
 
     public QuestionImportController(QuestionTemplateService templateService,
             QuestionImportService importService,
+            MarkdownQuestionImportService markdownImportService,
             ExcelQuestionParser parser) {
         this.templateService = templateService;
         this.importService = importService;
+        this.markdownImportService = markdownImportService;
         this.parser = parser;
     }
-
     /**
      * Downloads the question-import Excel template.
      */
@@ -133,6 +142,64 @@ public class QuestionImportController {
 
         // Phase 3: persist (transactional; re-authorizes internally).
         ImportResponse response = importService.importParsedQuestions(userId, bankId, parseResult);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Imports questions from a Quiz Markdown document into a question bank
+     * (P2-C, issue #18). Teacher-only authoring path alongside the Excel
+     * import; the authoritative Java parser validates before any persistence.
+     *
+     * <p>
+     * Phases mirror the Excel endpoint:
+     * <ol>
+     * <li><b>Preflight auth</b> — deny-by-default workspace/creator checks
+     * before the document is parsed.</li>
+     * <li><b>Body validation</b> — blank source (400) and explicit size cap
+     * ({@link MarkdownQuestionImportService#MAX_MARKDOWN_CHARS}, 413).</li>
+     * <li><b>Parse + bank-contract preflight</b> — outside the persistence
+     * transaction. Parse errors and bank-contract violations (issue #10:
+     * MULTIPLE_CHOICE {@code >=2} correct, canonical numeric token) are
+     * returned as HTTP 200 row errors; <em>nothing is persisted</em> (the
+     * document is imported atomically or not at all).</li>
+     * <li><b>Persist</b> — the transactional service re-authorizes and
+     * persists every question in one all-or-nothing transaction.</li>
+     * </ol>
+     */
+    // No `consumes` attribute: a non-JSON body reaches argument resolution and
+    // fails message conversion there, mapped to 415 by the scoped import
+    // advice (a consumes mismatch would fail at handler mapping with no
+    // handler-scoped advice and surface as a generic 500).
+    @PostMapping("/api/question-banks/{bankId}/questions/import-markdown")
+    public ResponseEntity<ImportResponse> importMarkdownQuestions(
+            @PathVariable Long bankId,
+            @RequestBody ImportMarkdownRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        Long userId = Long.valueOf(jwt.getSubject());
+
+        // Phase 0: preflight authorization (before parsing the document).
+        markdownImportService.authorizeImportAccess(userId, bankId);
+
+        // Phase 1: body validation — explicit server-side limits.
+        String markdown = request == null ? null : request.markdown();
+        if (markdown == null || markdown.isBlank()) {
+            throw new QuestionImportHttpException(
+                    QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID,
+                    HttpStatus.BAD_REQUEST,
+                    "markdown must not be blank");
+        }
+        if (markdown.length() > MarkdownQuestionImportService.MAX_MARKDOWN_CHARS) {
+            throw new QuestionImportHttpException(
+                    QuestionErrorCode.QUESTION_IMPORT_MARKDOWN_TOO_LARGE,
+                    HttpStatus.PAYLOAD_TOO_LARGE,
+                    "Markdown source exceeds " + MarkdownQuestionImportService.MAX_MARKDOWN_CHARS + " characters");
+        }
+
+        // Phase 2: authoritative parse + bank-contract preflight (outside any tx).
+        QuizMarkdownParseResult parsed = markdownParser.parse(markdown);
+
+        // Phase 3: persist (transactional; re-authorizes internally).
+        ImportResponse response = markdownImportService.importParsedMarkdown(userId, bankId, parsed);
         return ResponseEntity.ok(response);
     }
 
