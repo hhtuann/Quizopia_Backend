@@ -160,6 +160,6 @@ class QuizMarkdownConformanceFixturesTest {
         // Kept in sync with lib/quiz-markdown/conformance/cross-language-conformance.test.ts
         // in hhtuann/quizopia_frontend.
         assertThat(hex.toString())
-                .isEqualTo("3baa1a74674b7b4b2448d6910bafd299eaa1710b60c7f0d90a2c183b8be7be03");
+                .isEqualTo("2616b851854e41ca6ca5dad97c039c80fa38c4a43bb8d975e11a6bdee6cee3a9");
     }
 }

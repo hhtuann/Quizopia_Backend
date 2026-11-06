@@ -8,12 +8,16 @@ import java.util.regex.Pattern;
 
 /** Parses the accepted Quiz Markdown structural grammar without rendering Markdown content. */
 public final class QuizMarkdownParser {
-    private static final Pattern QUESTION_HEADER = Pattern.compile("^Câu ([0-9]+) \\[([^\\]]+)]:(.*)$");
-    private static final Pattern QUESTION_HEADER_LIKE = Pattern.compile("^Câu [0-9]+(?: \\[.*)?$");
-    private static final Pattern QUESTION_NUMBER_PREFIX = Pattern.compile("^Câu ([0-9]+).*$");
+    // Bilingual structural markers (owner decision 2026-11-06: the platform
+    // UI is English, so English markers are the authored default; the
+    // original Vietnamese markers remain accepted for existing documents.
+    // Diagnostics report the SAME codes/positions for both languages.)
+    private static final Pattern QUESTION_HEADER = Pattern.compile("^(?:Câu|Question) ([0-9]+) \\[([^\\]]+)]:(.*)$");
+    private static final Pattern QUESTION_HEADER_LIKE = Pattern.compile("^(?:Câu|Question) [0-9]+(?: \\[.*)?$");
+    private static final Pattern QUESTION_NUMBER_PREFIX = Pattern.compile("^(?:Câu|Question) ([0-9]+).*$");
     private static final Pattern OPTION = Pattern.compile("^(\\*)?([A-D])\\.(.*)$");
-    private static final String ANSWER_PREFIX = "Đáp án:";
-    private static final String EXPLANATION_PREFIX = "Lời giải:";
+    private static final List<String> ANSWER_PREFIXES = List.of("Đáp án:", "Expected answer:");
+    private static final List<String> EXPLANATION_PREFIXES = List.of("Lời giải:", "Explanation:");
 
     private final QuizMarkdownValidator validator;
 
@@ -91,7 +95,7 @@ public final class QuizMarkdownParser {
                     target = ContentTarget.NONE;
                     continue;
                 }
-                current = new RawQuestion(questionNumber, header.group(1), header.group(2), line.number());
+                current = new RawQuestion(questionNumber, header.group(1), header.group(2), line.number(), header.start(1));
                 current.stem.add(contentAfterMarker(header.group(3)));
                 questions.add(current);
                 target = ContentTarget.STEM;
@@ -104,7 +108,7 @@ public final class QuizMarkdownParser {
                         malformedQuestionNumber(line.text()),
                         line.number(),
                         1,
-                        "Question header must match 'Câu <number> [<TYPE>]:'"));
+                        "Question header must match 'Câu/Question <number> [<TYPE>]:'"));
                 current = null;
                 target = ContentTarget.NONE;
                 continue;
@@ -127,7 +131,7 @@ public final class QuizMarkdownParser {
                             current.number,
                             line.number(),
                             1,
-                            "Options cannot appear after Lời giải:"));
+                            "Options cannot appear after an explanation marker"));
                 }
                 RawOption rawOption =
                         new RawOption(QuizOptionLabel.valueOf(option.group(2)), option.group(1) != null, line.number());
@@ -137,10 +141,12 @@ public final class QuizMarkdownParser {
                 continue;
             }
 
-            if (line.text().startsWith(ANSWER_PREFIX)) {
+            String answerPrefix = matchedPrefix(line.text(), ANSWER_PREFIXES);
+            if (answerPrefix != null) {
                 if (current == null) {
                     errors.add(error(
-                            "ANSWER_OUTSIDE_QUESTION", null, line.number(), 1, "Đáp án: appears before a question"));
+                            "ANSWER_OUTSIDE_QUESTION", null, line.number(), 1,
+                            "An answer marker (Đáp án:/Expected answer:) appears before a question"));
                     continue;
                 }
                 if (current.explanationSeen) {
@@ -149,7 +155,7 @@ public final class QuizMarkdownParser {
                             current.number,
                             line.number(),
                             1,
-                            "Đáp án: cannot appear after Lời giải:"));
+                            "An answer marker (Đáp án:/Expected answer:) cannot appear after an explanation marker"));
                 }
                 current.answerCount++;
                 if (current.answerCount > 1) {
@@ -158,22 +164,24 @@ public final class QuizMarkdownParser {
                             current.number,
                             line.number(),
                             1,
-                            "A question may contain only one Đáp án: marker"));
+                            "A question may contain only one answer marker (Đáp án:/Expected answer:)"));
                 }
                 current.answerLine = line.number();
-                current.answerRaw = line.text().substring(ANSWER_PREFIX.length());
+                current.answerPrefixLength = answerPrefix.length();
+                current.answerRaw = line.text().substring(answerPrefix.length());
                 target = ContentTarget.AFTER_NUMERIC_ANSWER;
                 continue;
             }
 
-            if (line.text().startsWith(EXPLANATION_PREFIX)) {
+            String explanationPrefix = matchedPrefix(line.text(), EXPLANATION_PREFIXES);
+            if (explanationPrefix != null) {
                 if (current == null) {
                     errors.add(error(
                             "EXPLANATION_OUTSIDE_QUESTION",
                             null,
                             line.number(),
                             1,
-                            "Lời giải: appears before a question"));
+                            "An explanation marker (Lời giải:/Explanation:) appears before a question"));
                     continue;
                 }
                 if (current.explanationSeen) {
@@ -182,7 +190,7 @@ public final class QuizMarkdownParser {
                             current.number,
                             line.number(),
                             1,
-                            "A question may contain at most one Lời giải: block"));
+                            "A question may contain at most one explanation marker (Lời giải:/Explanation:)"));
                     continue;
                 }
                 current.explanationSeen = true;
@@ -191,10 +199,11 @@ public final class QuizMarkdownParser {
                 current.numericAnswerCompleteAtExplanation = current.answerCount == 1
                         && current.answerRaw != null
                         && !current.answerRaw.strip().isEmpty();
-                current.explanation.add(contentAfterMarker(line.text().substring(EXPLANATION_PREFIX.length())));
+                current.explanation.add(contentAfterMarker(line.text().substring(explanationPrefix.length())));
                 target = ContentTarget.EXPLANATION;
                 continue;
             }
+
 
             if (current == null) {
                 if (!line.text().isBlank()) {
@@ -215,7 +224,7 @@ public final class QuizMarkdownParser {
                             current.number,
                             line.number(),
                             1,
-                            "Only Lời giải: or the next question may follow a NUMERIC_FILL answer"));
+                            "Only an explanation marker or the next question may follow a NUMERIC_FILL answer"));
                 }
                 continue;
             }
@@ -273,6 +282,16 @@ public final class QuizMarkdownParser {
     private static boolean looksLikeMalformedQuestionHeader(String text) {
         return QUESTION_HEADER_LIKE.matcher(text).matches()
                 && !QUESTION_HEADER.matcher(text).matches();
+    }
+
+    /** The first marker alias the line starts with, or null. */
+    private static String matchedPrefix(String line, List<String> prefixes) {
+        for (String prefix : prefixes) {
+            if (line.startsWith(prefix)) {
+                return prefix;
+            }
+        }
+        return null;
     }
 
     private static Integer malformedQuestionNumber(String text) {
@@ -387,22 +406,27 @@ public final class QuizMarkdownParser {
         final String numberToken;
         final String typeToken;
         final int headerLine;
+        /** Length of the matched header marker prefix incl. trailing space ("Câu "/"Question "). */
+        final int markerPrefixLength;
         final List<String> stem = new ArrayList<>();
         final List<RawOption> options = new ArrayList<>();
         final List<String> explanation = new ArrayList<>();
         String answerRaw;
         int answerLine;
+        /** Length of the matched answer marker ("Đáp án:"/"Expected answer:"). */
+        int answerPrefixLength;
         int answerCount;
         boolean explanationSeen;
         int explanationLine;
         boolean optionStructureCompleteAtExplanation;
         boolean numericAnswerCompleteAtExplanation;
 
-        RawQuestion(int number, String numberToken, String typeToken, int headerLine) {
+        RawQuestion(int number, String numberToken, String typeToken, int headerLine, int markerPrefixLength) {
             this.number = number;
             this.numberToken = numberToken;
             this.typeToken = typeToken;
             this.headerLine = headerLine;
+            this.markerPrefixLength = markerPrefixLength;
         }
     }
 

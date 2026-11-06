@@ -31,6 +31,73 @@ class QuizMarkdownParserTest {
 
     // ==================== Happy paths ====================
 
+    // ==================== Bilingual markers (Question/Explanation/Expected answer) ====================
+
+    @Test
+    void englishMarkers_parseWithSameStructureAndSemantics() {
+        QuizMarkdownParseResult result = parser.parse("""
+                        Question 1 [SINGLE_CHOICE]: 2 + 2?
+                        *A. 4
+                        B. 3
+                        C. 5
+                        D. 6
+                        Explanation: 2 + 2 = 4
+                        Question 2 [NUMERIC_FILL]: value?
+                        Expected answer: 2.50
+                        """);
+
+        org.assertj.core.api.Assertions.assertThat(result.isValid()).isTrue();
+        List<QuizQuestion> questions = result.content().orElseThrow().questions();
+        org.assertj.core.api.Assertions.assertThat(questions).hasSize(2);
+        org.assertj.core.api.Assertions.assertThat(questions.get(0).type()).isEqualTo(QuestionType.SINGLE_CHOICE);
+        org.assertj.core.api.Assertions.assertThat(questions.get(0).explanationMarkdown()).isEqualTo("2 + 2 = 4");
+        org.assertj.core.api.Assertions.assertThat(questions.get(1).type()).isEqualTo(QuestionType.NUMERIC_FILL);
+        org.assertj.core.api.Assertions.assertThat(questions.get(1).numericAnswer()).isEqualTo("2.50");
+    }
+
+    @Test
+    void englishMarkers_reportColumnsRelativeToEnglishPrefixLengths() {
+        // UNKNOWN_QUESTION_TYPE column: "Question " (9) + "1" + " [" → 13 (1-based).
+        QuizMarkdownParseResult result = parser.parse("Question 1 [SINGLE]: stem\n");
+        org.assertj.core.api.Assertions.assertThat(result.isValid()).isFalse();
+        QuizMarkdownError typeError = error(result, "UNKNOWN_QUESTION_TYPE");
+        org.assertj.core.api.Assertions.assertThat(typeError.line()).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(typeError.column()).isEqualTo(13);
+
+        // NUMERIC_ANSWER_INVALID column: "Expected answer:" (16) + space + 1 → 18.
+        QuizMarkdownParseResult invalidToken = parser.parse("Question 1 [NUMERIC_FILL]: v?\nExpected answer: 2,50\n");
+        org.assertj.core.api.Assertions.assertThat(invalidToken.isValid()).isFalse();
+        QuizMarkdownError tokenError = error(invalidToken, "NUMERIC_ANSWER_INVALID");
+        org.assertj.core.api.Assertions.assertThat(tokenError.line()).isEqualTo(2);
+        org.assertj.core.api.Assertions.assertThat(tokenError.column()).isEqualTo(18);
+    }
+
+    @Test
+    void mixedLanguageMarkers_areRejectedAsContentNotAliases() {
+        // "Question" header + Vietnamese explanation marker still works (aliases are per-marker),
+        // but a Vietnamese "Câu" header inside the same document is just another question header.
+        QuizMarkdownParseResult result = parser.parse("""
+                        Question 1 [SINGLE_CHOICE]: english?
+                        *A. a
+                        B. b
+                        C. c
+                        D. d
+                        Lời giải: mixed
+                        Câu 2 [SINGLE_CHOICE]: tiếng việt?
+                        *A. x
+                        B. y
+                        C. z
+                        D. w
+                        """);
+
+        org.assertj.core.api.Assertions.assertThat(result.isValid()).isTrue();
+        List<QuizQuestion> questions = result.content().orElseThrow().questions();
+        org.assertj.core.api.Assertions.assertThat(questions).hasSize(2);
+        org.assertj.core.api.Assertions.assertThat(questions.get(0).explanationMarkdown()).isEqualTo("mixed");
+        org.assertj.core.api.Assertions.assertThat(questions.get(1).number()).isEqualTo(2);
+    }
+
+
     @Test
     void parse_fourTypesWithMultilineContent_extractsFullStructure() {
         String source =

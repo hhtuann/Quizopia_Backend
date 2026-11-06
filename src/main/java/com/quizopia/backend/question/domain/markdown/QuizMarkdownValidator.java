@@ -71,7 +71,7 @@ final class QuizMarkdownValidator {
                             question.number,
                             question.answerLine,
                             1,
-                            "Đáp án: is valid only for NUMERIC_FILL"));
+                            "An answer marker (Đáp án:/Expected answer:) is valid only for NUMERIC_FILL"));
                 }
             }
 
@@ -220,7 +220,7 @@ final class QuizMarkdownValidator {
                     question.number,
                     question.headerLine,
                     1,
-                    "NUMERIC_FILL requires Đáp án: <token> on the same line"));
+                    "NUMERIC_FILL requires an answer marker (Đáp án:/Expected answer:) <token> on the same line"));
             return;
         }
         String token = question.answerRaw.strip();
@@ -229,7 +229,7 @@ final class QuizMarkdownValidator {
                     "NUMERIC_ANSWER_INVALID",
                     question.number,
                     question.answerLine,
-                    answerColumn(question.answerRaw),
+                    answerColumn(question.answerRaw, question.answerPrefixLength),
                     "Numeric answer must be exactly four ASCII characters and follow the accepted '-' and '.' rules"));
         }
     }
@@ -248,22 +248,23 @@ final class QuizMarkdownValidator {
                     question.number,
                     question.explanationLine,
                     1,
-                    "Lời giải: may appear only after the complete answer structure"));
+                    "An explanation marker may appear only after the complete answer structure"));
         }
     }
 
     private static int typeColumn(RawQuestion question) {
-        // Raw digit token length: "Câu 007" must report the column where the
-        // type token actually starts, not the normalized integer's length.
-        return "Câu ".length() + question.numberToken.length() + 3;
+        // Raw digit token length: "Câu/Question 007" must report the column
+        // where the type token actually starts — computed from the ACTUAL
+        // matched marker prefix, not the normalized integer's length.
+        return question.markerPrefixLength + question.numberToken.length() + 3;
     }
 
-    private static int answerColumn(String rawSuffix) {
+    private static int answerColumn(String rawSuffix, int answerPrefixLength) {
         int leadingWhitespace = 0;
         while (leadingWhitespace < rawSuffix.length() && Character.isWhitespace(rawSuffix.charAt(leadingWhitespace))) {
             leadingWhitespace++;
         }
-        return "Đáp án:".length() + leadingWhitespace + 1;
+        return answerPrefixLength + leadingWhitespace + 1;
     }
 
     private static String markdown(List<String> lines) {
