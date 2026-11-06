@@ -77,6 +77,10 @@ class QuestionImportApiIntegrationTests {
         @Autowired
         private TeacherProfileRepository teacherRepo;
         @Autowired
+        private com.quizopia.backend.question.application.QuestionBankService bankService;
+        @Autowired
+        private com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
+        @Autowired
         private QuestionBankRepository bankRepo;
         @Autowired
         private QuestionRepository questionRepo;
@@ -131,6 +135,10 @@ class QuestionImportApiIntegrationTests {
                 // Detach trigger-filled fixtures so request-scoped loads see the
                 // persisted ownership (transitional ownership fill, ADR-001 §2.2).
                 em.clear();
+
+                // Lazily provision the org workspace + ACTIVE EDITOR membership
+                // (P2-C workspace resource-manage boundary).
+                organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
         }
 
         @AfterEach
@@ -149,6 +157,11 @@ class QuestionImportApiIntegrationTests {
                 jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
                 jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
                 jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
+                // Personal workspaces provisioned by the no-profile tests own
+                // FK rows referencing the test users — remove them first.
+                jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')))");
+                jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')))");
+                jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
                 jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')");
         }
 
@@ -381,7 +394,7 @@ class QuestionImportApiIntegrationTests {
         }
 
         @Test
-        void teacherWithoutProfile_returns404() throws Exception {
+        void teacherWithoutProfileOnForeignBank_returns403() throws Exception {
                 User teacherNoProfile = userRepo.saveAndFlush(
                                 new User("api-import-notp", "aintp@test.com", "hash", "API Import No TP"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
@@ -390,8 +403,28 @@ class QuestionImportApiIntegrationTests {
                 mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
                                 .file(xlsxPart(validSingleChoiceBytes()))
                                 .with(jwtFor(teacherNoProfile.getId())))
-                                .andExpect(status().isNotFound())
-                                .andExpect(jsonPath("$.code").value("QUESTION_TEACHER_PROFILE_NOT_FOUND"));
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
+        }
+
+        @Test
+        void teacherWithoutProfileOnOwnPersonalBank_importsSuccessfully() throws Exception {
+                // P2-C (issue #18 audit): self-upgraded TEACHER without a
+                // TeacherProfile can import into their personal-workspace bank.
+                User teacherNoProfile = userRepo.saveAndFlush(
+                                new User("api-import-notp", "aintp@test.com", "hash", "API Import No TP"));
+                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherNoProfile.getId());
+                Long personalBankId = bankService.createBank(teacherNoProfile.getId(),
+                                new com.quizopia.backend.question.dto.CreateQuestionBankRequest(
+                                                null, "API-IMP-PERSONAL", "Personal", null, null))
+                                .id();
+
+                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", personalBankId)
+                                .file(xlsxPart(validSingleChoiceBytes()))
+                                .with(jwtFor(teacherNoProfile.getId())))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.importedRows").value(1));
         }
 
         @Test
@@ -404,6 +437,8 @@ class QuestionImportApiIntegrationTests {
                                 new TeacherProfile(other.getId(), schoolId, "TC-API-OTHER"));
                 QuestionBank otherBank = bankRepo.saveAndFlush(new QuestionBank(
                                 schoolId, subjectId, otherTp.getId(), "OTHER-API-BANK", "Other API Bank"));
+                // Detach trigger-filled ownership so the guard sees the persisted creator.
+                em.clear();
 
                 // First teacher importing into second teacher's bank.
                 mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", otherBank.getId())
