@@ -205,6 +205,37 @@ class SessionEligibilityIntegrationTests {
     // Lifecycle / window / quota states (safe actionable UI)
     // ============================================================
 
+    @Test
+    void readCapabilityWithoutStart_academicAdmin_returns403() throws Exception {
+        // TL D-BE-01: ACADEMIC_ADMIN holds EXAM_SESSION_READ but NOT
+        // ATTEMPT_START — the pre-flight must deny instead of promising a
+        // CAN_START the caller cannot perform.
+        long admin = insert("INSERT INTO users (username, email, password_hash, display_name) "
+                + "VALUES ('sel-aa','sel-aa@t.com','h','Academic Admin')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                + "SELECT ?, id FROM roles WHERE code = 'ACADEMIC_ADMIN'", admin);
+
+        mockMvc.perform(get(ENDPOINT, publicSessionId).with(jwtFor(admin)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
+    }
+
+    @Test
+    void teacherRole_holdsAttemptStart_canStart() throws Exception {
+        // TEACHER-only learner (V16 dual capability): eligible + actionable.
+        long teacher = insert("INSERT INTO users (username, email, password_hash, display_name) "
+                + "VALUES ('sel-tc','sel-tc@t.com','h','Teacher Only')");
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacher);
+
+        mockMvc.perform(get(ENDPOINT, publicSessionId).with(jwtFor(teacher)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("CAN_START"))
+                .andExpect(jsonPath("$.canStartNow").value(true));
+    }
+    // Lifecycle / window / quota states (safe actionable UI)
+    // ============================================================
+
 
     @Test
     void draftSession_deniedWithoutMetadata() throws Exception {

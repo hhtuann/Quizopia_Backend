@@ -115,6 +115,10 @@ public class AttemptService {
     @Transactional(readOnly = true)
     public SessionEligibilityResponse getSessionEligibility(Long userId, Long sessionId) {
         auth.requireLearnerWithPermission(userId, "EXAM_SESSION_READ");
+        // TL D-BE-01: the pre-flight must not promise a start the caller
+        // cannot perform — require the same capability startAttempt does
+        // (ACADEMIC_ADMIN holds EXAM_SESSION_READ but not ATTEMPT_START).
+        auth.requireLearnerWithPermission(userId, "ATTEMPT_START");
         Instant now = Instant.now(clock);
 
         ExamSession session = sessionRepo.findById(sessionId)
