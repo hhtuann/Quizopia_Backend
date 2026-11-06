@@ -69,6 +69,33 @@ class ExamSessionControllerIntegrationTests {
     }
 
     @Test
+    void createSessionViaNestedRouteWithoutBodyExamIdReturns201() throws Exception {
+        // The frontend posts to /api/exams/{examId}/sessions WITHOUT examId in
+        // the body (the path is authoritative) — regression for the contract
+        // mismatch that 400-rejected every UI session creation.
+        Long examId = createPublishedExam("EXN");
+        Instant starts = Instant.now().plusSeconds(3600);
+        Instant ends = starts.plusSeconds(7200);
+        mockMvc.perform(post("/api/exams/" + examId + "/sessions")
+                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Ca thi cuoi ky - Lap trinh Java\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1,\"durationMinutes\":90,\"visibility\":\"CLASS_RESTRICTED\",\"classroomIds\":[]}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.title").value("Ca thi cuoi ky - Lap trinh Java"));
+    }
+
+    @Test
+    void createSessionWithoutAnyExamIdReturns400() throws Exception {
+        Instant starts = Instant.now().plusSeconds(3600);
+        Instant ends = starts.plusSeconds(7200);
+        mockMvc.perform(post("/api/exam-sessions")
+                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"No exam\",\"startsAt\":\"" + starts + "\",\"endsAt\":\"" + ends + "\",\"maxAttempts\":1}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void listMySessionsReturns200() throws Exception {
         Long examId = createPublishedExam("EX2");
         createSession(examId, "L1");
