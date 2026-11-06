@@ -8,6 +8,7 @@ import com.quizopia.backend.attempt.dto.AvailableSessionsResponse;
 import com.quizopia.backend.attempt.dto.AvailableSessionsResponse.AvailableSessionItem;
 import com.quizopia.backend.attempt.dto.AvailableSessionsResponse.AvailableSessionItem.ExamInfo;
 import com.quizopia.backend.attempt.dto.StartAttemptRequest;
+import com.quizopia.backend.attempt.dto.SessionEligibilityResponse;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse.QuestionView;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse.QuestionView.OptionView;
@@ -25,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
+import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,7 +40,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Application service for the attempt module: available-sessions query +
@@ -95,6 +96,88 @@ public class AttemptService {
         List<AvailableSessionItem> items = queryAvailable(userId, now);
         return new AvailableSessionsResponse(items, now);
     }
+
+    /**
+     * Participant pre-flight for a shared session link (P2-D, issue #20):
+     * the server-authorized state for ONE session without starting an
+     * attempt and without side effects (no locks, no lazy-open).
+     *
+     * <p>Policy mirrors {@link #startAttempt} exactly: permissions
+     * EXAM_SESSION_READ + ATTEMPT_START (callers without the start
+     * capability, e.g. ACADEMIC_ADMIN, get 403 ATTEMPT_ACCESS_DENIED) → 404
+     * when the session does not exist → 403 ATTEMPT_NOT_ELIGIBLE when the
+     * user is not eligible (BLOCKED, or CLASS_RESTRICTED without an
+     * assigned-classroom/ACTIVE-workspace membership). Eligible users get the
+     * same learner-safe fields the discovery listing exposes, plus a landing
+     * RESUME / NOT_YET_STARTED / NO_ATTEMPTS_LEFT / ATTEMPT_EXPIRED /
+     * ENDED). A shareable URL is never permission: every rule of
+     * {@code startAttempt} still applies when the user actually starts.
+     */
+    @Transactional(readOnly = true)
+    public SessionEligibilityResponse getSessionEligibility(Long userId, Long sessionId) {
+        // TL D-BE-01: the pre-flight must not promise a start the caller
+        // cannot perform — require the same capability startAttempt does
+        // (ACADEMIC_ADMIN holds EXAM_SESSION_READ but not ATTEMPT_START),
+        // resolved in ONE permission fetch.
+        auth.requireLearnerWithPermissions(userId, "EXAM_SESSION_READ", "ATTEMPT_START");
+        Instant now = Instant.now(clock);
+
+        ExamSession session = sessionRepo.findById(sessionId)
+                .orElseThrow(() -> new AttemptException(AttemptErrorCode.EXAM_SESSION_NOT_FOUND));
+        // DRAFT sessions are invisible to discovery; the eligibility pre-flight
+        // must not become a metadata oracle for them either.
+        if (session.getStatus() == ExamSessionStatus.DRAFT
+                || !isEligible(userId, session)) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_NOT_ELIGIBLE);
+        }
+
+        Integer used = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE exam_session_id = ? AND user_id = ?",
+                Integer.class, sessionId, userId);
+        int attemptsUsed = used == null ? 0 : used;
+        int maxAttempts = session.getMaxAttempts();
+        int remaining = maxAttempts == 0 ? Integer.MAX_VALUE : Math.max(0, maxAttempts - attemptsUsed);
+
+        Optional<Attempt> active = attemptRepo.findByExamSessionIdAndUserIdAndStatus(
+                sessionId, userId, AttemptStatus.IN_PROGRESS);
+        Long activeId = active.map(Attempt::getId).orElse(null);
+        Instant activeDeadline = active.map(Attempt::getDeadlineAt).orElse(null);
+
+        boolean canResume = activeId != null && activeDeadline != null && !now.isAfter(activeDeadline);
+        boolean canStartNow = activeId == null
+                && (session.getStatus() == ExamSessionStatus.OPEN
+                        || session.getStatus() == ExamSessionStatus.SCHEDULED)
+                && !now.isBefore(session.getStartsAt()) && !now.isAfter(session.getEndsAt())
+                && remaining > 0;
+
+        String state;
+        if (session.getStatus() == ExamSessionStatus.CLOSED
+                || session.getStatus() == ExamSessionStatus.CANCELLED
+                || now.isAfter(session.getEndsAt())) {
+            state = SessionEligibilityResponse.STATE_ENDED;
+        } else if (activeId != null && !canResume) {
+            state = SessionEligibilityResponse.STATE_ATTEMPT_EXPIRED;
+        } else if (activeId != null) {
+            state = SessionEligibilityResponse.STATE_CAN_RESUME;
+        } else if (now.isBefore(session.getStartsAt())) {
+            state = SessionEligibilityResponse.STATE_NOT_YET_STARTED;
+        } else if (remaining == 0) {
+            state = SessionEligibilityResponse.STATE_NO_ATTEMPTS_LEFT;
+        } else {
+            state = SessionEligibilityResponse.STATE_CAN_START;
+        }
+
+        String examTitle = jdbc.queryForObject(
+                "SELECT title FROM exams WHERE id = ?", String.class, session.getExamId());
+
+        return new SessionEligibilityResponse(
+                session.getId(), state, session.getStatus().name(),
+                session.getTitle(), examTitle, session.getVisibility().name(),
+                session.getStartsAt(), session.getEndsAt(), session.getDurationMinutes(),
+                maxAttempts, attemptsUsed, remaining, activeId, activeDeadline,
+                canStartNow, canResume, now);
+    }
+
 
     private List<AvailableSessionItem> queryAvailable(Long userId, Instant now) {
         // Visibility (issue #1 A4 + #4 P0-R2): PUBLIC = platform users;
