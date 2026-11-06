@@ -39,6 +39,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -97,6 +98,16 @@ class MarkdownQuestionImportServiceIntegrationTests {
     @Autowired
     private ExamService examService;
     @Autowired
+    private com.quizopia.backend.exam.application.ExamSessionService sessionService;
+    @Autowired
+    private com.quizopia.backend.attempt.application.AttemptService attemptService;
+    @Autowired
+    private com.quizopia.backend.attempt.application.AttemptAutosaveService autosaveService;
+    @Autowired
+    private com.quizopia.backend.attempt.application.AttemptSubmitService submitService;
+    @Autowired
+    private com.quizopia.backend.attempt.application.AttemptResultService attemptResultService;
+    @Autowired
     private UserRepository userRepo;
     @Autowired
     private SchoolRepository schoolRepo;
@@ -141,6 +152,15 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @AfterEach
     void cleanupCommittedTestData() {
+        // The grading leg of the round trip writes attempt/grade rows that
+        // FK the exam questions — child-first.
+        jdbc.update("DELETE FROM grade_items");
+        jdbc.update("DELETE FROM grades");
+        jdbc.update("DELETE FROM attempt_answers");
+        jdbc.update("DELETE FROM attempt_questions");
+        jdbc.update("DELETE FROM idempotency_records");
+        jdbc.update("DELETE FROM attempts");
+        jdbc.update("DELETE FROM exam_sessions WHERE code = 'MD-GR-SES'");
         jdbc.update("DELETE FROM exam_question_options");
         jdbc.update("DELETE FROM exam_questions");
         jdbc.update("DELETE FROM exam_sections");
@@ -443,7 +463,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
     // ============================================================
 
     @Test
-    void roundTrip_importEditPublish() {
+    void roundTrip_importEditPublishGrade() {
         Long bankId = createOrgBank();
         ImportResponse imported = importDoc(teacherUserId, bankId, FOUR_TYPES_DOC);
         assertThat(imported.importedRows()).isEqualTo(4);
@@ -493,6 +513,67 @@ class MarkdownQuestionImportServiceIntegrationTests {
         assertThat(jdbc.queryForObject(
                 "SELECT content FROM exam_questions WHERE source_question_id = ?",
                 String.class, ids.get(0))).isEqualTo("Edited stem (2+2)?");
+
+        // --- #10 acceptance: GRADE a real attempt that uses the imported
+        // numeric answer key (exact String equality per Grader). The teacher
+        // account holds ATTEMPT_START (V16 dual capability), so the same user
+        // authors and attempts. Attempt 1 answers "2.50" (correct); attempt 2
+        // answers "9.99" (wrong) — the imported `-.50`/`2,50` shapes were
+        // rejected at import and are separately pinned above.
+        Long sessionId = sessionService.createSession(teacherUserId, examId,
+                        new com.quizopia.backend.exam.dto.CreateExamSessionRequest(
+                                        examId, "MD-GR-SES", "MD Grade Session",
+                                        Instant.now().minusSeconds(60),
+                                        Instant.now().plusSeconds(3600),
+                                        2, 30,
+                                        com.quizopia.backend.exam.domain.model.SessionVisibility.PUBLIC,
+                                        null))
+                        .id();
+        sessionService.scheduleSession(teacherUserId, examId, sessionId);
+
+        // Attempt 1: correct numeric answer.
+        var start1 = attemptService.startAttempt(teacherUserId, sessionId,
+                        new com.quizopia.backend.attempt.dto.StartAttemptRequest(null));
+        var numericQ = start1.questions().stream()
+                        .filter(q -> "NUMERIC_FILL".equals(q.questionType()))
+                        .findFirst().orElseThrow();
+        var correctPayload = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readTree("{\"value\":\"2.50\"}");
+        autosaveService.saveAnswer(teacherUserId, start1.attemptId(),
+                        new com.quizopia.backend.attempt.dto.SaveAnswerRequest(
+                                        numericQ.attemptQuestionId(), null, correctPayload, 1, null));
+        var submit1 = submitService.submitAttempt(teacherUserId, start1.attemptId(),
+                        new com.quizopia.backend.attempt.dto.SubmitRequest("md-grade-1"));
+        assertThat(submit1.status()).isEqualTo("SUBMITTED");
+
+        var result1 = attemptResultService.getAttemptResult(teacherUserId, start1.attemptId());
+        var numericResult1 = result1.questionResults().stream()
+                        .filter(qr -> qr.attemptQuestionId() == numericQ.attemptQuestionId())
+                        .findFirst().orElseThrow();
+        assertThat(numericResult1.correct()).isTrue();
+        assertThat(numericResult1.awardedScore()).isEqualByComparingTo("1.00");
+        assertThat(result1.maxScore()).isEqualByComparingTo("4.00");
+
+        // Attempt 2 (maxAttempts=2): wrong numeric answer — exact-match miss.
+        var start2 = attemptService.startAttempt(teacherUserId, sessionId,
+                        new com.quizopia.backend.attempt.dto.StartAttemptRequest(null));
+        var numericQ2 = start2.questions().stream()
+                        .filter(q -> "NUMERIC_FILL".equals(q.questionType()))
+                        .findFirst().orElseThrow();
+        var wrongPayload = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readTree("{\"value\":\"9.99\"}");
+        autosaveService.saveAnswer(teacherUserId, start2.attemptId(),
+                        new com.quizopia.backend.attempt.dto.SaveAnswerRequest(
+                                        numericQ2.attemptQuestionId(), null, wrongPayload, 1, null));
+        submitService.submitAttempt(teacherUserId, start2.attemptId(),
+                        new com.quizopia.backend.attempt.dto.SubmitRequest("md-grade-2"));
+
+        var result2 = attemptResultService.getAttemptResult(teacherUserId, start2.attemptId());
+        var numericResult2 = result2.questionResults().stream()
+                        .filter(qr -> qr.attemptQuestionId() == numericQ2.attemptQuestionId())
+                        .findFirst().orElseThrow();
+        assertThat(numericResult2.correct()).isFalse();
+        assertThat(numericResult2.awardedScore()).isEqualByComparingTo("0.00");
     }
 
     // ============================================================

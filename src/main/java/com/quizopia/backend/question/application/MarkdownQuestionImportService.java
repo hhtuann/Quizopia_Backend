@@ -199,13 +199,21 @@ public class MarkdownQuestionImportService {
         return errors;
     }
 
+    /**
+     * Maps an authoritative parser diagnostic, PRESERVING the source
+     * line/column so the Teacher UI can point at the exact Markdown location
+     * (TL finding C-BE-01). Contract findings carry the question number only
+     * and keep {@code line}/{@code column} null.
+     */
     private static RowError toRowError(QuizMarkdownError error) {
         return new RowError(
                 error.questionNumber() == null ? 0 : error.questionNumber(),
                 null,
                 null,
                 error.code(),
-                error.message());
+                error.message(),
+                error.line(),
+                error.column());
     }
 
     /**

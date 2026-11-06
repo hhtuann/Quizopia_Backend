@@ -31,6 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -470,12 +471,59 @@ class MarkdownQuestionImportApiIntegrationTests {
                 .andExpect(jsonPath("$.invalidRows").value(0))
                 // Document-level diagnostics carry rowNumber 0 (order among
                 // them follows parser emission) and are NOT counted as
-                // rejected questions.
+                // rejected questions. Source line/column are preserved
+                // verbatim from the authoritative parser (C-BE-01).
                 .andExpect(jsonPath("$.errors.length()").value(2))
                 .andExpect(jsonPath("$.errors[0].rowNumber").value(0))
+                .andExpect(jsonPath("$.errors[0].line").value(1))
+                .andExpect(jsonPath("$.errors[0].column").value(1))
                 .andExpect(jsonPath("$.errors[?(@.code == 'NO_QUESTIONS')]").exists())
                 .andExpect(jsonPath("$.errors[?(@.rowNumber > 0)]").isEmpty());
 
         assertThat(questionCount()).isZero();
+    }
+
+    @Test
+    void parserDiagnostics_preserveExactSourceLineAndColumn() throws Exception {
+        // Verbatim conformance-fixture document `numeric-token-too-long`:
+        // the invalid token is anchored at line 2, column 11.
+        String doc = "Câu 1 [NUMERIC_FILL]: v?\nĐáp án:   12345\n";
+
+        mockMvc.perform(post(ENDPOINT, bankId)
+                        .with(jwtFor(teacherUserId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonBody(doc)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.importedRows").value(0))
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].code").value("NUMERIC_ANSWER_INVALID"))
+                .andExpect(jsonPath("$.errors[0].rowNumber").value(1))
+                .andExpect(jsonPath("$.errors[0].line").value(2))
+                .andExpect(jsonPath("$.errors[0].column").value(11));
+
+        assertThat(questionCount()).isZero();
+    }
+
+    @Test
+    void bankContractErrors_haveNoSourceCoordinatesButKeepQuestionNumber() throws Exception {
+        // Contract findings are keyed by question number; the parser never
+        // emits them, so line/column stay null (C-BE-01: both shapes explicit).
+        String doc = """
+                Câu 1 [MULTIPLE_CHOICE]: one star.
+                *A. one
+                B. two
+                C. three
+                D. four
+                """;
+
+        mockMvc.perform(post(ENDPOINT, bankId)
+                        .with(jwtFor(teacherUserId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonBody(doc)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.errors.length()").value(1))
+                .andExpect(jsonPath("$.errors[0].rowNumber").value(1))
+                .andExpect(jsonPath("$.errors[0].line").value(nullValue()))
+                .andExpect(jsonPath("$.errors[0].column").value(nullValue()));
     }
 }
