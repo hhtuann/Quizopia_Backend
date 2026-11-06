@@ -1,10 +1,13 @@
 package com.quizopia.backend.question.api;
 
 import com.quizopia.backend.question.application.MarkdownQuestionImportService;
+import com.quizopia.backend.question.dto.ExcelImportPreviewResponse;
+import com.quizopia.backend.question.dto.ValidQuestionRow;
 import com.quizopia.backend.question.application.QuestionImportService;
 import com.quizopia.backend.question.domain.markdown.QuizMarkdownParseResult;
 import com.quizopia.backend.question.domain.markdown.QuizMarkdownParser;
 import com.quizopia.backend.question.dto.ImportMarkdownRequest;
+import com.quizopia.backend.question.dto.RowError;
 import com.quizopia.backend.question.dto.ImportResponse;
 import com.quizopia.backend.question.dto.ImportResult;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
@@ -26,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -143,6 +147,94 @@ public class QuestionImportController {
         // Phase 3: persist (transactional; re-authorizes internally).
         ImportResponse response = importService.importParsedQuestions(userId, bankId, parseResult);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Read-only preview of an Excel question-import workbook (P2-C UX):
+     * the authoritative parser runs, NOTHING is persisted. Same auth as the
+     * import itself (deny-by-default) and the same file-metadata validation;
+     * the response mirrors what the import would write/reject per row.
+     */
+    @PostMapping(value = "/api/question-banks/{bankId}/questions/import-preview",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ExcelImportPreviewResponse> previewQuestions(
+            @PathVariable Long bankId,
+            @RequestPart("file") MultipartFile file,
+            @AuthenticationPrincipal Jwt jwt) {
+
+        Long userId = Long.valueOf(jwt.getSubject());
+
+        importService.authorizeImportAccess(userId, bankId);
+        validateFileMetadata(file);
+
+        ImportResult parseResult;
+        try (InputStream in = file.getInputStream()) {
+            parseResult = parser.parse(in);
+        } catch (QuestionException qe) {
+            throw qe;
+        } catch (Exception e) {
+            throw new QuestionImportHttpException(
+                    QuestionErrorCode.QUESTION_IMPORT_FILE_INVALID,
+                    HttpStatus.BAD_REQUEST,
+                    "Failed to read uploaded file");
+        }
+
+        return ResponseEntity.ok(buildPreview(parseResult));
+    }
+
+    /** Maps the parse result into per-sheet-row preview rows (no persistence). */
+    private static ExcelImportPreviewResponse buildPreview(ImportResult parseResult) {
+        var byRow = new java.util.HashMap<Integer, List<RowError>>();
+        for (RowError error : parseResult.errors()) {
+            byRow.computeIfAbsent(error.rowNumber(), k -> new java.util.ArrayList<>()).add(error);
+        }
+
+        var rows = new java.util.ArrayList<ExcelImportPreviewResponse.PreviewRow>();
+        for (ValidQuestionRow valid : parseResult.validRows()) {
+            rows.add(new ExcelImportPreviewResponse.PreviewRow(
+                    valid.rowNumber(),
+                    valid.questionType().name(),
+                    valid.content(),
+                    correctAnswersOf(valid),
+                    ExcelImportPreviewResponse.PreviewRow.STATUS_READY,
+                    List.of()));
+        }
+        for (var entry : byRow.entrySet()) {
+            if (entry.getKey() == 0) {
+                continue; // document-level errors have no sheet row
+            }
+            boolean hasValid = parseResult.validRows().stream()
+                    .anyMatch(v -> v.rowNumber() == entry.getKey());
+            if (hasValid) {
+                continue; // a row is either valid or erroneous, never both
+            }
+            rows.add(new ExcelImportPreviewResponse.PreviewRow(
+                    entry.getKey(),
+                    null,
+                    null,
+                    List.of(),
+                    ExcelImportPreviewResponse.PreviewRow.STATUS_INVALID,
+                    entry.getValue().stream().map(RowError::message).toList()));
+        }
+        rows.sort(java.util.Comparator.comparingInt(ExcelImportPreviewResponse.PreviewRow::rowNumber));
+
+        return new ExcelImportPreviewResponse(
+                parseResult.totalRows(), parseResult.validRows().size(), rows);
+    }
+
+    private static List<String> correctAnswersOf(ValidQuestionRow row) {
+        if (row.questionType() == com.quizopia.backend.question.domain.model.QuestionType.NUMERIC_FILL) {
+            return row.expectedAnswer() == null ? List.of() : List.of(row.expectedAnswer());
+        }
+        if (row.questionType() == com.quizopia.backend.question.domain.model.QuestionType.TRUE_FALSE_MATRIX) {
+            var answers = new java.util.ArrayList<String>();
+            row.statements().keySet().stream().sorted().forEach(key -> {
+                Boolean answer = row.statementAnswers().get(key);
+                answers.add(key + "=" + (Boolean.TRUE.equals(answer) ? "T" : "F"));
+            });
+            return answers;
+        }
+        return row.correctAnswers().stream().sorted().toList();
     }
 
     /**
