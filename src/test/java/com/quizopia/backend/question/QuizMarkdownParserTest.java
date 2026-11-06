@@ -73,7 +73,7 @@ class QuizMarkdownParserTest {
     }
 
     @Test
-    void mixedLanguageMarkers_areRejectedAsContentNotAliases() {
+    void mixedLanguageMarkers_areAcceptedAsPerMarkerAliases() {
         // "Question" header + Vietnamese explanation marker still works (aliases are per-marker),
         // but a Vietnamese "Câu" header inside the same document is just another question header.
         QuizMarkdownParseResult result = parser.parse("""
