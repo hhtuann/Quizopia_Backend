@@ -18,4 +18,7 @@ public interface OauthLoginCodeRepository extends JpaRepository<OauthLoginCode, 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from OauthLoginCode c where c.codeHash = :codeHash")
     Optional<OauthLoginCode> findForUpdateByCodeHash(@Param("codeHash") String codeHash);
+
+    @Query("select c.user.id from OauthLoginCode c where c.codeHash = :codeHash")
+    Optional<Long> findUserIdByCodeHash(@Param("codeHash") String codeHash);
 }

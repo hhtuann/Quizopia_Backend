@@ -59,6 +59,9 @@ class GoogleLinkIntegrationTests extends AbstractAuthenticationIntegrationTests 
     private AtomicReference<String> nextIdToken;
 
     @Autowired
+    private AtomicReference<Runnable> exchangeHook;
+
+    @Autowired
     private GoogleLinkService googleLinkService;
 
     @Autowired
@@ -93,8 +96,13 @@ class GoogleLinkIntegrationTests extends AbstractAuthenticationIntegrationTests 
 
         @Bean
         @org.springframework.context.annotation.Primary
-        TokenExchangeClient testTokenExchangeClient(AtomicReference<String> nextIdToken) {
+        TokenExchangeClient testTokenExchangeClient(AtomicReference<String> nextIdToken,
+                AtomicReference<Runnable> exchangeHook) {
             return (code, verifier, redirectUri) -> {
+                Runnable hook = exchangeHook.getAndSet(null);
+                if (hook != null) {
+                    hook.run();
+                }
                 String token = nextIdToken.get();
                 if (token == null) {
                     throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
@@ -107,6 +115,11 @@ class GoogleLinkIntegrationTests extends AbstractAuthenticationIntegrationTests 
         AtomicReference<String> nextIdToken() {
             return new AtomicReference<>();
         }
+
+        @Bean
+        AtomicReference<Runnable> exchangeHook() {
+            return new AtomicReference<>();
+        }
     }
 
     @Autowired
@@ -114,6 +127,32 @@ class GoogleLinkIntegrationTests extends AbstractAuthenticationIntegrationTests 
 
     @Autowired
     private OAuthProperties oauthProperties;
+
+    @Test
+    void emailChangeDuringProviderExchangeRejectsOriginalAddressProof() throws Exception {
+        User user = verifiedStudent("address" + UUID.randomUUID().toString().substring(0, 8));
+        Started started = startLinkFor(user, "Passw0rd!");
+        armIdToken(started.nonce(), user.getEmail());
+        exchangeHook.set(() -> jdbc.update(
+                "update users set email = ?, email_verified_at = null where id = ?",
+                UUID.randomUUID() + "@example.com", user.getId()));
+        AuthenticationException error = catchThrowableOfType(
+                () -> googleLinkService.completeLink("provider-code", started.state()), AuthenticationException.class);
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
+        assertThat(userRepository.findById(user.getId()).orElseThrow().getEmailVerifiedAt()).isNull();
+    }
+
+    @Test
+    void credentialChangeDuringProviderExchangeRejectsOriginalLinkProof() throws Exception {
+        User user = verifiedStudent("epoch" + UUID.randomUUID().toString().substring(0, 8));
+        Started started = startLinkFor(user, "Passw0rd!");
+        armIdToken(started.nonce(), user.getEmail());
+        exchangeHook.set(() -> jdbc.update(
+                "update users set token_version = token_version + 1 where id = ?", user.getId()));
+        AuthenticationException error = catchThrowableOfType(
+                () -> googleLinkService.completeLink("provider-code", started.state()), AuthenticationException.class);
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
+    }
 
     /** Registers + verifies a student over HTTP; returns the logged-in user. */
     private User verifiedStudent(String username) throws Exception {

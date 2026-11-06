@@ -24,13 +24,18 @@ public class LogoutService {
     private final RefreshSessionRepository refreshSessionRepository;
     private final RefreshTokenHasher refreshTokenHasher;
     private final Clock clock;
+    private final CredentialSecurityService credentials;
+    private final jakarta.persistence.EntityManager entityManager;
 
     public LogoutService(RefreshSessionRepository refreshSessionRepository,
                          RefreshTokenHasher refreshTokenHasher,
-                         Clock clock) {
+                         Clock clock, CredentialSecurityService credentials,
+                         jakarta.persistence.EntityManager entityManager) {
         this.refreshSessionRepository = refreshSessionRepository;
         this.refreshTokenHasher = refreshTokenHasher;
         this.clock = clock;
+        this.credentials = credentials;
+        this.entityManager = entityManager;
     }
 
     @Transactional
@@ -39,7 +44,11 @@ public class LogoutService {
             return;
         }
         String tokenHash = refreshTokenHasher.hash(rawRefreshToken);
-        RefreshSession session = refreshSessionRepository.findByTokenHashWithUser(tokenHash).orElse(null);
+        Long userId = refreshSessionRepository.findUserIdByTokenHash(tokenHash).orElse(null);
+        if (userId == null) return;
+        credentials.lockUser(userId);
+        RefreshSession session = refreshSessionRepository.findForUpdateByTokenHashWithUser(tokenHash).orElse(null);
+        if (session != null) entityManager.refresh(session, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
         if (session == null || session.getRevokedAt() != null) {
             return;
         }

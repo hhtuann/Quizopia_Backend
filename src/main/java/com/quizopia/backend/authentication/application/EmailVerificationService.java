@@ -17,7 +17,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.Optional;
 
 /**
  * Email-verification OTP lifecycle (ADR-002 §2): issue, verify, resend.
@@ -73,6 +72,7 @@ public class EmailVerificationService {
     private final EmailVerificationProperties properties;
     private final Clock clock;
     private final TransactionTemplate tx;
+    private final CredentialSecurityService credentialSecurity;
     /** Background dispatch for the enumeration-sensitive resend path (R3-M1-03). */
     private final java.util.concurrent.Executor otpDeliveryExecutor;
     /**
@@ -90,7 +90,8 @@ EmailVerificationChallengeRepository challengeRepository,
             EmailVerificationProperties properties,
             Clock clock,
             TransactionTemplate tx,
-            java.util.concurrent.Executor otpDeliveryExecutor) {
+            java.util.concurrent.Executor otpDeliveryExecutor,
+            CredentialSecurityService credentialSecurity) {
         this.rosterReconciliation = rosterReconciliation;
         this.challengeRepository = challengeRepository;
         this.userRepository = userRepository;
@@ -100,6 +101,7 @@ EmailVerificationChallengeRepository challengeRepository,
         this.clock = clock;
         this.tx = tx;
         this.otpDeliveryExecutor = otpDeliveryExecutor;
+        this.credentialSecurity = credentialSecurity;
         this.dummyHash = otpHasher.hash("timing-equalizer");
     }
 
@@ -109,126 +111,67 @@ EmailVerificationChallengeRepository challengeRepository,
      * any wrong code fails identically whether or not the account exists.
      */
     public void verify(String email, String otp) {
-        Instant now = Instant.now(clock);
         String candidate = normalizeOtp(otp);
-        String normalizedEmail = email == null ? "" : email.trim();
-
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(normalizedEmail);
-        Optional<EmailVerificationChallenge> challengeOpt = userOpt.flatMap(user ->
-                challengeRepository.findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
-                        user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION));
-
-        if (userOpt.isEmpty() || challengeOpt.isEmpty()) {
-            // Anti-enumeration: spend the same compare time as a real lookup,
-            // then answer exactly like a wrong OTP.
+        String address = email == null ? "" : email.trim();
+        Long userId = userRepository.findIdByEmailIgnoreCase(address).orElse(null);
+        if (userId == null) {
             otpHasher.matches(candidate, dummyHash);
             throw new AuthenticationException(AuthErrorCode.AUTH_OTP_INVALID);
         }
-        User user = userOpt.get();
-        EmailVerificationChallenge challenge = challengeOpt.get();
-
-        if (!otpHasher.matches(candidate, challenge.getOtpHash())) {
-            rejectWrongOtp(user, challenge, now);
-        }
-
-        // The caller proved knowledge of the code — now the challenge state
-        // decides the outcome.
-        switch (challenge.getStatus()) {
-            case CONSUMED -> {
-                // Idempotent retry of an already-consumed correct code. The
-                // consume transaction always sets email_verified_at together
-                // with the transition, so this is a genuine success.
-                log.debug("Idempotent OTP re-verification for user {}", user.getId());
-                return;
+        AuthErrorCode failure = tx.execute(status -> {
+            User user = credentialSecurity.lockUser(userId);
+            if (!user.getEmail().trim().equalsIgnoreCase(address)) {
+                otpHasher.matches(candidate, dummyHash);
+                return AuthErrorCode.AUTH_OTP_INVALID;
             }
-            case SUPERSEDED -> throw new AuthenticationException(AuthErrorCode.AUTH_OTP_NOT_FOUND);
-            case FAILED -> throw new AuthenticationException(AuthErrorCode.AUTH_OTP_MAX_ATTEMPTS);
-            case PENDING -> {
-                if (challenge.isExpired(now)) {
-                    throw new AuthenticationException(AuthErrorCode.AUTH_OTP_EXPIRED);
+            EmailVerificationChallenge challenge = challengeRepository
+                    .findFirstForUpdateByUserIdAndPurposeOrderByCreatedAtDesc(
+                            userId, EmailChallengePurpose.ACCOUNT_VERIFICATION).orElse(null);
+            Instant now = Instant.now(clock);
+            if (challenge == null) {
+                otpHasher.matches(candidate, dummyHash);
+                return AuthErrorCode.AUTH_OTP_INVALID;
+            }
+            if (!otpHasher.matches(candidate, challenge.getOtpHash())) {
+                if (challenge.getStatus() == EmailChallengeStatus.PENDING) {
+                    challenge.incrementFailedAttempts();
+                    if (challenge.getFailedAttempts() >= properties.getMaxFailedAttempts()) {
+                        challenge.markFailed(now);
+                        return AuthErrorCode.AUTH_OTP_MAX_ATTEMPTS;
+                    }
                 }
-                consumeChallenge(user, challenge, now);
+                return AuthErrorCode.AUTH_OTP_INVALID;
             }
-        }
-    }
-
-    /**
-     * Records a wrong-OTP attempt in a transaction that COMMITS before the
-     * error surfaces (review M1-01), under the challenge row lock so
-     * concurrent wrong guesses cannot bypass the cap. The error code is
-     * re-derived from the committed state.
-     */
-    private void rejectWrongOtp(User user, EmailVerificationChallenge challenge, Instant now) {
-        if (challenge.getStatus() != EmailChallengeStatus.PENDING) {
-            // Terminal challenge + wrong code: nothing to count.
-            throw new AuthenticationException(AuthErrorCode.AUTH_OTP_INVALID);
-        }
-        // Commit the counter first; throw only afterwards.
-        tx.executeWithoutResult(status -> {
-            EmailVerificationChallenge locked = challengeRepository
-                    .findPendingForUpdate(user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                    .orElse(null);
-            if (locked == null || !locked.getId().equals(challenge.getId())) {
-                // A concurrent resend superseded it; the old challenge is no
-                // longer the live one. Nothing to count against.
-                return;
-            }
-            locked.incrementFailedAttempts();
-            if (locked.getFailedAttempts() >= properties.getMaxFailedAttempts()) {
-                locked.markFailed(now);
-            }
-            challengeRepository.saveAndFlush(locked);
+            return switch (challenge.getStatus()) {
+                case CONSUMED -> user.getEmailVerifiedAt() != null ? null : AuthErrorCode.AUTH_OTP_INVALID;
+                case SUPERSEDED -> AuthErrorCode.AUTH_OTP_NOT_FOUND;
+                case FAILED -> AuthErrorCode.AUTH_OTP_MAX_ATTEMPTS;
+                case PENDING -> {
+                    if (challenge.isExpired(now)) {
+                        yield AuthErrorCode.AUTH_OTP_EXPIRED;
+                    }
+                    credentialSecurity.requireActiveUnlocked(user);
+                    challenge.markConsumed(now);
+                    if (user.getEmailVerifiedAt() == null) {
+                        user.setEmailVerifiedAt(now);
+                        // Explicit flush: when this tx JOINS an outer one, the
+                        // proof write must reach the connection immediately —
+                        // later statements on other EntityManagers (and native
+                        // reads sharing this transaction) must observe it.
+                        userRepository.saveAndFlush(user);
+                    }
+                    yield null;
+                }
+            };
         });
-        // Re-read the committed state (non-locking) to pick the error the
-        // client sees — the locking query above requires a transaction.
-        EmailVerificationChallenge fresh = challengeRepository
-                .findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
-                        user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                .orElse(challenge);
-        if (fresh.getStatus() == EmailChallengeStatus.FAILED) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_OTP_MAX_ATTEMPTS);
+        if (failure != null) {
+            throw new AuthenticationException(failure);
         }
-        throw new AuthenticationException(AuthErrorCode.AUTH_OTP_INVALID);
-    }
-
-    private void consumeChallenge(User user, EmailVerificationChallenge challenge, Instant now) {
-        // Outcome is decided INSIDE the transaction (row lock) but converted
-        // to an error only AFTER it returns: throwing inside a template
-        // callback marks the (possibly joined) transaction rollback-only,
-        // which would poison any surrounding transaction.
-        Boolean consumed = tx.execute(status -> {
-            EmailVerificationChallenge locked = challengeRepository
-                    .findPendingForUpdate(user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
-                    .orElse(null);
-            if (locked == null || !locked.getId().equals(challenge.getId())) {
-                return Boolean.FALSE; // superseded in-flight → NOT_FOUND
-            }
-            if (locked.isExpired(Instant.now(clock))) {
-                return null; // expired → EXPIRED error after the transaction
-            }
-            locked.markConsumed(Instant.now(clock));
-            challengeRepository.saveAndFlush(locked);
-            if (user.getEmailVerifiedAt() == null) {
-                user.setEmailVerifiedAt(Instant.now(clock));
-                userRepository.saveAndFlush(user);
-            }
-            return Boolean.TRUE;
-        });
-        if (Boolean.TRUE.equals(consumed)) {
-            log.info("Email verified for user {}", user.getId());
-            // Identity-M3: reconciliation runs AFTER the verification
-            // commit; failures must not fail the verification itself.
-            try {
-                rosterReconciliation.reconcile(user.getId(), user.getEmail());
-            } catch (RuntimeException ex) {
-                log.error("Roster reconciliation failed for user {} (non-fatal)", user.getId(), ex);
-            }
-            return;
+        try {
+            rosterReconciliation.reconcile(userId, address);
+        } catch (RuntimeException ex) {
+            log.error("Roster reconciliation failed for user {} ({})", userId, ex.getClass().getSimpleName());
         }
-        if (consumed == null) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_OTP_EXPIRED);
-        }
-        throw new AuthenticationException(AuthErrorCode.AUTH_OTP_NOT_FOUND);
     }
 
     /**
@@ -288,7 +231,7 @@ EmailVerificationChallengeRepository challengeRepository,
                 } catch (RuntimeException ex) {
                     // Worker failures never propagate to the (already-answered)
                     // client; recovery is a retry after the cooldown.
-                    log.warn("Resend worker failed: {}", ex.toString());
+                    log.warn("Resend worker failed: {}", ex.getClass().getSimpleName());
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException saturated) {
@@ -307,23 +250,19 @@ EmailVerificationChallengeRepository challengeRepository,
         if (email == null || email.isBlank()) {
             return;
         }
-        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(email);
-        if (userOpt.isEmpty()) {
+        Long userId = userRepository.findIdByEmailIgnoreCase(email).orElse(null);
+        if (userId == null) {
             log.debug("Resend requested for unknown email");
-            return;
-        }
-        User user = userOpt.get();
-        if (user.getEmailVerifiedAt() != null) {
-            // Verified accounts never receive codes.
             return;
         }
 
         IssuedChallenge issued = tx.execute(status -> {
             // Serialize per-account: lock the user row BEFORE evaluating.
-            User locked = userRepository.findForUpdateById(user.getId()).orElse(null);
-            if (locked == null || locked.getEmailVerifiedAt() != null) {
-                return null; // vanished / verified concurrently → silent no-op
+            User locked = credentialSecurity.lockUser(userId);
+            if (!locked.getEmail().trim().equalsIgnoreCase(email.trim()) || locked.getEmailVerifiedAt() != null) {
+                return null;
             }
+            credentialSecurity.requireActiveUnlocked(locked);
             Instant now = Instant.now(clock);
             boolean cooldownOk = challengeRepository
                     .findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
@@ -354,18 +293,18 @@ EmailVerificationChallengeRepository challengeRepository,
                     new EmailVerificationChallenge(
                             locked, EmailChallengePurpose.ACCOUNT_VERIFICATION,
                             otpHasher.hash(otp), now, now.plus(properties.getOtpTtl()), requestIp));
-            return new IssuedChallenge(challenge, otp);
+            return new IssuedChallenge(challenge, otp, locked.getEmail(), locked.getDisplayName());
         });
 
         if (issued != null) {
             // Delivery runs INSIDE the worker (already off the HTTP path).
-            deliverAfterCommit(issued.challenge(), issued.otp());
+            deliverAfterCommit(issued);
         } else {
-            log.debug("Resend throttled or ineligible for user {}", user.getId());
+            log.debug("Resend throttled or ineligible for user {}", userId);
         }
     }
 
-    private record IssuedChallenge(EmailVerificationChallenge challenge, String otp) {
+    private record IssuedChallenge(EmailVerificationChallenge challenge, String otp, String email, String displayName) {
     }
 
     // ---------- internals ----------
@@ -376,20 +315,27 @@ EmailVerificationChallengeRepository challengeRepository,
      * delivery runs strictly after that commit.
      */
     private boolean issueAndDeliver(User user, String requestIp) {
-        Instant now = Instant.now(clock);
+        String address = user.getEmail();
         String otp = otpHasher.generateOtp();
-        EmailVerificationChallenge created = tx.execute(status -> {
+        IssuedChallenge created = tx.execute(status -> {
+            User locked = credentialSecurity.lockUser(user.getId());
+            if (!locked.getEmail().trim().equalsIgnoreCase(address.trim()) || locked.getEmailVerifiedAt() != null) {
+                return null;
+            }
+            credentialSecurity.requireActiveUnlocked(locked);
+            Instant now = Instant.now(clock);
             challengeRepository.findPendingForUpdate(
                             user.getId(), EmailChallengePurpose.ACCOUNT_VERIFICATION)
                     .ifPresent(pending -> {
                         pending.markSuperseded(now);
                         challengeRepository.saveAndFlush(pending);
                     });
-            return challengeRepository.saveAndFlush(new EmailVerificationChallenge(
-                    user, EmailChallengePurpose.ACCOUNT_VERIFICATION,
+            EmailVerificationChallenge challenge = challengeRepository.saveAndFlush(new EmailVerificationChallenge(
+                    locked, EmailChallengePurpose.ACCOUNT_VERIFICATION,
                     otpHasher.hash(otp), now, now.plus(properties.getOtpTtl()), requestIp));
+            return new IssuedChallenge(challenge, otp, locked.getEmail(), locked.getDisplayName());
         });
-        return deliverAfterCommit(created, otp);
+        return created != null && deliverAfterCommit(created);
     }
 
     /**
@@ -397,10 +343,10 @@ EmailVerificationChallengeRepository challengeRepository,
      * {@code delivered} flag is recorded in its own transaction. The OTP
      * plaintext lives only in this stack frame and the mail body.
      */
-    private boolean deliverAfterCommit(EmailVerificationChallenge challenge, String otp) {
-        User user = challenge.getUser();
+    private boolean deliverAfterCommit(IssuedChallenge issued) {
+        EmailVerificationChallenge challenge = issued.challenge();
         boolean sent = mailSender.sendAccountVerificationOtp(
-                user.getEmail(), user.getDisplayName(), otp,
+                issued.email(), issued.displayName(), issued.otp(),
                 properties.getOtpTtl().toSeconds());
         if (sent) {
             // Targeted flag update only: the in-memory snapshot is stale by
@@ -411,7 +357,7 @@ EmailVerificationChallengeRepository challengeRepository,
                     challengeRepository.markDeliveredById(challenge.getId()));
         } else {
             log.warn("OTP mail not delivered for user {} (resend is the recovery flow)",
-                    user.getId());
+                    challenge.getUser().getId());
         }
         return sent;
     }

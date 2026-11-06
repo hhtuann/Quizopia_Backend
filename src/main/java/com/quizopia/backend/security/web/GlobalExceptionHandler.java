@@ -142,9 +142,9 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleUnexpected(Exception ex, HttpServletRequest request) {
-        // Log class + message only (our exceptions never embed secrets); never
-        // leak the stack trace or the raw message to the client.
-        log.error("Unhandled exception for request to {}: {}", request.getRequestURI(), ex.toString());
+        Object route = request.getAttribute(org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        log.error("Unhandled exception for route {}: {}", route == null ? "unmatched" : route,
+                ex.getClass().getName());
         ApiError body = apiErrorWriter.build(AuthErrorCode.INTERNAL_ERROR, request);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }

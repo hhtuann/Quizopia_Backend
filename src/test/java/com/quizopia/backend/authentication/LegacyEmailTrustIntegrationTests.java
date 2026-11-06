@@ -111,14 +111,29 @@ class LegacyEmailTrustIntegrationTests extends AbstractAuthenticationIntegration
                         .content("{\"email\":\"%s\"}".formatted(email)))
                 .andReturn();
         assertThat(resend.getResponse().getStatus()).isEqualTo(200);
-        waitForOtpMailCount(email, 1);
+        // The resend worker commits the challenge on its own connection before
+        // recording the mail; still, await committed-row visibility explicitly
+        // so verify can never race the worker's insert under suite load.
+        long deadline = System.currentTimeMillis() + 10_000;
+        Object pending = null;
+        while (System.currentTimeMillis() < deadline) {
+            pending = entityManager.createNativeQuery(
+                            "SELECT c.status FROM email_verification_challenges c"
+                                    + " JOIN users u ON u.id = c.user_id"
+                                    + " WHERE u.username = :u AND c.status = 'PENDING'")
+                    .setParameter("u", username).getResultList().stream().findFirst().orElse(null);
+            if (pending != null) {
+                break;
+            }
+            Thread.sleep(50);
+        }
+        assertThat(pending).isEqualTo("PENDING");
 
         MvcResult verify = mockMvc.perform(post("/api/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(verifyEmailJson(email, otpMailbox.latestOtpFor(email))))
                 .andReturn();
         assertThat(verify.getResponse().getStatus()).isEqualTo(200);
-
         entityManager.clear();
         Object verifiedAfter = entityManager.createNativeQuery(
                         "SELECT email_verified_at FROM users WHERE username = :u")

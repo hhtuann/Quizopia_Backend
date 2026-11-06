@@ -30,6 +30,10 @@ public class IdentityAuditEvent {
     public static final String TEACHER_SELF_UPGRADE = "TEACHER_SELF_UPGRADE";
     public static final String TEACHER_SELF_UPGRADE_IDEMPOTENT = "TEACHER_SELF_UPGRADE_IDEMPOTENT";
     public static final String TEACHER_SELF_UPGRADE_REACTIVATED = "TEACHER_SELF_UPGRADE_REACTIVATED";
+    public static final String PROFILE_UPDATED = "PROFILE_UPDATED";
+    public static final String CREDENTIAL_PROOF_PROMOTED = "CREDENTIAL_PROOF_PROMOTED";
+    public static final String PASSWORD_CHANGED = "PASSWORD_CHANGED";
+    public static final String PASSWORD_RESET = "PASSWORD_RESET";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

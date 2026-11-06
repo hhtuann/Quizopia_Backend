@@ -23,6 +23,7 @@ public class OauthExchangeService {
         this.sessionIssuanceService = sessionIssuanceService;
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public SessionIssuanceService.IssuedSession exchange(String rawCode,
             com.quizopia.backend.authentication.dto.ClientContext client) {
         User user = identityService.consumeExchangeCode(rawCode);

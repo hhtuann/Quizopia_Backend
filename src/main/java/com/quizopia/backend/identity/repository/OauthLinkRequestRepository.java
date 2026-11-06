@@ -20,4 +20,7 @@ public interface OauthLinkRequestRepository extends JpaRepository<OauthLinkReque
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select r from OauthLinkRequest r where r.stateHash = :stateHash")
     Optional<OauthLinkRequest> findForUpdateByStateHash(@Param("stateHash") String stateHash);
+
+    @Query("select r.user.id from OauthLinkRequest r where r.stateHash = :stateHash")
+    Optional<Long> findUserIdByStateHash(@Param("stateHash") String stateHash);
 }

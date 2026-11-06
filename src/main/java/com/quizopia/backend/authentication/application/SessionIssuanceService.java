@@ -38,6 +38,7 @@ public class SessionIssuanceService {
     private final RefreshTokenHasher refreshTokenHasher;
     private final SecurityProperties properties;
     private final Clock clock;
+    private final CredentialSecurityService credentials;
 
     public SessionIssuanceService(UserRoleRepository userRoleRepository,
             RefreshSessionRepository refreshSessionRepository,
@@ -45,7 +46,7 @@ public class SessionIssuanceService {
             RefreshTokenGenerator refreshTokenGenerator,
             RefreshTokenHasher refreshTokenHasher,
             SecurityProperties properties,
-            Clock clock) {
+            Clock clock, CredentialSecurityService credentials) {
         this.userRoleRepository = userRoleRepository;
         this.refreshSessionRepository = refreshSessionRepository;
         this.accessTokenService = accessTokenService;
@@ -53,6 +54,7 @@ public class SessionIssuanceService {
         this.refreshTokenHasher = refreshTokenHasher;
         this.properties = properties;
         this.clock = clock;
+        this.credentials = credentials;
     }
 
     /**
@@ -61,6 +63,13 @@ public class SessionIssuanceService {
      */
     @Transactional
     public IssuedSession issue(User user, ClientContext client) {
+        int expectedEpoch = user.getTokenVersion();
+        user = credentials.lockUser(user.getId());
+        if (user.getTokenVersion() != expectedEpoch) {
+            throw new com.quizopia.backend.authentication.exception.AuthenticationException(
+                    com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_ACCESS_TOKEN_INVALID);
+        }
+        credentials.requireActiveUnlocked(user);
         Instant now = Instant.now(clock);
         List<String> roleCodes = userRoleRepository.findActiveRoleCodesByUserId(user.getId(), now);
         IssuedAccessToken access = accessTokenService.issue(

@@ -72,6 +72,8 @@ class OauthIdentityIntegrationTests {
                 .isPresent();
         // Google-only accounts must never authenticate with a usable password.
         assertThat(user.getPasswordHash()).startsWith("$argon2");
+        assertThat(user.getLocalCredentialState())
+                .isEqualTo(com.quizopia.backend.identity.domain.model.LocalCredentialState.DISABLED);
     }
 
     @Test
@@ -178,6 +180,54 @@ class OauthIdentityIntegrationTests {
         assertThat(session.tokenResponse().accessToken()).isNotBlank();
         assertThat(session.tokenResponse().roles()).containsExactly("STUDENT");
         assertThat(session.rawRefreshToken()).isNotBlank();
+    }
+
+    @Test
+    void oldResolvedProofCannotBeRelabeledWithCurrentEpoch() {
+        var user = identityService.resolveGoogleUser(identity());
+        Long userId = user.getId();
+        int proofEpoch = user.getTokenVersion();
+        entityManager.createNativeQuery("update users set token_version = token_version + 1 where id = :id")
+                .setParameter("id", userId).executeUpdate();
+        AuthenticationException error = catchThrowableOfType(
+                () -> identityService.mintExchangeCode(userId, proofEpoch), AuthenticationException.class);
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
+    }
+
+    @Test
+    void exchangeRejectsArtifactFromPreviousCredentialEpoch() {
+        var user = identityService.resolveGoogleUser(identity());
+        String code = identityService.mintExchangeCode(user);
+        entityManager.flush();
+        entityManager.createNativeQuery("update users set token_version = token_version + 1 where id = :id")
+                .setParameter("id", user.getId()).executeUpdate();
+        AuthenticationException error = catchThrowableOfType(
+                () -> identityService.consumeExchangeCode(code), AuthenticationException.class);
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
+    }
+
+    @Test
+    void stableGoogleSubjectDoesNotVerifyReassignedEmail() {
+        var identity = identity();
+        var user = identityService.resolveGoogleUser(identity);
+        entityManager.createNativeQuery("update users set email = :email, email_verified_at = null where id = :id")
+                .setParameter("email", UUID.randomUUID() + "@example.com")
+                .setParameter("id", user.getId()).executeUpdate();
+        var resolved = identityService.resolveGoogleUser(identity);
+        assertThat(resolved.getId()).isEqualTo(user.getId());
+        assertThat(resolved.getEmailVerifiedAt()).isNull();
+    }
+
+    @Test
+    void linkingRechecksEmailEvenForAlreadyLinkedIdentity() {
+        var identity = identity();
+        var user = identityService.resolveGoogleUser(identity);
+        entityManager.createNativeQuery("update users set email = :email, email_verified_at = null where id = :id")
+                .setParameter("email", UUID.randomUUID() + "@example.com")
+                .setParameter("id", user.getId()).executeUpdate();
+        AuthenticationException error = catchThrowableOfType(
+                () -> identityService.linkGoogleIdentityToUser(user, identity), AuthenticationException.class);
+        assertThat(error.getErrorCode()).isEqualTo(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
     }
 
     // ---------- helpers ----------

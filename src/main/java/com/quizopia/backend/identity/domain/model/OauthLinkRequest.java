@@ -38,6 +38,9 @@ public class OauthLinkRequest {
     @Column(name = "state_hash", nullable = false, length = 64)
     private String stateHash;
 
+    @Column(name = "credential_epoch", nullable = false)
+    private int credentialEpoch;
+
     @Column(name = "code_verifier", nullable = false, length = 128)
     private String codeVerifier;
 
@@ -61,6 +64,7 @@ public class OauthLinkRequest {
             String codeVerifier, String nonce, Instant expiresAt) {
         this.id = id;
         this.user = user;
+        this.credentialEpoch = user.getTokenVersion();
         this.stateHash = stateHash;
         this.codeVerifier = codeVerifier;
         this.nonce = nonce;
@@ -90,6 +94,10 @@ public class OauthLinkRequest {
 
     public User getUser() {
         return user;
+    }
+
+    public int getCredentialEpoch() {
+        return credentialEpoch;
     }
 
     public String getStateHash() {

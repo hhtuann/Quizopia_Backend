@@ -6,7 +6,7 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.support.ChannelInterceptor;
-import org.springframework.security.authentication.AbstractAuthenticationToken;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.stereotype.Component;
@@ -39,17 +39,21 @@ public class StompConnectInterceptor implements ChannelInterceptor {
 
     private final JwtDecoder jwtDecoder;
     private final QuizopiaJwtAuthenticationConverter converter;
+    private final RealtimeSessionRegistry sessions;
 
-    public StompConnectInterceptor(JwtDecoder jwtDecoder, QuizopiaJwtAuthenticationConverter converter) {
+    public StompConnectInterceptor(JwtDecoder jwtDecoder, QuizopiaJwtAuthenticationConverter converter,
+                                   RealtimeSessionRegistry sessions) {
         this.jwtDecoder = jwtDecoder;
         this.converter = converter;
+        this.sessions = sessions;
     }
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = StompHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-        if (accessor == null || accessor.getCommand() != StompCommand.CONNECT) {
-            return message; // only CONNECT is authenticated here
+        if (accessor == null || (accessor.getCommand() != StompCommand.CONNECT
+                && accessor.getCommand() != StompCommand.STOMP)) {
+            return message; // CONNECT and its STOMP 1.2 alias are authenticated here
         }
         // Reject multiple conflicting Authorization headers.
         java.util.List<String> allAuth = accessor.getNativeHeader(AUTHORIZATION_HEADER);
@@ -60,11 +64,12 @@ public class StompConnectInterceptor implements ChannelInterceptor {
         String token = extractBearerToken(accessor.getFirstNativeHeader(AUTHORIZATION_HEADER));
         try {
             Jwt jwt = jwtDecoder.decode(token);
-            AbstractAuthenticationToken authentication = converter.convert(jwt);
+            JwtAuthenticationToken authentication = (JwtAuthenticationToken) converter.convert(jwt);
+            sessions.bind(accessor.getSessionId(), authentication);
             accessor.setUser(authentication);
             return message;
         } catch (RuntimeException e) {
-            log.warn("STOMP CONNECT rejected: {}", e.toString()); // server-side; no token in the message
+            log.warn("STOMP CONNECT rejected: {}", e.getClass().getSimpleName());
             throw new MessagingException("CONNECT rejected");
         }
     }

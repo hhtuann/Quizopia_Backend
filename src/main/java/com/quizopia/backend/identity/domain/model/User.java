@@ -27,6 +27,10 @@ public class User {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "local_credential_state", nullable = false, length = 16)
+    private LocalCredentialState localCredentialState = LocalCredentialState.UNKNOWN;
+
     @Column(name = "display_name", nullable = false, length = 150)
     private String displayName;
 
@@ -150,6 +154,14 @@ public class User {
 
     public void setPasswordHash(String passwordHash) {
         this.passwordHash = passwordHash;
+    }
+
+    public LocalCredentialState getLocalCredentialState() {
+        return localCredentialState;
+    }
+
+    public void setLocalCredentialState(LocalCredentialState localCredentialState) {
+        this.localCredentialState = localCredentialState;
     }
 
     public String getDisplayName() {

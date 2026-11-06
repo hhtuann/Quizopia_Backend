@@ -67,6 +67,8 @@ public class UserService {
     private final Clock clock;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
     private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
+    private final com.quizopia.backend.authentication.application.CredentialSecurityService credentials;
+    private final com.quizopia.backend.identity.repository.EmailVerificationChallengeRepository challenges;
 
     public UserService(UserRepository userRepository,
             UserRoleRepository userRoleRepository,
@@ -79,7 +81,9 @@ public class UserService {
             Clock clock,
             com.quizopia.backend.notification.application.NotificationService notificationService,
             com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
-            @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled) {
+            @Value("${quizopia.demo.data.enabled:false}") boolean demoEnabled,
+            com.quizopia.backend.authentication.application.CredentialSecurityService credentials,
+            com.quizopia.backend.identity.repository.EmailVerificationChallengeRepository challenges) {
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
@@ -88,6 +92,8 @@ public class UserService {
         this.clock = clock;
         this.notificationService = notificationService;
         this.workspaceProvisioningService = workspaceProvisioningService;
+        this.credentials = credentials;
+        this.challenges = challenges;
     }
 
     // ============================================================
@@ -145,6 +151,7 @@ public class UserService {
 
         String passwordHash = passwordHasher.hash(request.password());
         User user = new User(username, email, passwordHash, request.displayName().trim());
+        user.setLocalCredentialState(com.quizopia.backend.identity.domain.model.LocalCredentialState.ENABLED);
         if (request.phone() != null && !request.phone().isBlank()) {
             user.setPhoneEncrypted(encryptor.encrypt(request.phone().trim()));
         }
@@ -171,7 +178,7 @@ public class UserService {
     @Transactional
     public UserResponse updateUser(Long callerId, Long targetId, UpdateUserRequest request) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
 
         if (request.displayName() != null && !request.displayName().isBlank()) {
             user.setDisplayName(request.displayName().trim());
@@ -182,6 +189,8 @@ public class UserService {
                 if (userRepository.existsByEmailIgnoreCase(email)) {
                     throw new UserException(UserErrorCode.USER_EMAIL_ALREADY_EXISTS);
                 }
+                challenges.deleteAllByUserId(user.getId());
+                credentials.invalidateAuthorizationProofsLocked(user);
                 // Identity-M3 (review M3-SEC): the verified-email proof belongs
                 // to the OLD address. Keeping it would let pending roster
                 // invitations for the NEW address link without verification.
@@ -200,7 +209,7 @@ public class UserService {
     @Transactional
     public UserResponse activate(Long callerId, Long targetId) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         user.setStatus(UserStatus.ACTIVE);
         userRepository.saveAndFlush(user);
         notificationService.create(targetId,
@@ -212,7 +221,7 @@ public class UserService {
     @Transactional
     public UserResponse disable(Long callerId, Long targetId) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         user.setStatus(UserStatus.DISABLED);
         userRepository.saveAndFlush(user);
         notificationService.create(targetId,
@@ -228,7 +237,7 @@ public class UserService {
     @Transactional
     public UserResponse lock(Long callerId, Long targetId) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         user.setLockedUntil(Instant.now(clock).plus(LOCK_MINUTES, ChronoUnit.MINUTES));
         userRepository.saveAndFlush(user);
         notificationService.create(targetId,
@@ -241,7 +250,7 @@ public class UserService {
     @Transactional
     public UserResponse unlock(Long callerId, Long targetId) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         user.setLockedUntil(null);
         user.setFailedLoginAttempts(0);
         userRepository.saveAndFlush(user);
@@ -258,7 +267,7 @@ public class UserService {
     @Transactional
     public UserResponse assignRole(Long callerId, Long targetId, AssignRoleRequest request) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         Role role = roleRepository.findByCode(request.roleCode().trim())
                 .orElseThrow(() -> new UserException(UserErrorCode.USER_INVALID_ROLE));
         // Idempotent: a repeat assignment is a no-op (200).
@@ -275,7 +284,7 @@ public class UserService {
     @Transactional
     public UserResponse removeRole(Long callerId, Long targetId, String roleCode) {
         requireSystemAdmin(callerId);
-        User user = requireUser(targetId);
+        User user = requireUserForUpdate(targetId);
         Role role = roleRepository.findByCode(roleCode == null ? "" : roleCode.trim())
                 .orElseThrow(() -> new UserException(UserErrorCode.USER_INVALID_ROLE));
         // Idempotent: removing a role the user doesn't currently hold is a no-op (200).
@@ -305,6 +314,11 @@ public class UserService {
     private User requireUser(Long id) {
         return userRepository.findById(id)
                 .orElseThrow(() -> new UserException(UserErrorCode.USER_NOT_FOUND));
+    }
+
+    private User requireUserForUpdate(Long id) {
+        if (!userRepository.existsById(id)) throw new UserException(UserErrorCode.USER_NOT_FOUND);
+        return credentials.lockUser(id);
     }
 
     /**

@@ -75,12 +75,13 @@ class TwoConnectionGoogleRaceIntegrationTests {
                 RefreshTokenHasher sha256Hasher,
                 WorkspaceProvisioningService workspaceProvisioningService,
                 java.time.Clock clock,
+                com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurityService,
                 TransactionTemplate tx,
                 org.springframework.transaction.PlatformTransactionManager txManager,
                 JdbcTemplate jdbc) {
             return new Coordinated(externalIdentityRepository, oauthLoginCodeRepository,
                     userRepository, userRoleRepository, roleRepository, passwordHasher,
-                    sha256Hasher, workspaceProvisioningService, clock, tx, txManager, jdbc);
+                    sha256Hasher, workspaceProvisioningService, clock, credentialSecurityService, tx, txManager, jdbc);
         }
     }
 
@@ -109,12 +110,13 @@ class TwoConnectionGoogleRaceIntegrationTests {
                 RefreshTokenHasher sha256Hasher,
                 WorkspaceProvisioningService workspaceProvisioningService,
                 java.time.Clock clock,
+                com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurityService,
                 TransactionTemplate tx,
                 org.springframework.transaction.PlatformTransactionManager txManager,
                 JdbcTemplate jdbc) {
             super(externalIdentityRepository, oauthLoginCodeRepository, userRepository,
                     userRoleRepository, roleRepository, passwordHasher, sha256Hasher,
-                    workspaceProvisioningService, clock, tx);
+                    workspaceProvisioningService, clock, tx, credentialSecurityService);
             this.jdbc = jdbc;
             this.winnerTx = new TransactionTemplate(txManager);
         }

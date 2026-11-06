@@ -6,7 +6,6 @@ import com.quizopia.backend.authentication.exception.AuthErrorCode;
 import com.quizopia.backend.authentication.exception.AuthenticationException;
 import com.quizopia.backend.identity.domain.model.RefreshSession;
 import com.quizopia.backend.identity.domain.model.User;
-import com.quizopia.backend.identity.domain.model.UserStatus;
 import com.quizopia.backend.identity.repository.RefreshSessionRepository;
 import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.security.config.SecurityProperties;
@@ -52,6 +51,8 @@ public class RefreshService {
     private final RefreshTokenHasher refreshTokenHasher;
     private final SecurityProperties properties;
     private final Clock clock;
+    private final CredentialSecurityService credentials;
+    private final jakarta.persistence.EntityManager entityManager;
 
     public RefreshService(RefreshSessionRepository refreshSessionRepository,
                           UserRoleRepository userRoleRepository,
@@ -59,7 +60,8 @@ public class RefreshService {
                           RefreshTokenGenerator refreshTokenGenerator,
                           RefreshTokenHasher refreshTokenHasher,
                           SecurityProperties properties,
-                          Clock clock) {
+                          Clock clock, CredentialSecurityService credentials,
+                          jakarta.persistence.EntityManager entityManager) {
         this.refreshSessionRepository = refreshSessionRepository;
         this.userRoleRepository = userRoleRepository;
         this.accessTokenService = accessTokenService;
@@ -67,6 +69,8 @@ public class RefreshService {
         this.refreshTokenHasher = refreshTokenHasher;
         this.properties = properties;
         this.clock = clock;
+        this.credentials = credentials;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -83,10 +87,14 @@ public class RefreshService {
             throw new AuthenticationException(AuthErrorCode.AUTH_REFRESH_TOKEN_INVALID);
         }
         String tokenHash = refreshTokenHasher.hash(rawRefreshToken);
+        Long userId = refreshSessionRepository.findUserIdByTokenHash(tokenHash)
+                .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_REFRESH_TOKEN_INVALID));
+        User user = credentials.lockUser(userId);
 
         RefreshSession session = refreshSessionRepository
                 .findForUpdateByTokenHashWithUser(tokenHash)
                 .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_REFRESH_TOKEN_INVALID));
+        entityManager.refresh(session, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
 
         // Captured AFTER the pessimistic-lock lookup: the lookup flushes any
         // pending session insert, so created_at is finalized by the time we read
@@ -110,15 +118,7 @@ public class RefreshService {
             throw new AuthenticationException(AuthErrorCode.AUTH_REFRESH_TOKEN_EXPIRED);
         }
 
-        User user = session.getUser();
-        UserStatus status = user.getStatus();
-        if (status == UserStatus.DISABLED) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_DISABLED);
-        }
-        if (status == UserStatus.PENDING) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_PENDING);
-        }
-
+        credentials.requireActiveUnlocked(user);
         // Identity-M1 defense-in-depth, aligned with the login gate (review
         // M1-03): only accounts whose login REQUIRES email verification are
         // blocked here; legacy accounts (compatibility flag FALSE) keep

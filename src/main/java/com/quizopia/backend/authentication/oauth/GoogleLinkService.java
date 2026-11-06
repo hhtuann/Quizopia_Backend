@@ -5,8 +5,6 @@ import com.quizopia.backend.authentication.exception.AuthenticationException;
 import com.quizopia.backend.identity.domain.model.OauthLinkRequest;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.OauthLinkRequestRepository;
-import com.quizopia.backend.identity.repository.UserRepository;
-import com.quizopia.backend.security.password.PasswordHasher;
 import com.quizopia.backend.security.token.RefreshTokenHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,43 +51,37 @@ public class GoogleLinkService {
     static final String LINK_CALLBACK_PATH = "/api/auth/oauth/google/link/callback";
 
     private final OauthLinkRequestRepository linkRequestRepository;
-    private final UserRepository userRepository;
-    private final PasswordHasher passwordHasher;
     private final RefreshTokenHasher sha256Hasher;
     private final GoogleIdTokenValidator tokenValidator;
     private final TokenExchangeClient tokenExchangeClient;
     private final OauthIdentityService identityService;
     private final OAuthProperties properties;
-    private final com.quizopia.backend.security.config.SecurityProperties securityProperties;
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
     private final com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation;
+    private final com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity;
 
     public GoogleLinkService(OauthLinkRequestRepository linkRequestRepository,
-            UserRepository userRepository,
-            PasswordHasher passwordHasher,
             RefreshTokenHasher sha256Hasher,
             GoogleIdTokenValidator tokenValidator,
             TokenExchangeClient tokenExchangeClient,
             OauthIdentityService identityService,
             OAuthProperties properties,
-            com.quizopia.backend.security.config.SecurityProperties securityProperties,
             Clock clock,
             TransactionTemplate tx,
-            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation) {
+            com.quizopia.backend.classroom.application.RosterReconciliationService rosterReconciliation,
+            com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity) {
         this.linkRequestRepository = linkRequestRepository;
         this.rosterReconciliation = rosterReconciliation;
-        this.userRepository = userRepository;
-        this.passwordHasher = passwordHasher;
         this.sha256Hasher = sha256Hasher;
         this.tokenValidator = tokenValidator;
         this.tokenExchangeClient = tokenExchangeClient;
         this.identityService = identityService;
         this.properties = properties;
-        this.securityProperties = securityProperties;
         this.clock = clock;
         this.tx = tx;
+        this.credentialSecurity = credentialSecurity;
     }
 
     /**
@@ -106,24 +98,30 @@ public class GoogleLinkService {
      * @return the browser-facing Google authorization URL
      */
     public String startLink(User user, String password) {
-        java.time.Instant lockedUntil = freshLockedUntil(user);
-        if (lockedUntil != null && java.time.Instant.now(clock).isBefore(lockedUntil)) {
-            throw new AuthenticationException(AuthErrorCode.AUTH_ACCOUNT_LOCKED);
-        }
-        if (!passwordHasher.matches(password == null ? "" : password, user.getPasswordHash())) {
-            recordFailedReauthentication(user);
-            throw new AuthenticationException(AuthErrorCode.AUTH_INVALID_CREDENTIALS);
-        }
-        clearFailedReauthentication(user);
+        return startLink(user.getId(), user.getTokenVersion(), password);
+    }
 
+    public String startLink(Long userId, int proofEpoch, String password) {
         String state = randomToken(32);
         String codeVerifier = randomToken(64);
         String nonce = randomToken(24);
-        Instant now = Instant.now(clock);
-        OauthLinkRequest request = tx.execute(status -> linkRequestRepository.saveAndFlush(
-                new OauthLinkRequest(UUID.randomUUID(), user, sha256Hasher.hash(state),
-                        codeVerifier, nonce, now.plus(LINK_REQUEST_TTL))));
-        log.info("Google link flow started for user {}", user.getId());
+        AuthErrorCode failure = tx.execute(status -> {
+            User locked = credentialSecurity.lockUser(userId);
+            if (locked.getTokenVersion() != proofEpoch) {
+                return AuthErrorCode.AUTH_OAUTH_CODE_INVALID;
+            }
+            AuthErrorCode error = credentialSecurity.reauthenticateLocked(locked, password);
+            if (error != null) {
+                return error;
+            }
+            linkRequestRepository.saveAndFlush(new OauthLinkRequest(UUID.randomUUID(), locked,
+                    sha256Hasher.hash(state), codeVerifier, nonce, Instant.now(clock).plus(LINK_REQUEST_TTL)));
+            return null;
+        });
+        if (failure != null) {
+            throw new AuthenticationException(failure);
+        }
+        log.info("Google link flow started for user {}", userId);
 
         OAuthProperties.Google google = properties.getGoogle();
         String redirectUri = google.getRedirectBaseUri() + LINK_CALLBACK_PATH;
@@ -140,36 +138,6 @@ public class GoogleLinkService {
                 + "&code_challenge_method=S256";
     }
 
-    // ---------- re-authentication lockout (review R2-M1-B) ----------
-
-    /** Database-fresh lock deadline (native read bypasses the L1 cache). */
-    private java.time.Instant freshLockedUntil(User user) {
-        java.sql.Timestamp ts = userRepository.findLockedUntilById(user.getId());
-        return ts == null ? null : ts.toInstant();
-    }
-
-    /** Committed atomic increment — no lost updates under concurrency. */
-    private void recordFailedReauthentication(User user) {
-        java.time.Instant lockUntil = java.time.Instant.now(clock)
-                .plus(securityProperties.getLockout().getDuration());
-        Integer attempts = tx.execute(status -> {
-            userRepository.incrementFailedLoginAttempts(
-                    user.getId(), securityProperties.getLockout().getThreshold(), lockUntil);
-            return userRepository.findFailedLoginAttempts(user.getId());
-        });
-        if (attempts != null && attempts >= securityProperties.getLockout().getThreshold()) {
-            log.info("Account {} locked after {} failed link re-authentications",
-                    user.getId(), attempts);
-        }
-    }
-
-    private void clearFailedReauthentication(User user) {
-        tx.executeWithoutResult(status -> userRepository.findById(user.getId()).ifPresent(managed -> {
-            managed.setFailedLoginAttempts(0);
-            managed.setLockedUntil(null);
-            userRepository.saveAndFlush(managed);
-        }));
-    }
 
     /**
      * Completes a link flow: consumes the single-use request bound to the
@@ -187,10 +155,15 @@ public class GoogleLinkService {
         // Consume the request in its own committed transaction (row lock ⇒
         // exactly-once even for concurrent callbacks with the same state).
         OauthLinkRequest request = tx.execute(status -> {
+            Long userId = linkRequestRepository.findUserIdByStateHash(stateHash)
+                    .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID));
+            User lockedUser = credentialSecurity.lockUser(userId);
+            credentialSecurity.requireActiveUnlocked(lockedUser);
             OauthLinkRequest locked = linkRequestRepository.findForUpdateByStateHash(stateHash)
                     .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID));
             Instant now = Instant.now(clock);
-            if (locked.isConsumed() || locked.isExpired(now)) {
+            if (locked.isConsumed() || locked.isExpired(now)
+                    || locked.getCredentialEpoch() != lockedUser.getTokenVersion()) {
                 throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
             }
             locked.markConsumed(laterOf(now, locked.getCreatedAt()));
@@ -198,23 +171,22 @@ public class GoogleLinkService {
             return locked;
         });
 
-        User user = userRepository.findById(request.getUser().getId())
-                .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID));
 
         String redirectUri = properties.getGoogle().getRedirectBaseUri() + LINK_CALLBACK_PATH;
         String idToken = tokenExchangeClient.exchangeForIdToken(code.trim(),
                 request.getCodeVerifier(), redirectUri);
         ValidatedOidcIdentity identity = tokenValidator.validate(idToken, request.getNonce());
 
-        User linked = identityService.linkGoogleIdentityToUser(user, identity);
+        User linked = identityService.linkGoogleIdentityToUser(
+                request.getUser().getId(), request.getCredentialEpoch(), identity);
         log.info("Google identity linked to user {}", linked.getId());
         // Identity-M3: linking sets email_verified_at for legacy accounts —
         // reconcile pending roster entries AFTER the link commit (non-fatal).
         try {
             rosterReconciliation.reconcile(linked.getId(), linked.getEmail());
         } catch (RuntimeException ex) {
-            log.error("Roster reconciliation failed for linked user {} (non-fatal)",
-                    linked.getId(), ex);
+            log.error("Roster reconciliation failed for linked user {} ({})",
+                    linked.getId(), ex.getClass().getSimpleName());
         }
         return linked;
     }
