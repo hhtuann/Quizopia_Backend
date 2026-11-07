@@ -40,9 +40,7 @@ public class Attempt {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** Legacy school provenance; null for public/platform attempts (V15/V16). */
-    @Column(name = "school_id")
-    private Long schoolId;
+
 
     @Column(name = "exam_session_id", nullable = false)
     private Long examSessionId;
@@ -51,9 +49,7 @@ public class Attempt {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    /** Legacy provenance for school-era rows; NULL for public users (V16). */
-    @Column(name = "student_profile_id")
-    private Long studentProfileId;
+
 
     @Column(name = "attempt_number", nullable = false)
     private Integer attemptNumber;
@@ -92,17 +88,10 @@ public class Attempt {
     protected Attempt() {
     }
 
-    private Attempt(Long examSessionId, Long userId, Long schoolId, Long studentProfileId,
-                    Integer attemptNumber, Instant startedAt, Instant deadlineAt, UUID clientInstanceId,
-                    boolean legacyOwner) {
+    private Attempt(Long examSessionId, Long userId,
+                    Integer attemptNumber, Instant startedAt, Instant deadlineAt, UUID clientInstanceId) {
         this.examSessionId = Objects.requireNonNull(examSessionId, "examSessionId must not be null");
-        if (legacyOwner) {
-            Objects.requireNonNull(studentProfileId, "studentProfileId must not be null");
-        } else {
-            this.userId = Objects.requireNonNull(userId, "userId must not be null");
-        }
-        this.schoolId = schoolId;               // optional legacy provenance
-        this.studentProfileId = studentProfileId; // optional legacy provenance
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
         this.attemptNumber = requirePositive(attemptNumber, "attemptNumber");
         this.startedAt = Objects.requireNonNull(startedAt, "startedAt must not be null");
         this.deadlineAt = requireDeadlineAfterStart(deadlineAt, startedAt);
@@ -111,53 +100,21 @@ public class Attempt {
 
     /**
      * Factory starting a new IN_PROGRESS attempt owned by a platform USER.
-     * {@code schoolId}/{@code studentProfileId} are optional legacy
-     * provenance (present only for school-attached attempts).
      */
-    public static Attempt start(Long examSessionId, Long userId, Long schoolId, Long studentProfileId,
+    public static Attempt start(Long examSessionId, Long userId,
                                 Integer attemptNumber, Instant startedAt, Instant deadlineAt) {
-        return new Attempt(examSessionId, userId, schoolId, studentProfileId,
-                attemptNumber, startedAt, deadlineAt, null, false);
+        return new Attempt(examSessionId, userId,
+                attemptNumber, startedAt, deadlineAt, null);
     }
 
     /** Factory overload accepting an optional clientInstanceId (null allowed). */
-    public static Attempt start(Long examSessionId, Long userId, Long schoolId, Long studentProfileId,
+    public static Attempt start(Long examSessionId, Long userId,
                                 Integer attemptNumber, Instant startedAt, Instant deadlineAt,
                                 UUID clientInstanceId) {
-        return new Attempt(examSessionId, userId, schoolId, studentProfileId,
-                attemptNumber, startedAt, deadlineAt, clientInstanceId, false);
+        return new Attempt(examSessionId, userId,
+                attemptNumber, startedAt, deadlineAt, clientInstanceId);
     }
 
-    /**
-     * Legacy-shape factory (transitional, ADR-001 §2.2): the owner user is
-     * resolved by the V12 BEFORE INSERT trigger from {@code studentProfileId}.
-     * Intended for legacy fixtures; application services must pass the
-     * authenticated {@code userId} explicitly.
-     */
-    public static Attempt start(Long schoolId, Long examSessionId, Long studentProfileId,
-                                Integer attemptNumber, Instant startedAt, Instant deadlineAt) {
-        return legacyStart(schoolId, examSessionId, studentProfileId, attemptNumber,
-                startedAt, deadlineAt, null);
-    }
-
-    /** Legacy-shape factory overload with clientInstanceId (transitional). */
-    public static Attempt start(Long schoolId, Long examSessionId, Long studentProfileId,
-                                Integer attemptNumber, Instant startedAt, Instant deadlineAt,
-                                UUID clientInstanceId) {
-        return legacyStart(schoolId, examSessionId, studentProfileId, attemptNumber,
-                startedAt, deadlineAt, clientInstanceId);
-    }
-
-    /**
-     * Legacy shape: owner user null in memory; the transitional V12 insert
-     * trigger resolves it from studentProfileId.
-     */
-    private static Attempt legacyStart(Long schoolId, Long examSessionId, Long studentProfileId,
-                                       Integer attemptNumber, Instant startedAt, Instant deadlineAt,
-                                       UUID clientInstanceId) {
-        return new Attempt(examSessionId, null, schoolId, studentProfileId, attemptNumber,
-                startedAt, deadlineAt, clientInstanceId, true);
-    }
 
     /**
      * Transitions IN_PROGRESS -> SUBMITTED, atomically setting the submission
@@ -198,9 +155,7 @@ public class Attempt {
         return id;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
+
 
     public Long getExamSessionId() {
         return examSessionId;
@@ -210,9 +165,7 @@ public class Attempt {
         return userId;
     }
 
-    public Long getStudentProfileId() {
-        return studentProfileId;
-    }
+
 
     public Integer getAttemptNumber() {
         return attemptNumber;
@@ -275,7 +228,7 @@ public class Attempt {
         return "Attempt{"
                 + "id=" + id
                 + ", examSessionId=" + examSessionId
-                + ", studentProfileId=" + studentProfileId
+                + ", userId=" + userId
                 + ", attemptNumber=" + attemptNumber
                 + ", status=" + status
                 + ", startedAt=" + startedAt

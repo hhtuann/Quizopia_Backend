@@ -1,6 +1,6 @@
 package com.quizopia.backend.attempt.application;
 
-import com.quizopia.backend.academic.domain.model.StudentProfile;
+
 import com.quizopia.backend.attempt.domain.model.Attempt;
 import com.quizopia.backend.attempt.domain.model.AttemptQuestion;
 import com.quizopia.backend.attempt.domain.model.AttemptStatus;
@@ -103,21 +103,19 @@ public class AttemptService {
      * attempt and without side effects (no locks, no lazy-open).
      *
      * <p>Policy mirrors {@link #startAttempt} exactly: permissions
-     * EXAM_SESSION_READ + ATTEMPT_START (callers without the start
-     * capability, e.g. ACADEMIC_ADMIN, get 403 ATTEMPT_ACCESS_DENIED) → 404
-     * when the session does not exist → 403 ATTEMPT_NOT_ELIGIBLE when the
-     * user is not eligible (BLOCKED, or CLASS_RESTRICTED without an
-     * assigned-classroom/ACTIVE-workspace membership). Eligible users get the
-     * same learner-safe fields the discovery listing exposes, plus a landing
-     * RESUME / NOT_YET_STARTED / NO_ATTEMPTS_LEFT / ATTEMPT_EXPIRED /
-     * ENDED). A shareable URL is never permission: every rule of
-     * {@code startAttempt} still applies when the user actually starts.
+     * EXAM_SESSION_READ + ATTEMPT_START → 404 when the session does not
+     * exist → 403 ATTEMPT_NOT_ELIGIBLE when the user is not eligible
+     * (BLOCKED, or CLASS_RESTRICTED without an assigned classroom).
+     * Eligible users get the same learner-safe fields the discovery
+     * listing exposes, plus a landing state (RESUME / NOT_YET_STARTED /
+     * NO_ATTEMPTS_LEFT / ATTEMPT_EXPIRED / ENDED). A shareable URL is
+     * never permission: every rule of {@code startAttempt} still applies
+     * when the user actually starts.
      */
     @Transactional(readOnly = true)
     public SessionEligibilityResponse getSessionEligibility(Long userId, Long sessionId) {
         // TL D-BE-01: the pre-flight must not promise a start the caller
-        // cannot perform — require the same capability startAttempt does
-        // (ACADEMIC_ADMIN holds EXAM_SESSION_READ but not ATTEMPT_START),
+        // cannot perform — require the same capability startAttempt does,
         // resolved in ONE permission fetch.
         auth.requireLearnerWithPermissions(userId, "EXAM_SESSION_READ", "ATTEMPT_START");
         Instant now = Instant.now(clock);
@@ -178,14 +176,12 @@ public class AttemptService {
                 canStartNow, canResume, now);
     }
 
-
+    /**
+     * Visibility: PUBLIC = platform users; CLASS_RESTRICTED = user is a
+     * member of an assigned classroom. Attempt counters are user-based
+     * (issue #4 P0-1).
+     */
     private List<AvailableSessionItem> queryAvailable(Long userId, Instant now) {
-        // Visibility (issue #1 A4 + #4 P0-R2): PUBLIC = platform users;
-        // CLASS_RESTRICTED = user is a member of an assigned classroom AND —
-        // when the exam lives in an ORGANIZATION workspace — still holds an
-        // ACTIVE membership there (a lingering classroom row does not survive
-        // org revocation). Personal-workspace exams need no membership.
-        // Attempt counters are user-based (issue #4 P0-1).
         String sql = "SELECT s.id, s.code, s.title, s.status, s.visibility, s.starts_at, s.ends_at, s.max_attempts, "
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
                 + "s.duration_minutes AS duration_minutes, "
@@ -206,11 +202,7 @@ public class AttemptService {
                 + "AND (s.visibility = 'PUBLIC' OR EXISTS ("
                 + "  SELECT 1 FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                + "  WHERE esc.exam_session_id = s.id AND cm.user_id = ? "
-                + "  AND ("
-                + "    EXISTS (SELECT 1 FROM workspaces wp WHERE wp.id = e.workspace_id AND wp.workspace_type = 'PERSONAL')"
-                + "    OR EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = e.workspace_id"
-                + "               AND m.user_id = ? AND m.status = 'ACTIVE')))) "
+                + "  WHERE esc.exam_session_id = s.id AND cm.user_id = ?)) "
                 + "ORDER BY s.starts_at ASC, s.id ASC";
         return jdbc.query(sql, (rs, n) -> {
             int maxAttempts = rs.getInt("max_attempts");
@@ -234,7 +226,7 @@ public class AttemptService {
                     startsAt, endsAt, rs.getInt("duration_minutes"), maxAttempts,
                     used, remaining, activeId, activeDeadline, canStartNow, canResume,
                     rs.getString("visibility"));
-        }, userId, userId, userId, userId, userId);
+        }, userId, userId, userId, userId);
     }
     // ============================================================
     // START / RESUME ATTEMPT
@@ -283,20 +275,17 @@ public class AttemptService {
     }
 
     /**
-     * Visibility-based eligibility (issue #1 A2/A4 + #4 P0-R2/R7):
+     * Visibility-based eligibility:
      * <ul>
-     *   <li>PUBLIC: any ACTIVE platform user with attempt capability — the
-     *       same-school assumption is retired (ADR-001 §2.3 Phase 1 rule).</li>
+     *   <li>PUBLIC: any ACTIVE platform user with attempt capability.</li>
      *   <li>CLASS_RESTRICTED: user is a member of at least one classroom
      *       assigned to the session via {@code exam_session_classes}
-     *       (user-based membership) AND, for ORGANIZATION-workspace exams,
-     *       still holds an ACTIVE workspace membership — a lingering
-     *       classroom row does not survive org SUSPENDED/REMOVED.</li>
+     *       (user-based membership).</li>
      *   <li>BLOCKED participant (P0-R7/R8): an explicit BLOCKED row for this
-     *       user (direct user_id key — profile-less included) denies NEW
-     *       starts for both visibilities. An already IN_PROGRESS attempt may
-     *       still complete (autosave/submit are ownership-based); its data
-     *       is never destroyed.</li>
+     *       user (direct user_id key) denies NEW starts for both
+     *       visibilities. An already IN_PROGRESS attempt may still complete
+     *       (autosave/submit are ownership-based); its data is never
+     *       destroyed.</li>
      * </ul>
      */
     private boolean isEligible(Long userId, ExamSession session) {
@@ -314,13 +303,8 @@ public class AttemptService {
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM exam_session_classes esc "
                         + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                        + "JOIN exams e ON e.id = ? "
-                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ? "
-                        + "AND ("
-                        + "  EXISTS (SELECT 1 FROM workspaces wp WHERE wp.id = e.workspace_id AND wp.workspace_type = 'PERSONAL')"
-                        + "  OR EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = e.workspace_id"
-                        + "             AND m.user_id = ? AND m.status = 'ACTIVE'))",
-                Integer.class, session.getExamId(), session.getId(), userId, userId);
+                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ?",
+                Integer.class, session.getId(), userId);
         return cnt != null && cnt > 0;
     }
 
@@ -357,16 +341,11 @@ public class AttemptService {
             }
         }
 
-        // Legacy provenance for school-attached attempts only (optional).
-        var profileIds = jdbc.queryForList(
-                "SELECT id FROM student_profiles WHERE user_id = ? LIMIT 1", Long.class, userId);
-        Long studentProfileId = profileIds.isEmpty() ? null : profileIds.get(0);
-
         // Wrap ENTIRE creation+snapshot in error boundary (Fix B).
         Attempt attempt;
         try {
             attempt = Attempt.start(
-                    session.getId(), userId, session.getSchoolId(), studentProfileId,
+                    session.getId(), userId,
                     nextNumber, now, deadline, request.clientInstanceId());
             em.persist(attempt);
             em.flush();
@@ -397,6 +376,7 @@ public class AttemptService {
             throw classifyAndTranslate(e);
         }
 
+
         // Build response (reuse query rows for question content; no
         // answerKey/isCorrect).
         List<AttemptQuestion> persisted = aqRepo.findByAttemptIdOrderByDisplayOrderAsc(attempt.getId());
@@ -407,7 +387,7 @@ public class AttemptService {
         // event.
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_STARTED, session.getId(), attempt.getId(),
-                userId, attempt.getStudentProfileId(), now));
+                userId, null, now));
         return new StartAttemptResponse(attempt.getId(), session.getId(), nextNumber,
                 AttemptStatus.IN_PROGRESS.name(), now, deadline, now,
                 false, session.getMaxAttempts(), qv);
@@ -664,11 +644,11 @@ public class AttemptService {
             "uk_attempt_answers_attempt_question",
             "chk_attempts_status", "chk_attempts_number", "chk_attempts_deadline",
             "chk_attempts_submission_invariant",
-            "fk_attempts_session_school", "fk_attempts_student_school", "fk_attempts_version");
+            "fk_attempts_session", "fk_attempts_user");
 
     private static final java.util.Set<String> DUPLICATE_CONSTRAINTS = java.util.Set.of(
-            "uk_attempts_one_active_per_session_student",
-            "uk_attempts_session_student_number");
+            "uk_attempts_one_active_per_session_user",
+            "uk_attempts_session_user_number");
 
     /**
      * Unified constraint classifier. Used by BOTH DataIntegrityViolationException

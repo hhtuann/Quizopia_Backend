@@ -25,10 +25,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Issue #4 review round 4 reproduction (P0-R8) — user-based participant
- * blocking: an organizer can BLOCK a PUBLIC profile-less participant by
- * userId; blocked users lose discovery + new starts; unblock restores;
- * in-progress autosave/submit survive a block; legacy profile API and
- * workspace authorization hold.
+ * blocking: a session owner can BLOCK a PUBLIC participant by userId;
+ * blocked users lose discovery + new starts; unblock restores;
+ * in-progress autosave/submit survive a block; creator-only
+ * authorization holds.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -41,8 +41,7 @@ class ReviewRound4P0IntegrationTests {
         private MockMvc mockMvc;
         @Autowired
         private JdbcTemplate jdbc;
-        @jakarta.persistence.PersistenceContext
-        private jakarta.persistence.EntityManager em;
+
 
         private static final Instant STARTS = Instant.now().minusSeconds(60);
         private static final Instant ENDS = Instant.now().plusSeconds(3600);
@@ -89,15 +88,12 @@ class ReviewRound4P0IntegrationTests {
                 return jdbc.queryForObject(sql + " RETURNING id", Long.class);
         }
 
-        private void addQuestionGraph(Long ownerWs, Long ownerUser, Long examId, Long subjectId, Long schoolId,
-                        Long teacherProfileId) {
+        private void addQuestionGraph(Long ownerUser, Long examId, Long subjectId) {
                 Long bank = subjectId != null
-                                ? insert("INSERT INTO question_banks (workspace_id, created_by_user_id, school_id, "
-                                                + "subject_id, owner_teacher_id, code, name) VALUES (" + ownerWs + ","
-                                                + ownerUser + "," + schoolId + "," + subjectId + ","
-                                                + teacherProfileId + ",'B','B')")
-                                : insert("INSERT INTO question_banks (workspace_id, created_by_user_id, code, name) "
-                                                + "VALUES (" + ownerWs + "," + ownerUser + ",'B','B')");
+                                ? insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                                                + "VALUES (" + ownerUser + "," + subjectId + ",'B','B')")
+                                : insert("INSERT INTO question_banks (created_by_user_id, code, name) "
+                                                + "VALUES (" + ownerUser + ",'B','B')");
                 Long q = insert("INSERT INTO questions (question_bank_id, code, status, created_by) VALUES ("
                                 + bank + ",'q','ACTIVE'," + ownerUser + ")");
                 Long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, "
@@ -123,55 +119,37 @@ class ReviewRound4P0IntegrationTests {
                 }
         }
 
-        /** Org PUBLIC session fixture. Returns [sessionId, examId, wsId, schoolId]. */
+        /** User-owned PUBLIC session fixture. Returns [sessionId, examId]. */
         private Long[] orgPublicSession(Long organizer) {
                 return orgPublicSession(organizer, "OPEN");
         }
 
         private Long[] orgPublicSession(Long organizer, String sessionStatus) {
-                Long schoolId = insert("INSERT INTO schools (code, name) VALUES ('R4-SCH-" + System.nanoTime()
-                                + "','S')");
-                Long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId
-                                + ",'GL','G')");
-                Long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES ("
-                                + schoolId + "," + gl + ",'SUB','S')");
-                Long orgWs = insert("INSERT INTO organizations (legacy_school_id, code, name) VALUES ("
-                                + schoolId + ",'R4-ORG','O')");
-                Long wsId = insert("INSERT INTO workspaces (workspace_type, name, organization_id) "
-                                + "VALUES ('ORGANIZATION','O'," + orgWs + ")");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + organizer + ",'EDITOR','ACTIVE')");
-                Long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                                + organizer + "," + schoolId + ",'TC')");
-                Long examId = insert("INSERT INTO exams (workspace_id, created_by_user_id, school_id, subject_id, "
-                                + "owner_teacher_id, code, title, status, published_at, total_points, "
-                                + "instructions, duration_minutes, tf_matrix_scoring) VALUES (" + wsId + ","
-                                + organizer + "," + schoolId + "," + subjectId + "," + tp + ",'R4E','E',"
+                Long examId = insert("INSERT INTO exams (created_by_user_id, code, title, status, "
+                                + "published_at, total_points, instructions, duration_minutes, "
+                                + "tf_matrix_scoring) VALUES (" + organizer + ",'R4E','E',"
                                 + "'PUBLISHED',now(),1,'i',30,'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)");
-                addQuestionGraph(wsId, organizer, examId, subjectId, schoolId, tp);
-                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, school_id, owner_teacher_id, code, "
-                                + "title, status, starts_at, ends_at, created_by, visibility, max_attempts, "
-                                + "duration_minutes, opened_at) VALUES (" + examId + "," + schoolId + "," + tp
-                                + ",'R4SES','S','" + sessionStatus + "','" + STARTS + "','" + ENDS + "'," + organizer
-                                + ",'PUBLIC',5,60," + ("OPEN".equals(sessionStatus) ? "now()" : "NULL") + ")");
-                return new Long[] { sessionId, examId, wsId, schoolId };
+                addQuestionGraph(organizer, examId, null);
+                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
+                                + "ends_at, created_by, visibility, max_attempts, duration_minutes, opened_at) "
+                                + "VALUES (" + examId + ",'R4SES','S','" + sessionStatus + "','" + STARTS
+                                + "','" + ENDS + "'," + organizer + ",'PUBLIC',5,60,"
+                                + ("OPEN".equals(sessionStatus) ? "now()" : "NULL") + ")");
+                return new Long[] { sessionId, examId };
         }
 
-        /** Personal PUBLIC session fixture (owner without any profile). Returns [sessionId, personalWsId]. */
+        /** Subject-less PUBLIC session fixture owned by a plain user (no catalog metadata). Returns [sessionId, examId]. */
         private Long[] personalPublicSession(Long owner) {
-                Long personalWs = jdbc.queryForObject(
-                                "SELECT id FROM workspaces WHERE owner_user_id = " + owner
-                                                + " AND workspace_type = 'PERSONAL'", Long.class);
-                Long examId = insert("INSERT INTO exams (workspace_id, created_by_user_id, code, title, status, "
+                Long examId = insert("INSERT INTO exams (created_by_user_id, code, title, status, "
                                 + "published_at, total_points, instructions, duration_minutes, tf_matrix_scoring) "
-                                + "VALUES (" + personalWs + "," + owner + ",'R4PE','PE','PUBLISHED',now(),1,'i',30,"
+                                + "VALUES (" + owner + ",'R4PE','PE','PUBLISHED',now(),1,'i',30,"
                                 + "'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)");
-                addQuestionGraph(personalWs, owner, examId, null, null, null);
+                addQuestionGraph(owner, examId, null);
                 Long sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
                                 + "ends_at, created_by, visibility, max_attempts, duration_minutes, opened_at) "
                                 + "VALUES (" + examId + ",'R4PSES','S','OPEN','" + STARTS + "','" + ENDS + "',"
                                 + owner + ",'PUBLIC',5,60,now())");
-                return new Long[] { sessionId, personalWs };
+                return new Long[] { sessionId, examId };
         }
 
         /** Starts an attempt over HTTP; returns attemptId (2xx). */
@@ -280,8 +258,8 @@ class ReviewRound4P0IntegrationTests {
         }
 
         @Test
-        void r8_personalWorkspacePublicSessionBlocking() throws Exception {
-                Long owner = register("r8c-owner-" + System.nanoTime(), "TEACHER"); // no profile, personal ws
+        void r8_plainUserOwnedPublicSessionBlocking() throws Exception {
+                Long owner = register("r8c-owner-" + System.nanoTime(), "TEACHER"); // plain user, no catalog metadata
                 Long[] fixture = personalPublicSession(owner);
                 Long sessionId = fixture[0];
 
@@ -289,7 +267,7 @@ class ReviewRound4P0IntegrationTests {
                 startAttempt(sessionId, publicUser, "STUDENT");
 
                 assertThat(blockByUser(sessionId, owner, publicUser))
-                                .as("personal-workspace owner can block by userId (no TeacherProfile)")
+                                .as("session owner can block by userId")
                                 .isEqualTo(200);
                 mockMvc.perform(post("/api/exam-sessions/{id}/attempts", sessionId)
                                 .with(jwt(publicUser, "STUDENT"))
@@ -298,39 +276,25 @@ class ReviewRound4P0IntegrationTests {
         }
 
         @Test
-        void r8_legacyStudentProfileApiStillWorks() throws Exception {
+        void r8_participantRowBlockAndByUserUnblockAreLinked() throws Exception {
                 Long organizer = register("r8d-org-" + System.nanoTime(), "TEACHER");
-                // SCHEDULED so the legacy bulk-add (DRAFT/SCHEDULED only) works;
-                // startAttempt lazy-opens it inside the window.
                 Long[] fixture = orgPublicSession(organizer, "SCHEDULED");
                 Long sessionId = fixture[0];
-                Long schoolId = fixture[3];
 
-                // Legacy school student + bulk add via studentProfileIds.
+                // Participant row created directly (user-based).
                 Long student = insert("INSERT INTO users (username, email, password_hash, display_name) "
                                 + "VALUES ('r8d-stu-" + System.nanoTime() + "','r8d@t.com','h','R8D')");
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT " + student
                                 + ", id FROM roles WHERE code = 'STUDENT'");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + student + "," + schoolId + ",'R8D')");
+                Long participantRowId = insert("INSERT INTO exam_session_participants (exam_session_id, "
+                                + "user_id, added_by) VALUES (" + sessionId + "," + student + "," + organizer + ")");
 
-                mockMvc.perform(post("/api/exam-sessions/{id}/participants", sessionId)
-                                .with(jwt(organizer, "TEACHER"))
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"studentProfileIds\":[" + sp + "]}"))
-                                .andExpect(status().isOk())
-                                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath(
-                                                "$.added").value(1));
-
-                // Legacy list shows the participant with its profile linkage.
+                // List shows the participant.
                 mockMvc.perform(get("/api/exam-sessions/{id}/participants", sessionId)
                                 .with(jwt(organizer, "TEACHER")))
                                 .andExpect(status().isOk());
 
-                // Block via the legacy by-participantId endpoint still works...
-                Long participantRowId = jdbc.queryForObject(
-                                "SELECT id FROM exam_session_participants WHERE exam_session_id = " + sessionId
-                                                + " AND student_profile_id = " + sp, Long.class);
+                // Block via the by-participantId endpoint...
                 mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/block", sessionId,
                                 participantRowId).with(jwt(organizer, "TEACHER")))
                                 .andExpect(status().isOk());
@@ -349,31 +313,24 @@ class ReviewRound4P0IntegrationTests {
         }
 
         @Test
-        void r8_revokedOrganizerCannotBlockUnblock() throws Exception {
+        void r8_nonCreatorCannotBlockUnblock() throws Exception {
                 Long organizer = register("r8e-org-" + System.nanoTime(), "TEACHER");
                 Long[] fixture = orgPublicSession(organizer);
                 Long sessionId = fixture[0];
-                Long wsId = fixture[2];
 
                 Long publicUser = register("r8e-pub-" + System.nanoTime(), "TEACHER");
                 startAttempt(sessionId, publicUser, "TEACHER");
                 assertThat(blockByUser(sessionId, organizer, publicUser)).isEqualTo(200);
 
-                jdbc.update("UPDATE workspace_memberships SET status = 'REMOVED' "
-                                + "WHERE workspace_id = " + wsId + " AND user_id = " + organizer);
-                em.clear(); // production revocation happens in another session
-
                 Long other = register("r8e-other-" + System.nanoTime(), "TEACHER");
                 startAttempt(sessionId, other, "TEACHER");
-                assertThat(blockByUser(sessionId, organizer, other))
-                                .as("revoked organizer cannot block").isEqualTo(403);
-                assertThat(unblockByUser(sessionId, organizer, publicUser))
-                                .as("revoked organizer cannot unblock").isEqualTo(403);
 
-                // Foreign teacher cannot block either.
+                // Foreign teacher (not the session creator) cannot moderate.
                 Long foreign = register("r8e-foreign-" + System.nanoTime(), "TEACHER");
                 assertThat(blockByUser(sessionId, foreign, other))
-                                .as("foreign teacher cannot block").isEqualTo(403);
+                                .as("non-creator teacher cannot block").isEqualTo(403);
+                assertThat(unblockByUser(sessionId, foreign, publicUser))
+                                .as("non-creator teacher cannot unblock").isEqualTo(403);
         }
 
         @Test

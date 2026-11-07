@@ -34,7 +34,6 @@ class ExamCompositionControllerIntegrationTests {
     @Autowired private JdbcTemplate jdbc;
 
     private Long teacherUserId;
-    private Long schoolId;
     private Long subjectId;
     private Long sourceQuestionId;
 
@@ -42,12 +41,9 @@ class ExamCompositionControllerIntegrationTests {
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('cp','cp@t','h','CP')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('CPS','CP School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'CPT')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
         // Source bank + single-choice question owned by the caller.
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'QB','Bank')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Bank')");
         sourceQuestionId = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q1','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + sourceQuestionId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         insert("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'A','opt',true,0)");
@@ -87,11 +83,26 @@ class ExamCompositionControllerIntegrationTests {
         Long examId = createExam("EX2");
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o4','o4@t','h','O4')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'TC4')");
         mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(other))))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + sourceQuestionId + ",\"position\":0}]}]}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("EXAM_ACCESS_DENIED"));
+    }
+
+    @Test
+    void putCompositionForeignBankQuestionReturns403() throws Exception {
+        // Composition sources must come from the caller's own banks
+        // (user-centric ownership; subject scope no longer matters).
+        Long examId = createExam("EX5");
+        long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o5','o5@t','h','O5')");
+        long foreignBank = insert("INSERT INTO question_banks (created_by_user_id, code, name) VALUES (" + other + ",'FB','Foreign')");
+        long foreignQuestion = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + foreignBank + ",'fq1','ACTIVE',1," + other + ")");
+        mockMvc.perform(put("/api/exams/" + examId + "/draft/composition")
+                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedExamVersion\":0,\"sections\":[{\"position\":0,\"title\":\"S\",\"questions\":[{\"sourceQuestionId\":" + foreignQuestion + ",\"position\":0}]}]}"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("EXAM_ACCESS_DENIED"));
     }

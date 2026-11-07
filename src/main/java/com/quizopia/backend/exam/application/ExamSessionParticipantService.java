@@ -1,7 +1,5 @@
 package com.quizopia.backend.exam.application;
 
-import com.quizopia.backend.academic.domain.model.StudentProfile;
-import com.quizopia.backend.academic.repository.StudentProfileRepository;
 import com.quizopia.backend.exam.domain.model.*;
 import com.quizopia.backend.exam.dto.*;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
@@ -21,153 +19,52 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Application service for the Exam Session Participant API — 4 endpoints:
+ * Application service for the Exam Session Participant API:
  * <ul>
- * <li>POST /api/exam-sessions/{sessionId}/participants — bulk add (partial
- * classification)</li>
  * <li>GET /api/exam-sessions/{sessionId}/participants — paginated list</li>
  * <li>POST .../participants/{participantId}/block — block participant</li>
  * <li>POST .../participants/{participantId}/unblock — unblock participant</li>
+ * <li>POST .../participants/by-user/{uid}/block | unblock — user-based
+ *     moderation incl. PUBLIC learners who only hold attempts</li>
  * </ul>
  *
- * <p>Authorization (issue #4 P0-R6): all four endpoints enforce the SAME
- * workspace/session resource policy as {@link ExamSessionService} via the
- * shared {@code resolveOwnedSession}: DB-backed action permission + session
- * creator gated on ACTIVE organization membership (revoked creators denied)
- * or ACTIVE workspace OWNER/ADMIN. TeacherProfile/school ownership is no
- * longer an authorization authority. Personal-workspace sessions (no school)
- * get an explicit business denial for participant ADD and a clean,
- * policy-based denial for the other operations — never an NPE.
+ * <p>Authorization: all endpoints enforce session ownership via the shared
+ * {@code resolveOwnedSession} (creator-only). The legacy profile-based bulk
+ * add was decommissioned with the school/organization architecture; session
+ * access is governed by visibility (PUBLIC / CLASS_RESTRICTED) and BLOCKED
+ * rows only.
  *
- * <p>Query &amp; concurrency safety (A3.2-3B remediation): batched display
- * names (single JPQL projection), sort allowlist of entity properties only,
- * and session-then-participant pessimistic locks on block/unblock.
+ * <p>Query &amp; concurrency safety: batched display names (single JPQL
+ * projection), sort allowlist of entity properties only, and
+ * session-then-participant pessimistic locks on block/unblock.
  */
+
 @Service
 public class ExamSessionParticipantService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt", "status");
-    // Both uniqueness keys classify as duplicates: legacy (session, profile)
-    // and V17 (session, user) — see P0-R9.
+    // (session, user) uniqueness — see P0-R9. (unused since the profile-based
+    // bulk add was decommissioned; kept for block-row materialization races.)
     private static final Set<String> DUPLICATE_CONSTRAINTS = Set.of(
-            "uk_exam_session_participants_session_student",
             "uk_exam_session_participants_session_user");
 
     private final ExamAuthorizationService auth;
     private final ExamSessionService sessionService;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
-    private final StudentProfileRepository studentProfileRepository;
     private final EntityManager entityManager;
 
     public ExamSessionParticipantService(ExamAuthorizationService auth,
             ExamSessionService sessionService,
             ExamSessionRepository sessionRepository,
             ExamSessionParticipantRepository participantRepository,
-            StudentProfileRepository studentProfileRepository,
             EntityManager entityManager) {
         this.auth = auth;
         this.sessionService = sessionService;
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
-        this.studentProfileRepository = studentProfileRepository;
         this.entityManager = entityManager;
-    }
-
-    // ============================================================
-    // POST /api/exam-sessions/{sessionId}/participants — bulk add
-    // ============================================================
-
-    @SuppressWarnings("null")
-    @Transactional
-    public AddParticipantsResponse addParticipants(Long userId, Long sessionId, AddParticipantsRequest request) {
-        auth.requireUserWithPermission(userId, "EXAM_SESSION_PARTICIPANT_ADD");
-        ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
-        // Add only in DRAFT or SCHEDULED.
-        if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
-        }
-        // Participant assignment is profile-scoped (school concept) in Phase 1;
-        // personal-workspace sessions have no school — explicit denial, not NPE.
-        if (session.getSchoolId() == null) {
-            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
-                    "Participant assignment is only supported for organization (school) sessions in Phase 1");
-        }
-
-        // Deduplicate the request list (preserve first occurrence as the "valid"
-        // candidate).
-        List<Long> rawIds = request.studentProfileIds();
-        Set<Long> seen = new LinkedHashSet<>();
-        List<Long> duplicatedInRequest = new ArrayList<>();
-        for (Long id : rawIds) {
-            if (!seen.add(id)) {
-                duplicatedInRequest.add(id);
-            }
-        }
-        List<Long> distinctIds = new ArrayList<>(seen);
-
-        // Batch-load student profiles + validate same school.
-        Map<Long, StudentProfile> profiles = studentProfileRepository.findAllById(distinctIds).stream()
-                .collect(Collectors.toMap(StudentProfile::getId, p -> p));
-
-        // User-primary duplicate check (P0-R9): a user may already have a
-        // V17 row WITHOUT profile linkage (blocked public learner) — classify
-        // by userId so the legacy API returns a business duplicate instead of
-        // hitting uk_exam_session_participants_session_user (500).
-        List<Long> candidateUserIds = profiles.values().stream()
-                .map(StudentProfile::getUserId).distinct().toList();
-        Set<Long> existingUserIds = candidateUserIds.isEmpty() ? Set.of()
-                : participantRepository.findAllByExamSessionIdAndUserIdIn(sessionId, candidateUserIds).stream()
-                        .map(ExamSessionParticipant::getUserId)
-                        .collect(Collectors.toSet());
-        // Legacy profile linkage check (rows that still carry the profile id).
-        Set<Long> existingProfileIds = participantRepository
-                .findAllByExamSessionIdAndStudentProfileIdIn(sessionId, distinctIds).stream()
-                .map(ExamSessionParticipant::getStudentProfileId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
-
-        List<Long> toInsert = new ArrayList<>();
-        List<Long> duplicated = new ArrayList<>(duplicatedInRequest);
-        List<Long> invalid = new ArrayList<>();
-
-        for (Long id : distinctIds) {
-            StudentProfile sp = profiles.get(id);
-            if (sp == null) {
-                invalid.add(id); // missing
-            } else if (!sp.getSchoolId().equals(session.getSchoolId())) {
-                invalid.add(id); // cross-school
-            } else if (existingUserIds.contains(sp.getUserId())
-                    || existingProfileIds.contains(id)) {
-                duplicated.add(id); // already a participant (user- or profile-linked)
-            } else {
-                toInsert.add(id); // valid
-            }
-        }
-
-        // Insert valid participants (in same tx; concurrent race →
-        // EXAM_PARTICIPANT_DUPLICATE). User-based rows (V17): the profile's
-        // user is resolved eagerly so user_id is always present.
-        if (!toInsert.isEmpty()) {
-            try {
-                for (Long spId : toInsert) {
-                    StudentProfile sp = profiles.get(spId);
-                    participantRepository.saveAndFlush(
-                            new ExamSessionParticipant(sp.getUserId(), sessionId, spId,
-                                    session.getSchoolId(), userId));
-                }
-            } catch (DataIntegrityViolationException ex) {
-                if (isParticipantDuplicate(ex)) {
-                    throw new ExamException(ExamErrorCode.EXAM_PARTICIPANT_DUPLICATE);
-                }
-                throw ex;
-            }
-        }
-
-        Collections.sort(duplicated);
-        Collections.sort(invalid);
-        return new AddParticipantsResponse(toInsert.size(), duplicated, invalid);
     }
 
     // ============================================================
@@ -187,19 +84,8 @@ public class ExamSessionParticipantService {
         Page<ExamSessionParticipant> participants = participantRepository.findParticipants(sessionId, statusFilter,
                 pageable);
 
-        // Batch-load StudentProfiles for provenance (no N+1); profile-less
-        // rows (V17) contribute no ids — never pass NULL into findAllById.
-        List<Long> studentProfileIds = participants.getContent().stream()
-                .map(ExamSessionParticipant::getStudentProfileId)
-                .filter(Objects::nonNull)
-                .toList();
-        Map<Long, StudentProfile> profiles = studentProfileIds.isEmpty() ? Map.of()
-                : studentProfileRepository.findAllById(studentProfileIds).stream()
-                        .collect(Collectors.toMap(StudentProfile::getId, p -> p));
-
-        // F1 (user-based, P0-R9): batch-load display names by participant
-        // USER id in a SINGLE Hibernate-tracked query — profile-less rows
-        // resolve too; legacy rows no longer depend on the profile join.
+        // Batch display names by participant USER id in a SINGLE
+        // Hibernate-tracked query (F1, no N+1).
         Set<Long> userIds = participants.getContent().stream()
                 .map(ExamSessionParticipant::getUserId)
                 .filter(Objects::nonNull)
@@ -207,25 +93,22 @@ public class ExamSessionParticipantService {
         Map<Long, String> displayNames = batchDisplayNames(userIds);
 
         List<ExamSessionParticipantResponse> items = participants.getContent().stream()
-                .map(p -> {
-                    StudentProfile sp = p.getStudentProfileId() != null
-                            ? profiles.get(p.getStudentProfileId()) : null;
-                    return new ExamSessionParticipantResponse(
-                            p.getId(),
-                            p.getUserId(),
-                            p.getStudentProfileId(),
-                            sp != null ? sp.getStudentCode() : null,
-                            displayNames.get(p.getUserId()),
-                            p.getStatus().name(),
-                            p.getAddedAt(),
-                            p.getBlockedAt());
-                })
+                .map(p -> new ExamSessionParticipantResponse(
+                        p.getId(),
+                        p.getUserId(),
+                        null,
+                        null,
+                        displayNames.get(p.getUserId()),
+                        p.getStatus().name(),
+                        p.getAddedAt(),
+                        p.getBlockedAt()))
                 .toList();
 
         return new PageResponse<>(items, participants.getNumber(), participants.getSize(),
                 participants.getTotalElements(), participants.getTotalPages(),
                 pageable.getSort().toString());
     }
+
 
     // ============================================================
     // POST .../block
@@ -278,7 +161,7 @@ public class ExamSessionParticipantService {
                 block ? "EXAM_SESSION_PARTICIPANT_BLOCK" : "EXAM_SESSION_PARTICIPANT_UNBLOCK");
         // Lock order: session FIRST, then participant. Concurrent toggles serialize
         // here and re-read the latest committed state, so @Version never conflicts
-        // on flush. Shared workspace policy (issue #4 P0-R6).
+        // on flush. Creator-owned session resolution (issue #4 P0-R6).
         ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
         // Block/unblock allowed in DRAFT, SCHEDULED, OPEN.
         if (session.getStatus() != ExamSessionStatus.DRAFT
@@ -326,14 +209,7 @@ public class ExamSessionParticipantService {
             if (attemptCount == null || attemptCount == 0) {
                 throw new ExamException(ExamErrorCode.EXAM_PARTICIPANT_NOT_FOUND);
             }
-            // Fill legacy provenance when the user has a profile (nullable).
-            Object[] provenance = (Object[]) entityManager.createNativeQuery(
-                            "SELECT sp.id, sp.school_id FROM student_profiles sp WHERE sp.user_id = :uid LIMIT 1")
-                    .setParameter("uid", targetUserId)
-                    .getResultList().stream().findFirst().orElse(null);
-            Long profileId = provenance != null ? ((Number) provenance[0]).longValue() : null;
-            Long schoolId = provenance != null ? ((Number) provenance[1]).longValue() : null;
-            p = new ExamSessionParticipant(targetUserId, sessionId, profileId, schoolId, userId);
+            p = new ExamSessionParticipant(targetUserId, sessionId, userId);
             try {
                 p = participantRepository.saveAndFlush(p);
                 // Re-acquire the row lock for the toggle path parity.
@@ -365,14 +241,10 @@ public class ExamSessionParticipantService {
     }
 
     private ExamSessionParticipantResponse toResponse(ExamSessionParticipant p) {
-        StudentProfile sp = p.getStudentProfileId() != null
-                ? studentProfileRepository.findById(p.getStudentProfileId()).orElse(null)
-                : null;
         String displayName = p.getUserId() != null
                 ? batchDisplayNames(Set.of(p.getUserId())).get(p.getUserId()) : null;
         return new ExamSessionParticipantResponse(
-                p.getId(), p.getUserId(), p.getStudentProfileId(),
-                sp != null ? sp.getStudentCode() : null, displayName,
+                p.getId(), p.getUserId(), null, null, displayName,
                 p.getStatus().name(), p.getAddedAt(), p.getBlockedAt());
     }
 

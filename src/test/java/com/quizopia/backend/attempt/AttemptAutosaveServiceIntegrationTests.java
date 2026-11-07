@@ -63,14 +63,10 @@ class AttemptAutosaveServiceIntegrationTests {
         studentUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('a','a@t.com','h','A')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-        long school = insert("INSERT INTO schools (code, name) VALUES ('AS','Autosave School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','Math')");
-        long teacher = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
-        long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + teacher + ",'B','Bank')");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + teacher + ",'E','Exam','PUBLISHED',now(),4)");
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',4,now()," + studentUserId + ")");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
+        long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),4)");
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         String numericKey = "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"two decimals\"}'::jsonb";
         eqSingleId = eq(exam, sec, bank, "SINGLE_CHOICE", 0, studentUserId);
@@ -80,9 +76,9 @@ class AttemptAutosaveServiceIntegrationTests {
         long eqTf = eq(exam, sec, bank, "TRUE_FALSE_MATRIX", 2, studentUserId);
         opts(eqTf);
         long eqNumeric = eqNumeric(exam, sec, bank, 3, studentUserId, numericKey);
-        long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                + school + "," + exam + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + studentUserId + ")");
+        long session = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + exam + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + studentUserId + "," + session + "," + studentUserId + ")");
         attemptId = attemptService.startAttempt(studentUserId, session, new StartAttemptRequest(null)).attemptId();
         aqSingleId = aqId(eqSingleId);
         aqMultipleId = aqId(eqMultiple);
@@ -110,31 +106,14 @@ class AttemptAutosaveServiceIntegrationTests {
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void systemAdminWithoutStudentRejected403() {
-        long admin = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sa','sa@t.com','h','SA')");
-        long adminRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='SYSTEM_ADMIN'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + admin + "," + adminRole + ")");
-        assertThatThrownBy(() -> autosaveService.saveAnswer(admin, attemptId, req(aqSingleId, single("A"), 1)))
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test void noProfileForeignAttemptRejected403() {
-        long noProfile = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
+    @Test void nonOwnerAttemptRejected403() {
+        long nonOwner = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
-        // Public learner passes the permission gate (no profile required) but is not
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + nonOwner + "," + roleId + ")");
+        // The caller passes the permission gate but is not
         // the attempt owner → ownership denial (issue #4 P0-1).
-        assertThatThrownBy(() -> autosaveService.saveAnswer(noProfile, attemptId, req(aqSingleId, single("A"), 1)))
+        assertThatThrownBy(() -> autosaveService.saveAnswer(nonOwner, attemptId, req(aqSingleId, single("A"), 1)))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test void inactiveProfileStillAccepted() {
-        // Profile enrollment status no longer gates autosave (issue #4 P0-1);
-        // permission + user ownership are the only gates.
-        jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
-        em.clear();
-        SaveAnswerResponse r = autosaveService.saveAnswer(studentUserId, attemptId, req(aqSingleId, single("A"), 1));
-        assertThat(r.accepted()).isTrue();
     }
 
     @Test void missingAttemptRejected404() {
@@ -146,17 +125,14 @@ class AttemptAutosaveServiceIntegrationTests {
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o','o@t.com','h','O')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) SELECT " + other + ", school_id, 'OS' FROM student_profiles WHERE user_id=" + studentUserId);
         assertThatThrownBy(() -> autosaveService.saveAnswer(other, attemptId, req(aqSingleId, single("A"), 1)))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void crossSchoolAttemptRejected403() {
-        long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('XS','XS')");
+    @Test void otherUserAttemptRejected403() {
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + other + "," + otherSchool + ",'XS')");
         assertThatThrownBy(() -> autosaveService.saveAnswer(other, attemptId, req(aqSingleId, single("A"), 1)))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }

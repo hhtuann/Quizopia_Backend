@@ -1,13 +1,8 @@
 package com.quizopia.backend.question;
-
-import com.quizopia.backend.academic.domain.model.School;
 import com.quizopia.backend.academic.domain.model.Subject;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.domain.model.GradeLevel;
-import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.GradeLevelRepository;
 import com.quizopia.backend.academic.repository.SubjectRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.question.domain.model.*;
@@ -44,10 +39,8 @@ class QuestionVersionJsonNodeIntegrationTests {
     @Autowired private QuestionVersionRepository versionRepo;
     @Autowired private QuestionRepository questionRepo;
     @Autowired private QuestionBankRepository bankRepo;
-    @Autowired private TeacherProfileRepository teacherRepo;
     @Autowired private SubjectRepository subjectRepo;
     @Autowired private GradeLevelRepository gradeLevelRepo;
-    @Autowired private SchoolRepository schoolRepo;
     @Autowired private UserRepository userRepo;
     @Autowired private EntityManager entityManager;
 
@@ -126,15 +119,12 @@ class QuestionVersionJsonNodeIntegrationTests {
     private long[] seedPrerequisites() {
         User user = userRepo.saveAndFlush(
                 new User("json-test-user", "json@test.com", "hash", "JSON Test"));
-        School school = schoolRepo.saveAndFlush(new School("JSON-SCH", "JSON School"));
         GradeLevel gl = gradeLevelRepo.saveAndFlush(
-                new GradeLevel(school.getId(), "GL", "Grade"));
+                new GradeLevel("GL-JSON", "Grade"));
         Subject subject = subjectRepo.saveAndFlush(
-                new Subject(school.getId(), gl.getId(), "SUB", "Subject"));
-        TeacherProfile tp = teacherRepo.saveAndFlush(
-                new TeacherProfile(user.getId(), school.getId(), "TC-JSON"));
+                new Subject(gl.getId(), "SUB-JSON", "Subject"));
         QuestionBank bank = bankRepo.saveAndFlush(new QuestionBank(
-                school.getId(), subject.getId(), tp.getId(), "JSON-BANK", "JSON Bank"));
-        return new long[]{bank.getId(), tp.getId(), user.getId()};
+                user.getId(), subject.getId(), "JSON-BANK", "JSON Bank"));
+        return new long[]{bank.getId(), subject.getId(), user.getId()};
     }
 }

@@ -6,7 +6,11 @@ import jakarta.validation.constraints.Positive;
 
 import java.util.List;
 
+/**
+ * Request body for {@code POST /api/classrooms/{id}/members}: bulk add of
+ * platform users (by user id) with partial-success classification.
+ */
 public record AddMembersRequest(
-        @NotNull @NotEmpty List<@Positive Long> studentProfileIds
+        @NotNull @NotEmpty List<@Positive Long> userIds
 ) {
 }

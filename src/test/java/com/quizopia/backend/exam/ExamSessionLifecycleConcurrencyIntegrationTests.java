@@ -3,7 +3,6 @@ package com.quizopia.backend.exam;
 import com.quizopia.backend.exam.application.ExamService;
 import com.quizopia.backend.exam.application.ExamSessionParticipantService;
 import com.quizopia.backend.exam.application.ExamSessionService;
-import com.quizopia.backend.exam.dto.AddParticipantsRequest;
 import com.quizopia.backend.exam.dto.CreateExamRequest;
 import com.quizopia.backend.exam.dto.CreateExamSessionRequest;
 import com.quizopia.backend.exam.dto.UpdateDraftCompositionRequest;
@@ -62,7 +61,6 @@ class ExamSessionLifecycleConcurrencyIntegrationTests {
     private static long runSeq = 0;
 
     private long teacherUserId;
-    private long schoolId;
     private long examId;
     private long student1;
 
@@ -71,23 +69,19 @@ class ExamSessionLifecycleConcurrencyIntegrationTests {
         String u = "k" + (++runSeq);
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('kc" + u + "','kc" + u + "@t','h','KC" + u + "')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('KCS" + u + "','KC School " + u + "')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'KCC" + u + "')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'KCB','Bank')");
-        long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q','ACTIVE',1," + teacherUserId + ")");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, code, name) VALUES (" + teacherUserId + ",'KCB" + u + "','Bank')");
+        long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q" + u + "','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        examId = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "KCE" + u, "T", null)).id();
+        examId = examService.createExam(teacherUserId, new CreateExamRequest(null, null, "KCE" + u, "T", null)).id();
         examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
         jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
-        long uid = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('st" + u + "','st" + u + "@t','h','ST')");
-        student1 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + uid + "," + schoolId + ",'HS" + u + "')");
+        student1 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('st" + u + "','st" + u + "@t','h','ST')");
     }
+
 
     // -- Same-transition ×2: both 200, no 500 --
 
@@ -245,9 +239,11 @@ class ExamSessionLifecycleConcurrencyIntegrationTests {
         return sid;
     }
 
-    private long addParticipant(long sessionId, long studentProfileId) {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(studentProfileId)));
-        return jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND student_profile_id=?", Long.class, sessionId, studentProfileId);
+    /** Inserts a user-based ELIGIBLE participant row; returns its id. */
+    private long addParticipant(long sessionId, long studentUserId) {
+        return jdbc.queryForObject(
+                "INSERT INTO exam_session_participants (exam_session_id, user_id, status, added_by, version) "
+                        + "VALUES (?,?,'ELIGIBLE',?,0) RETURNING id", Long.class, sessionId, studentUserId, teacherUserId);
     }
 
     private void assertStatus(long sessionId, String expected) {

@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Autosave endpoint (A3.2-3): {@code PUT /api/attempts/{attemptId}/answers}.
  *
- * <p>Authorization (STUDENT role + {@code ATTEMPT_ANSWER_SAVE} + ACTIVE profile) and the
+ * <p>Authorization ({@code ATTEMPT_ANSWER_SAVE} learner permission) and the
  * state/deadline/ownership/payload/sequence rules are enforced in {@link AttemptAutosaveService}.
  * No submit, no grading, no event.
  */

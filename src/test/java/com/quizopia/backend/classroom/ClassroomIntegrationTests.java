@@ -48,11 +48,8 @@ class ClassroomIntegrationTests {
         private MutableClock clock;
 
         private long teacherUserId;
-        private long schoolId;
-        private long teacherProfileId;
-        private long studentProfileId1;
-        private long studentProfileId2;
-        private long otherSchoolStudentProfileId;
+        private long studentUserId1;
+        private long studentUserId2;
 
         @BeforeEach
         void setUp() {
@@ -63,20 +60,10 @@ class ClassroomIntegrationTests {
                                 + "VALUES ('tchr" + tag + "','tchr" + tag + "@t.com','h','Teacher')");
                 long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + teacherUserId + "," + tr + ")");
-                schoolId = insert("INSERT INTO schools (code, name) VALUES ('SC" + tag + "','School')");
-                long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-                insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
-                                + ",'M','Math')");
-                teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                                + "VALUES (" + teacherUserId + "," + schoolId + ",'TC" + tag + "')");
 
-                // Two students in the same school.
-                studentProfileId1 = createStudent(schoolId, tag + "s1");
-                studentProfileId2 = createStudent(schoolId, tag + "s2");
-
-                // A student in a DIFFERENT school (for cross-school rejection).
-                long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS" + tag + "','Other')");
-                otherSchoolStudentProfileId = createStudent(otherSchool, tag + "os");
+                // Two students (platform users; membership is user-based).
+                studentUserId1 = createStudent(tag + "s1");
+                studentUserId2 = createStudent(tag + "s2");
         }
 
         // ============================================================
@@ -92,7 +79,7 @@ class ClassroomIntegrationTests {
                 assertThat(resp.name()).isEqualTo("Class A");
                 assertThat(resp.status()).isEqualTo("ACTIVE");
                 assertThat(resp.memberCount()).isZero();
-                assertThat(resp.ownerTeacherId()).isEqualTo(teacherProfileId);
+                assertThat(resp.ownerUserId()).isEqualTo(teacherUserId);
         }
 
         @Test
@@ -128,7 +115,7 @@ class ClassroomIntegrationTests {
                 long classroomId = classroomService.createClassroom(teacherUserId,
                                 new CreateClassroomRequest("D1", "Detail", null)).id();
                 classroomService.addMembers(teacherUserId, classroomId,
-                                new AddMembersRequest(List.of(studentProfileId1, studentProfileId2)));
+                                new AddMembersRequest(List.of(studentUserId1, studentUserId2)));
 
                 ClassroomDetailView detail = classroomService.getClassroom(teacherUserId, classroomId);
                 assertThat(detail.code()).isEqualTo("D1");
@@ -157,18 +144,18 @@ class ClassroomIntegrationTests {
         void addMembersPartialSuccess() {
                 long classroomId = classroomService.createClassroom(teacherUserId,
                                 new CreateClassroomRequest("M1", "Members", null)).id();
-                // Add studentProfileId1 first.
+                // Add studentUserId1 first.
                 classroomService.addMembers(teacherUserId, classroomId,
-                                new AddMembersRequest(List.of(studentProfileId1)));
+                                new AddMembersRequest(List.of(studentUserId1)));
 
-                // Now add: studentProfileId1 (duplicate), studentProfileId2 (new),
-                // otherSchoolStudentProfileId (cross-school invalid).
+                // Now add: studentUserId1 (duplicate), studentUserId2 (new),
+                // and a nonexistent user id (invalid).
+                long missingUserId = 999_999_999L;
                 AddMembersResponse resp = classroomService.addMembers(teacherUserId, classroomId,
-                                new AddMembersRequest(List.of(studentProfileId1, studentProfileId2,
-                                                otherSchoolStudentProfileId)));
-                assertThat(resp.added()).isEqualTo(1); // only studentProfileId2
-                assertThat(resp.duplicated()).containsExactly(studentProfileId1);
-                assertThat(resp.invalid()).containsExactly(otherSchoolStudentProfileId);
+                                new AddMembersRequest(List.of(studentUserId1, studentUserId2, missingUserId)));
+                assertThat(resp.added()).isEqualTo(1); // only studentUserId2
+                assertThat(resp.duplicated()).containsExactly(studentUserId1);
+                assertThat(resp.invalid()).containsExactly(missingUserId);
         }
 
         // ============================================================
@@ -180,8 +167,8 @@ class ClassroomIntegrationTests {
                 long classroomId = classroomService.createClassroom(teacherUserId,
                                 new CreateClassroomRequest("R1", "Remove", null)).id();
                 classroomService.addMembers(teacherUserId, classroomId,
-                                new AddMembersRequest(List.of(studentProfileId1, studentProfileId2)));
-                classroomService.removeMember(teacherUserId, classroomId, studentProfileId1);
+                                new AddMembersRequest(List.of(studentUserId1, studentUserId2)));
+                classroomService.removeMember(teacherUserId, classroomId, studentUserId1);
                 ClassroomDetailView detail = classroomService.getClassroom(teacherUserId, classroomId);
                 assertThat(detail.memberCount()).isEqualTo(1);
         }
@@ -195,7 +182,7 @@ class ClassroomIntegrationTests {
                 long classroomId = classroomService.createClassroom(teacherUserId,
                                 new CreateClassroomRequest("P1", "Paged", null)).id();
                 classroomService.addMembers(teacherUserId, classroomId,
-                                new AddMembersRequest(List.of(studentProfileId1, studentProfileId2)));
+                                new AddMembersRequest(List.of(studentUserId1, studentUserId2)));
                 PageResponse<ClassroomMemberResponse> page = classroomService.listMembers(teacherUserId, classroomId, 0,
                                 10, null);
                 assertThat(page.items()).hasSize(2);
@@ -208,11 +195,8 @@ class ClassroomIntegrationTests {
 
         @Test
         void nonTeacherRoleDeniedCreate() {
-                // studentProfileId1's user has STUDENT role only → no CLASSROOM_CREATE
-                // permission.
-                long studentUserId = jdbc.queryForObject(
-                                "SELECT user_id FROM student_profiles WHERE id = " + studentProfileId1, Long.class);
-                assertThatThrownBy(() -> classroomService.createClassroom(studentUserId,
+                // A STUDENT-role user has no CLASSROOM_CREATE permission.
+                assertThatThrownBy(() -> classroomService.createClassroom(studentUserId1,
                                 new CreateClassroomRequest("X", "X", null)))
                                 .isInstanceOf(ClassroomException.class);
         }
@@ -226,8 +210,6 @@ class ClassroomIntegrationTests {
                                 + "VALUES ('t2','t2@t.com','h','T2')");
                 long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + t2 + "," + tr + ")");
-                insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + t2 + "," + schoolId
-                                + ",'TC2')");
                 // T2 tries to access T1's classroom → access denied.
                 assertThatThrownBy(() -> classroomService.getClassroom(t2, classroomId))
                                 .isInstanceOf(ClassroomException.class)
@@ -239,14 +221,13 @@ class ClassroomIntegrationTests {
         // Helpers
         // ============================================================
 
-        private long createStudent(long school, String suffix) {
+        private long createStudent(String suffix) {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) "
                                 + "VALUES ('stu" + suffix + "','stu" + suffix + "@t.com','h','Student " + suffix
                                 + "')");
                 long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + sr + ")");
-                return insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
-                                + "VALUES (" + u + "," + school + ",'SC" + suffix + "')");
+                return u;
         }
 
         private long insert(String sql) {

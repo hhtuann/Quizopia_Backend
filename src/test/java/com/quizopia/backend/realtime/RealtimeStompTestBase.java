@@ -170,38 +170,32 @@ public abstract class RealtimeStompTestBase {
     }
 
     /**
-     * Creates a teacher with a school + PUBLISHED exam + an OPEN session they own; returns the sessionId.
+     * Creates a teacher with a PUBLISHED exam (bank + question + composition)
+     * and an OPEN PUBLIC session they created; returns the sessionId.
      *
-     * <p>Workspace-membership authorization (issue #4 P0-2): the exam lives in the school's
-     * ORGANIZATION workspace (resolved by the V11 trigger from {@code school_id}). The session
-     * creator may subscribe the teacher topic only with a valid ACTIVE workspace membership, so the
-     * fixture inserts one explicitly (the V10 membership backfill ran at migration time, before this
-     * post-migration school/teacher existed).
+     * <p>Teacher-topic authorization (user-centric model): the session is
+     * owned directly by its creator ({@code exam_sessions.created_by}), and
+     * the TEACHER role carries EXAM_SESSION_MONITOR, so the subscribing
+     * teacher IS the session creator.
      */
     protected long createTeacherOwnedOpenSession(String tag) {
         long teacherId = insertUserWithRole(tag, "TEACHER");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('" + tag + "S','Sch')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherId + "," + school + ",'TC" + tag + "')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'E','E')");
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "VALUES ((SELECT workspace_id FROM exams WHERE id=" + exam + ")," + teacherId + ",'EDITOR','ACTIVE') "
-                + "ON CONFLICT DO NOTHING");
-        jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=" + exam);
+        long exam = ins("INSERT INTO exams (created_by_user_id, code, title, status, published_at, total_points)"
+                + " VALUES (" + teacherId + ",'E" + tag + "','E','PUBLISHED',now(),1.00)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'B','B')");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, code, name)"
+                + " VALUES (" + teacherId + ",'B" + tag + "','B')");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + teacherId + ")");
         long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherId + ")");
         long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
         Instant now = Instant.parse("2026-07-04T08:00:00Z");
-        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
-                + school + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2,60," + teacherId + ",'" + now.minusSeconds(3600) + "')");
+        return ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
+                + exam + ",'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2,60," + teacherId + ",'" + now.minusSeconds(3600) + "')");
     }
 
     protected long teacherIdForSession(long sessionId) {
-        return jdbc.queryForObject("SELECT u.id FROM users u JOIN teacher_profiles tp ON tp.user_id=u.id JOIN exam_sessions s ON s.owner_teacher_id=tp.id WHERE s.id=" + sessionId, Long.class);
+        return jdbc.queryForObject("SELECT created_by FROM exam_sessions WHERE id=" + sessionId, Long.class);
     }
 
     protected long ins(String sql) {

@@ -18,7 +18,7 @@ class ClassroomRosterEntryToStringTest {
 
     @Test
     void toStringOmitsAllPersonalData() {
-        Classroom classroom = Classroom.independent(42L, 7L, "C1", "Class");
+        Classroom classroom = new Classroom(42L, "C1", "Class");
         ClassroomRosterEntry entry = new ClassroomRosterEntry(
                 classroom, SENSITIVE_EMAIL, SENSITIVE_NAME, 9L);
         // Populate every sensitive field with recognizable marker values.
@@ -53,7 +53,7 @@ class ClassroomRosterEntryToStringTest {
 
     @Test
     void linkedAndDeclinedStatesStayDebuggableWithoutPii() {
-        Classroom classroom = Classroom.independent(1L, 2L, "C2", "Class");
+        Classroom classroom = new Classroom(1L, "C2", "Class");
         ClassroomRosterEntry entry = new ClassroomRosterEntry(
                 classroom, "link-me@example.com", "Link Me", 3L);
         entry.linkTo(77L, java.time.Instant.parse("2026-01-01T00:00:00Z"));

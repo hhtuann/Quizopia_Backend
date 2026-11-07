@@ -11,8 +11,7 @@ import com.quizopia.backend.classroom.exception.ClassroomErrorCode;
 import com.quizopia.backend.classroom.exception.ClassroomException;
 import com.quizopia.backend.academic.exception.AcademicErrorCode;
 import com.quizopia.backend.academic.exception.AcademicException;
-import com.quizopia.backend.user.exception.UserErrorCode;
-import com.quizopia.backend.user.exception.UserException;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -79,15 +78,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(code.statusCode()).body(body);
     }
 
-    @ExceptionHandler(com.quizopia.backend.workspace.exception.WorkspaceException.class)
-    public ResponseEntity<ApiError> handleWorkspaceException(
-            com.quizopia.backend.workspace.exception.WorkspaceException ex, HttpServletRequest request) {
-        com.quizopia.backend.workspace.exception.WorkspaceErrorCode code = ex.getErrorCode();
-        String path = request != null ? request.getRequestURI() : null;
-        ApiError body = new ApiError(
-                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
-        return ResponseEntity.status(code.statusCode()).body(body);
-    }
 
     @ExceptionHandler(AcademicException.class)
     public ResponseEntity<ApiError> handleAcademicException(AcademicException ex, HttpServletRequest request) {
@@ -98,14 +88,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(code.statusCode()).body(body);
     }
 
-    @ExceptionHandler(UserException.class)
-    public ResponseEntity<ApiError> handleUserException(UserException ex, HttpServletRequest request) {
-        UserErrorCode code = ex.getErrorCode();
-        String path = request != null ? request.getRequestURI() : null;
-        ApiError body = new ApiError(
-                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
-        return ResponseEntity.status(code.statusCode()).body(body);
-    }
 
     @ExceptionHandler(com.quizopia.backend.attempt.exception.AttemptException.class)
     public ResponseEntity<ApiError> handleAttemptException(

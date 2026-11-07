@@ -34,9 +34,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
     private long sessionId;
     private long teacherId;
     private String teacherToken;
-    private long school;
     private long examId;
-    private long ownerTeacherProfileId;
 
     @BeforeEach
     void setUp() {
@@ -45,9 +43,7 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
         sessionId = createTeacherOwnedOpenSession("se-" + tag);
         teacherId = teacherIdForSession(sessionId);
         teacherToken = accessToken(teacherId, "se-tch", List.of("TEACHER"));
-        school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         examId = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        ownerTeacherProfileId = jdbc.queryForObject("SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
     }
 
     @Test
@@ -147,22 +143,22 @@ class RealtimeSessionEventIntegrationTests extends RealtimeStompTestBase {
     // --- fixtures ---
 
     private long newScheduledSession() {
-        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
-                + school + "," + examId + "," + ownerTeacherProfileId + ",'SCH','t','SCHEDULED','"
+        return ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + examId + ",'SCH','t','SCHEDULED','"
                 + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2,60," + teacherId + ")");
     }
 
     private long newOpenSession() {
         Instant n = Instant.now();
-        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
-                + school + "," + examId + "," + ownerTeacherProfileId + ",'OPN','t','OPEN','"
+        return ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at) VALUES ("
+                + examId + ",'OPN','t','OPEN','"
                 + n.minusSeconds(3600) + "','" + n.plusSeconds(7200) + "',2,60," + teacherId + ",'" + n.minusSeconds(3600) + "')");
     }
 
     private long newClosedSession() {
         Instant n = Instant.now();
-        return ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at, closed_at) VALUES ("
-                + school + "," + examId + "," + ownerTeacherProfileId + ",'CLD','t','CLOSED','"
+        return ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by, opened_at, closed_at) VALUES ("
+                + examId + ",'CLD','t','CLOSED','"
                 + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "',2,60," + teacherId + ",'" + n.minusSeconds(7200) + "','" + n.minusSeconds(3600) + "')");
     }
 

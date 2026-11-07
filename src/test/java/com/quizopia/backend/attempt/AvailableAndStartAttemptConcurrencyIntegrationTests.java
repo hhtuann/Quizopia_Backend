@@ -71,7 +71,7 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
     }
 
     /** Resolved setup identifiers for a concurrency scenario. */
-    private record Chain(long studentUserId, long sessionId, long studentProfileId,
+    private record Chain(long studentUserId, long sessionId,
             long teacherUserId, long participantId, int sourceQuestionCount) {
     }
 
@@ -316,7 +316,7 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
     private Chain setupChain(int questionCount) {
         String s = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         Instant now = Instant.parse("2026-07-03T08:00:00Z");
-        long[] ids = new long[6];
+        long[] ids = new long[5];
         tx().executeWithoutResult(status -> {
             clock.setInstant(now);
             // Teacher (owns the session; authorized for EXAM_SESSION_CLOSE /
@@ -325,33 +325,19 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
                     + s + "@t.com','h','T" + s + "')");
             long teacherRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
             jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + tu + "," + teacherRoleId + ")");
-            long sch = insert("INSERT INTO schools (code, name) VALUES ('S" + s + "','Sch')");
-            long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + sch + ",'GL','G')");
-            long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + sch + "," + gl
-                    + ",'SUB','S')");
-            long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + tu + "," + sch
-                    + ",'TC" + s + "')");
+            long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + s + "','G')");
+            long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'SUB','S')");
             // Student (takes the attempt).
             long su = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('c" + s + "','c"
                     + s + "@t.com','h','C" + s + "')");
             long studentRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
             jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + su + "," + studentRoleId + ")");
-            long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + su + "," + sch
-                    + ",'SC" + s + "')");
             long bank = insert(
-                    "INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + sch
-                            + "," + subj + "," + tp + ",'B" + s + "','Bank')");
-            long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
+                    "INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + tu
+                            + "," + subj + ",'B" + s + "','Bank')");
+            long examId = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, "
                     + "published_at, total_points) VALUES ("
-                    + sch + "," + subj + "," + tp + ",'E" + s + "','t','PUBLISHED',now(),10)");
-            // ORGANIZATION-workspace exam (school-based insert): the session creator needs
-            // an ACTIVE workspace membership to close/block the session (issue #4 P0-2).
-            jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                    + "SELECT workspace_id, " + tu + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + examId
-                    + " ON CONFLICT DO NOTHING");
-            insert(
-                    "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
-                            + sch + "," + examId + ",1,'PUBLISHED',10,now()," + tu + ")");
+                    + tu + "," + subj + ",'E" + s + "','t','PUBLISHED',now(),10)");
             for (int i = 0; i < questionCount; i++) {
                 long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + s
                         + i + "'," + tu + ")");
@@ -370,20 +356,19 @@ class AvailableAndStartAttemptConcurrencyIntegrationTests {
                                 + eq + ",'D','d',false,3)");
             }
             long session = insert(
-                    "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                            + sch + "," + examId + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600)
+                    "INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                            + examId + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600)
                             + "','" + now.plusSeconds(7200) + "',2," + tu + ",'" + now.minusSeconds(3600) + "',60)");
             long participantId = insert(
-                    "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                            + sch + "," + session + "," + sp + "," + tu + ")");
+                    "INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                            + su + "," + session + "," + tu + ")");
             ids[0] = su;
             ids[1] = session;
-            ids[2] = sp;
-            ids[3] = tu;
-            ids[4] = participantId;
-            ids[5] = questionCount;
+            ids[2] = tu;
+            ids[3] = participantId;
+            ids[4] = questionCount;
         });
-        return new Chain(ids[0], ids[1], ids[2], ids[3], ids[4], (int) ids[5]);
+        return new Chain(ids[0], ids[1], ids[2], ids[3], (int) ids[4]);
     }
 
     private void cleanup(long sessionId) {

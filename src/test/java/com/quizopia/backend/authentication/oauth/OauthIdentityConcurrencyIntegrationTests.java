@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Review finding M1-05 regression proof: concurrent Google first-logins for
  * the SAME (issuer, subject) must converge on exactly one Quizopia user,
- * identity, STUDENT grant and personal workspace — with independent
+ * identity, and STUDENT grant — with independent
  * transactions (the test class is intentionally NOT transactional, so every
  * service call commits like a production callback).
  */
@@ -66,8 +66,6 @@ class OauthIdentityConcurrencyIntegrationTests {
                 + " WHERE u.id = " + userId)).isEqualTo(1);
         assertThat(count("SELECT count(*) FROM user_roles ur JOIN roles r ON r.id = ur.role_id"
                 + " WHERE ur.user_id = " + userId + " AND r.code = 'STUDENT'")).isEqualTo(1);
-        assertThat(count("SELECT count(*) FROM workspaces WHERE owner_user_id = " + userId
-                + " AND workspace_type = 'PERSONAL'")).isEqualTo(1);
     }
 
     @Test

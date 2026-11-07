@@ -49,10 +49,8 @@ class RealtimeHttpFailureIsolationIntegrationTests extends RealtimeStompTestBase
         sessionId = createTeacherOwnedOpenSession("hf-" + tag);
         teacherId = teacherIdForSession(sessionId);
         studentId = insertUserWithRole("hf-stu-" + tag, "STUDENT");
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentId + "," + school + ",'SC" + tag + "')");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                + school + "," + sessionId + ",(SELECT id FROM student_profiles WHERE user_id=" + studentId + ")," + teacherId + ")");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                + studentId + "," + sessionId + "," + teacherId + ")");
         publisher.reset();
     }
 
@@ -79,11 +77,9 @@ class RealtimeHttpFailureIsolationIntegrationTests extends RealtimeStompTestBase
 
     @Test
     void sessionOpenHttpSuccessDespiteBrokerFailure() throws Exception {
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long owner = jdbc.queryForObject("SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long sched = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
-                + school + "," + exam + "," + owner + ",'HFSCH','t','SCHEDULED','"
+        long sched = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + exam + ",'HFSCH','t','SCHEDULED','"
                 + Instant.now().minusSeconds(3600) + "','" + Instant.now().plusSeconds(7200) + "',2,60," + teacherId + ")");
         publisher.failNext((type, sid) -> type == RealtimeEventType.SESSION_OPENED && sid.equals(sched));
 

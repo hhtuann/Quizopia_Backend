@@ -1,6 +1,6 @@
 package com.quizopia.backend.attempt.application;
 
-import com.quizopia.backend.academic.domain.model.StudentProfile;
+
 import com.quizopia.backend.attempt.domain.model.Attempt;
 import com.quizopia.backend.attempt.domain.model.AttemptAnswer;
 import com.quizopia.backend.attempt.domain.model.AttemptQuestion;
@@ -51,13 +51,11 @@ public class AttemptResultService {
         private final AttemptQuestionRepository attemptQuestionRepo;
         private final AttemptAnswerRepository attemptAnswerRepo;
         private final JdbcTemplate jdbc;
-        private final SystemAdminResultAccessPolicy adminAccess;
 
         public AttemptResultService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                         GradeRepository gradeRepo, GradeItemRepository gradeItemRepo,
                         AttemptQuestionRepository attemptQuestionRepo,
-                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc,
-                        SystemAdminResultAccessPolicy adminAccess) {
+                        AttemptAnswerRepository attemptAnswerRepo, JdbcTemplate jdbc) {
                 this.auth = auth;
                 this.attemptRepo = attemptRepo;
                 this.gradeRepo = gradeRepo;
@@ -65,21 +63,18 @@ public class AttemptResultService {
                 this.attemptQuestionRepo = attemptQuestionRepo;
                 this.attemptAnswerRepo = attemptAnswerRepo;
                 this.jdbc = jdbc;
-                this.adminAccess = adminAccess;
         }
+
 
          /**
           * Resource-based attempt result (reads persisted snapshot; no re-grading;
-          * no answer key). Policy (issue #4 P0-R1/R3) — the decision does NOT
-          * branch on the caller's resolved role:
+          * no answer key). Policy — the decision does NOT branch on the caller's
+          * resolved role:
           * <ol>
           *   <li>OWN attempt — any authorized learner holding ATTEMPT_READ may
           *       read their own submitted/graded attempt ({@code attempt.userId}),
           *       regardless of TEACHER/STUDENT capability mix;</li>
-          *   <li>SYSTEM_ADMIN — explicit, audited platform-operator access
-          *       (DB-verified active role, not a caller-supplied string);</li>
-          *   <li>organizer — the session creator (with valid workspace access)
-          *       or an ACTIVE OWNER/ADMIN member of the exam's workspace.</li>
+          *   <li>organizer — the session creator (user-centric ownership).</li>
           * </ol>
           */
           public AttemptResultResponse getAttemptResult(Long userId, Long attemptId) {
@@ -87,8 +82,6 @@ public class AttemptResultService {
                                  .orElseThrow(() -> new AttemptException(AttemptErrorCode.RESULT_NOT_FOUND));
                  if (attempt.getUserId().equals(userId)) {
                          auth.requireLearnerWithPermission(userId, "ATTEMPT_READ");
-                  } else if (adminAccess.grantRead(userId, "ATTEMPT_RESULT", attemptId)) {
-                         // Explicit break-glass: platform operator, DB-verified.
                  } else {
                          authorizeOrganizerOwnsSession(userId, attempt.getExamSessionId());
                  }
@@ -101,23 +94,15 @@ public class AttemptResultService {
          }
 
          private void authorizeOrganizerOwnsSession(Long userId, Long sessionId) {
-                 // Session creator OR exam-workspace OWNER/ADMIN — both gated on
-                 // an ACTIVE membership for org workspaces (issue #4 P0-2/R3);
-                 // personal-workspace owners qualify via the workspace shape.
-                 Integer owns = jdbc.queryForObject(
-                                 "SELECT count(*) FROM exam_sessions s "
-                                                 + "JOIN exams e ON e.id = s.exam_id "
-                                                 + "JOIN workspaces w ON w.id = e.workspace_id "
-                                                 + "LEFT JOIN workspace_memberships wm ON wm.workspace_id = e.workspace_id "
-                                                 + "  AND wm.user_id = ? AND wm.status = 'ACTIVE' "
-                                                 + "WHERE s.id = ? AND ("
-                                                 + "  (s.created_by = ? AND (w.workspace_type = 'PERSONAL' OR wm.id IS NOT NULL))"
-                                                 + "  OR wm.role IN ('OWNER','ADMIN'))",
-                                 Integer.class, userId, sessionId, userId);
-                 if (owns == null || owns == 0) {
-                         throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
-                 }
+                // Session creator only (user-centric ownership).
+                Integer owns = jdbc.queryForObject(
+                                "SELECT count(*) FROM exam_sessions s WHERE s.id = ? AND s.created_by = ?",
+                                Integer.class, sessionId, userId);
+                if (owns == null || owns == 0) {
+                        throw new AttemptException(AttemptErrorCode.RESULT_ACCESS_DENIED);
+                }
          }
+
 
         /**
          * Student own BEST result for a session (RESULT_NOT_FOUND if no

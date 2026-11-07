@@ -12,7 +12,7 @@ import com.quizopia.backend.identity.repository.RoleRepository;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.security.password.PasswordHasher;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -38,7 +38,7 @@ import java.util.UUID;
  * <ul>
  *   <li>{@code external_identities (provider, issuer, subject)} decides the
  *       user for an identity — concurrent first logins converge on exactly one
- *       user, identity, STUDENT grant and personal workspace;</li>
+ *       user, identity and STUDENT grant;</li>
  *   <li>{@code users lower(email)} enforces the no-takeover policy: a Google
  *       login may never claim an existing password account's address.</li>
  * </ul>
@@ -48,8 +48,8 @@ import java.util.UUID;
  * collides with an existing password account is REJECTED on the LOGIN flow —
  * linking requires the authenticated, re-verified flow in
  * {@link GoogleLinkService}. New users get a per-account random password hash
- * (unusable, never returned), the STUDENT role, a personal workspace, and a
- * verified email (the provider asserted {@code email_verified}).
+ * (unusable, never returned), the STUDENT role, and a verified email (the
+ * provider asserted {@code email_verified}).
  */
 @Service
 public class OauthIdentityService {
@@ -67,7 +67,7 @@ public class OauthIdentityService {
     private final RoleRepository roleRepository;
     private final PasswordHasher passwordHasher;
     private final com.quizopia.backend.security.token.RefreshTokenHasher sha256Hasher;
-    private final WorkspaceProvisioningService workspaceProvisioningService;
+
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -80,7 +80,7 @@ public class OauthIdentityService {
             RoleRepository roleRepository,
             PasswordHasher passwordHasher,
             com.quizopia.backend.security.token.RefreshTokenHasher sha256Hasher,
-            WorkspaceProvisioningService workspaceProvisioningService,
+
             Clock clock,
             TransactionTemplate tx,
             com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity) {
@@ -91,7 +91,7 @@ public class OauthIdentityService {
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.sha256Hasher = sha256Hasher;
-        this.workspaceProvisioningService = workspaceProvisioningService;
+
         this.clock = clock;
         this.tx = tx;
         this.credentialSecurity = credentialSecurity;
@@ -201,7 +201,7 @@ public class OauthIdentityService {
         });
     }
 
-    /** Runs INSIDE a transaction: user + role + workspace + identity link. */
+    /** Runs INSIDE a transaction: user + role + identity link. */
     private User provisionNewGoogleUser(ValidatedOidcIdentity identity) {
         Instant now = Instant.now(clock);
         // Idempotence under concurrency: re-check inside the transaction.
@@ -359,7 +359,7 @@ public class OauthIdentityService {
                 .orElseThrow(() -> new IllegalStateException(
                         "Required role '" + STUDENT_ROLE_CODE + "' is not seeded; check Flyway V3"));
         userRoleRepository.insertAssignmentIfAbsent(user.getId(), student.getId());
-        workspaceProvisioningService.ensurePersonalWorkspace(user);
+
         return user;
     }
 

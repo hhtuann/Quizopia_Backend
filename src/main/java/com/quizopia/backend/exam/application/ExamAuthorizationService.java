@@ -1,7 +1,5 @@
 package com.quizopia.backend.exam.application;
 
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
 import com.quizopia.backend.identity.repository.RolePermissionRepository;
@@ -14,44 +12,39 @@ import java.util.List;
 
 /**
  * Shared authorization component for the exam module. Enforces deny-by-default:
- * active TEACHER role (DB) → effective permission (DB) → TeacherProfile exists.
- * No JWT claim authority, no role hierarchy, no SYSTEM_ADMIN bypass.
+ * active DB role (STUDENT/TEACHER) → effective DB permission. No JWT claim
+ * authority, no role hierarchy, no admin bypass. Resource access is enforced
+ * separately by user-ownership checks in the services.
  */
 @Component
 public class ExamAuthorizationService {
 
     private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
     private final Clock clock;
 
     public ExamAuthorizationService(UserRoleRepository userRoleRepository,
                                      RolePermissionRepository rolePermissionRepository,
-                                     TeacherProfileRepository teacherProfileRepository,
                                      Clock clock) {
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
         this.clock = clock;
     }
 
     /**
      * Requires the caller to have an active TEACHER role AND the specified
-     * effective permission (both read from the DB, not JWT claims), AND a
-     * TeacherProfile. Returns the resolved profile.
+     * effective permission (both read from the DB, not JWT claims).
      */
-    public TeacherProfile requireTeacherWithPermission(Long userId, String permissionCode) {
+    public void requireTeacherWithPermission(Long userId, String permissionCode) {
         Instant now = Instant.now(clock);
         requireActiveTeacherRole(userId, now);
         requirePermission(userId, permissionCode, now);
-        return resolveTeacherProfile(userId, now);
     }
 
     /**
-     * Public-platform variant (issue #1 A2/A3): requires the effective
-     * permission only — a user authoring in their personal workspace has no
-     * TeacherProfile. Resource access is additionally guarded by workspace
-     * membership/ownership checks in the services.
+     * Requires the effective permission only — the caller's STUDENT/TEACHER
+     * capability. Resource access is additionally guarded by user-ownership
+     * checks in the services.
      */
     public void requireUserWithPermission(Long userId, String permissionCode) {
         Instant now = Instant.now(clock);
@@ -70,16 +63,5 @@ public class ExamAuthorizationService {
         if (!perms.contains(permission)) {
             throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
         }
-    }
-
-    private TeacherProfile resolveTeacherProfile(Long userId, Instant now) {
-        return teacherProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> {
-                    List<String> roles = userRoleRepository.findActiveRoleCodesByUserId(userId, now);
-                    if (roles.contains("TEACHER")) {
-                        return new ExamException(ExamErrorCode.EXAM_TEACHER_PROFILE_NOT_FOUND);
-                    }
-                    return new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
-                });
     }
 }

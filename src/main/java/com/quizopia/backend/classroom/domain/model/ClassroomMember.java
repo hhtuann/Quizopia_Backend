@@ -13,10 +13,8 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping the {@code classroom_members} table. User-based
- * membership (V12, issue #1 A4): {@code userId} is the member identity;
- * the legacy {@code studentProfileId}/{@code schoolId} columns remain as
- * nullable provenance for school-era rows. Membership is the sole
- * gatekeeper for CLASS_RESTRICTED exam-session visibility.
+ * membership: {@code userId} is the member identity. Membership is the
+ * sole gatekeeper for CLASS_RESTRICTED exam-session visibility.
  */
 @Entity
 @Table(name = "classroom_members")
@@ -33,13 +31,7 @@ public class ClassroomMember {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    /** Legacy provenance; null for members added after the user-based cutover. */
-    @Column(name = "student_profile_id")
-    private Long studentProfileId;
 
-    /** Legacy provenance; null for members added after the user-based cutover. */
-    @Column(name = "school_id")
-    private Long schoolId;
 
     @CreationTimestamp
     @Column(name = "added_at", nullable = false, updatable = false)
@@ -48,11 +40,9 @@ public class ClassroomMember {
     protected ClassroomMember() {
     }
 
-    public ClassroomMember(Long classroomId, Long userId, Long studentProfileId, Long schoolId) {
+    public ClassroomMember(Long classroomId, Long userId) {
         this.classroomId = Objects.requireNonNull(classroomId, "classroomId must not be null");
         this.userId = Objects.requireNonNull(userId, "userId must not be null");
-        this.studentProfileId = studentProfileId;
-        this.schoolId = schoolId;
     }
 
     public Long getId() {
@@ -67,13 +57,7 @@ public class ClassroomMember {
         return userId;
     }
 
-    public Long getStudentProfileId() {
-        return studentProfileId;
-    }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
 
     public Instant getAddedAt() {
         return addedAt;
@@ -101,8 +85,7 @@ public class ClassroomMember {
                 "id=" + id +
                 ", classroomId=" + classroomId +
                 ", userId=" + userId +
-                ", studentProfileId=" + studentProfileId +
-                ", schoolId=" + schoolId +
+
                 ", addedAt=" + addedAt +
                 '}';
     }

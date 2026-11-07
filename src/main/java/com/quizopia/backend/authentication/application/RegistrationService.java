@@ -1,8 +1,6 @@
 package com.quizopia.backend.authentication.application;
 
-import com.quizopia.backend.academic.repository.SchoolRepository;
-import com.quizopia.backend.academic.repository.StudentProfileRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
+
 import com.quizopia.backend.authentication.dto.AccountType;
 import com.quizopia.backend.authentication.dto.ClientContext;
 import com.quizopia.backend.authentication.dto.RegisterRequest;
@@ -34,8 +32,8 @@ import java.util.List;
  * until the OTP is verified (see {@link EmailVerificationService}).
  *
  * <p>Password is hashed with Argon2id, phone is encrypted with AES-256-GCM
- * (only ciphertext stored), and a personal workspace is provisioned
- * transactionally and idempotently (ADR-001). Concurrent registrations of the
+ * (only ciphertext stored), and the STUDENT role grant is written
+ * transactionally and idempotently. Concurrent registrations of the
  * same username/email are settled by the DB unique indexes and mapped to 409.
  */
 @Service
@@ -50,8 +48,7 @@ public class RegistrationService {
     private final RoleRepository roleRepository;
     private final PasswordHasher passwordHasher;
     private final SensitiveDataEncryptor encryptor;
-    private final com.quizopia.backend.notification.application.NotificationService notificationService;
-    private final com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService;
+
     private final EmailVerificationService emailVerificationService;
     private final TransactionTemplate tx;
 
@@ -60,20 +57,15 @@ public class RegistrationService {
             RoleRepository roleRepository,
             PasswordHasher passwordHasher,
             SensitiveDataEncryptor encryptor,
-            SchoolRepository schoolRepository,
-            TeacherProfileRepository teacherProfileRepository,
-            StudentProfileRepository studentProfileRepository,
-            com.quizopia.backend.notification.application.NotificationService notificationService,
-            com.quizopia.backend.workspace.application.WorkspaceProvisioningService workspaceProvisioningService,
             EmailVerificationService emailVerificationService,
             TransactionTemplate tx) {
+
         this.userRepository = userRepository;
         this.userRoleRepository = userRoleRepository;
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.encryptor = encryptor;
-        this.notificationService = notificationService;
-        this.workspaceProvisioningService = workspaceProvisioningService;
+
         this.emailVerificationService = emailVerificationService;
         this.tx = tx;
     }
@@ -163,18 +155,6 @@ public class RegistrationService {
                         "Required role '" + STUDENT_ROLE_CODE + "' is not seeded; check Flyway V3"));
         userRoleRepository.save(new UserRole(user, role, null, null));
 
-        // Every new user gets a personal workspace, provisioned
-        // transactionally and idempotently in the same transaction (ADR-001).
-        workspaceProvisioningService.ensurePersonalWorkspace(user);
-
-        // Notify all ACADEMIC_ADMINs that a new user registered (pending assignment).
-        for (Long adminId : userRoleRepository.findUserIdsByRoleCode("ACADEMIC_ADMIN", java.time.Instant.now())) {
-            notificationService.create(adminId,
-                    com.quizopia.backend.notification.domain.model.NotificationType.NEW_USER_REGISTERED,
-                    "New user registered",
-                    displayName + " (" + username + ") is awaiting school assignment.",
-                    "/admin/pending-students");
-        }
         return user;
     }
 

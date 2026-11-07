@@ -39,9 +39,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * P0-1 reproduction (issue #4): a newly registered user with NO school and
- * NO StudentProfile must be able to create a Personal-Workspace Exam and,
- * with the SAME account, participate in a PUBLIC session end-to-end:
+ * P0-1 reproduction (issue #4): a newly registered user must be able to
+ * create an Exam and, with the SAME account, participate in a PUBLIC
+ * session end-to-end:
  * discover → start → autosave → submit → result → history.
  */
 @SpringBootTest
@@ -96,17 +96,10 @@ class PublicLearnerEndToEndIntegrationTests {
         @Test
         void publicUserCreatesExamAndCompletesPublicSessionEndToEnd() throws Exception {
                 Long userId = registerPublicUser("e2e-public-" + System.nanoTime());
-                // No school, no teacher profile, no student profile.
-                assertThat(jdbc.queryForObject(
-                                "SELECT count(*) FROM student_profiles WHERE user_id = " + userId, Long.class))
-                                .isZero();
-                assertThat(jdbc.queryForObject(
-                                "SELECT count(*) FROM teacher_profiles WHERE user_id = " + userId, Long.class))
-                                .isZero();
 
                 // --- Creator side: personal bank → question → exam → publish → session.
                 Long bankId = bankService.createBank(userId,
-                                new CreateQuestionBankRequest(null, "E2E-BANK", "E2E Bank", null, null)).id();
+                                new CreateQuestionBankRequest("E2E-BANK", "E2E Bank", null, null)).id();
                 Long questionId = jdbc.queryForObject(
                                 "INSERT INTO questions (question_bank_id, code, status, created_by) "
                                                 + "VALUES (" + bankId + ",'q1','ACTIVE'," + userId + ") RETURNING id",
@@ -125,7 +118,7 @@ class PublicLearnerEndToEndIntegrationTests {
                 }
 
                 Long examId = examService.createExam(userId,
-                                new CreateExamRequest(null, null, null, "E2E-EX", "E2E Exam", null)).id();
+                                new CreateExamRequest(null, null, "E2E-EX", "E2E Exam", null)).id();
                 TeacherExamEditorResponse composed = examService.updateDraftComposition(userId, examId,
                                 new UpdateDraftCompositionRequest(0, 30, "good luck", List.of(
                                                 new UpdateDraftCompositionRequest.CompositionSectionRequest(

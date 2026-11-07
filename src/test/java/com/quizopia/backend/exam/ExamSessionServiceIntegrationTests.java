@@ -53,9 +53,7 @@ class ExamSessionServiceIntegrationTests {
     private EntityManagerFactory entityManagerFactory;
 
     private long teacherUserId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
 
     @BeforeEach
     void setUp() {
@@ -63,12 +61,7 @@ class ExamSessionServiceIntegrationTests {
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('ss','ss@t','h','SS')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('SS','Session School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
-                + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                + teacherUserId + "," + schoolId + ",'SSC')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
     }
 
     // -- Test group: CREATE --
@@ -93,7 +86,7 @@ class ExamSessionServiceIntegrationTests {
     @Test
     void createSessionDraftVersionRejected() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "E2", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "E2", "T", null)).id();
         // Exam is DRAFT (never published)
         Instant starts = Instant.now().plusSeconds(3600);
         assertThatThrownBy(() -> sessionService.createSession(teacherUserId, null,
@@ -105,12 +98,10 @@ class ExamSessionServiceIntegrationTests {
     @Test
     void createSessionForeignExamRejected() {
         PublishedExam pub = setupPublishedExam("E3"); // owned by teacherUserId
-        // Second teacher in same school
+        // Second teacher (non-creator of the exam)
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s2','s2@t','h','S2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
-                + ",'SS2')");
         Instant starts = Instant.now().plusSeconds(3600);
         assertThatThrownBy(() -> sessionService.createSession(u2, null,
                 new CreateExamSessionRequest(pub.examId, "SX", "T", starts, starts.plusSeconds(3600), 1, null, null, null)))
@@ -137,11 +128,9 @@ class ExamSessionServiceIntegrationTests {
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s3','s3@t','h','S3')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + ","
-                + schoolId + ",'SS3')");
         // u2 needs their own published exam (can't use teacher's exam — different
         // owner)
-        PublishedExam exam2 = setupPublishedExamForUser(u2, tp2, "E5B");
+        PublishedExam exam2 = setupPublishedExamForUser(u2, "E5B");
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
         sessionService.createSession(teacherUserId, null,
@@ -194,8 +183,6 @@ class ExamSessionServiceIntegrationTests {
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s4','s4@t','h','S4')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
-                + ",'SS4')");
         PageResponse<ExamSessionListItem> u2List = sessionService.listSessions(u2, null, null, null, 0, 20, null);
         assertThat(u2List.items()).isEmpty();
     }
@@ -249,8 +236,6 @@ class ExamSessionServiceIntegrationTests {
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('s5','s5@t','h','S5')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
-                + ",'SS5')");
         assertThatThrownBy(() -> sessionService.getSessionDetail(u2, null, created.id()))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED));
@@ -423,12 +408,12 @@ class ExamSessionServiceIntegrationTests {
     // ============================================================
 
     private PublishedExam setupPublishedExam(String examCode) {
-        return setupPublishedExamForUser(teacherUserId, teacherProfileId, examCode);
+        return setupPublishedExamForUser(teacherUserId, examCode);
     }
 
-    private PublishedExam setupPublishedExamForUser(long userId, long profileId, String examCode) {
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + profileId + ",'SB" + Math.abs(System.nanoTime() % 1_000_000_000L)
+    private PublishedExam setupPublishedExamForUser(long userId, String examCode) {
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + userId + "," + subjectId + ",'SB" + Math.abs(System.nanoTime() % 1_000_000_000L)
                 + "','Bank')");
         long q = insert(
                 "INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES ("
@@ -442,7 +427,7 @@ class ExamSessionServiceIntegrationTests {
                     "INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES ("
                             + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long examId = examService.createExam(userId, new CreateExamRequest(null, subjectId, null, examCode, "T", null)).id();
+        Long examId = examService.createExam(userId, new CreateExamRequest(subjectId, null, examCode, "T", null)).id();
         examService.updateDraftComposition(userId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
         // Flip the exam to PUBLISHED

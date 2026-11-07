@@ -182,7 +182,7 @@ class AttemptAutosaveMetadataIntegrationTests {
         try {
             autosaveService.saveAnswer(c.userId, c.attemptId, req(c.aqId, "A", 1));
             Instant baseline = lastSavedAt(c.attemptId);
-            long other = foreignStudent(c.schoolId);
+            long other = foreignStudent();
             assertThatThrownBy(() -> autosaveService.saveAnswer(other, c.attemptId, req(c.aqId, "B", 5)))
                     .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
             assertThat(lastSavedAt(c.attemptId)).isEqualTo(baseline);
@@ -286,7 +286,7 @@ class AttemptAutosaveMetadataIntegrationTests {
 
     // === helpers ===
 
-    private record Chain(long userId, long schoolId, long attemptId, long aqId) {}
+    private record Chain(long userId, long attemptId, long aqId) {}
 
     private record Counts(long attempts, long attemptQuestions, long answers, long grades, long gradeItems, long idempotencyRecords) {}
 
@@ -332,12 +332,11 @@ class AttemptAutosaveMetadataIntegrationTests {
         return new Counts(attempts, attemptQuestions, answers, grades, gradeItems, idempotencyRecords);
     }
 
-    private long foreignStudent(long schoolId) {
+    private long foreignStudent() {
         String s = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         long u = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('f" + s + "','f" + s + "@t.com','h','F')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u + "," + schoolId + ",'FS" + s + "')");
         return u;
     }
 
@@ -348,32 +347,28 @@ class AttemptAutosaveMetadataIntegrationTests {
     private Chain setup(UUID attemptClientInstanceId) {
         String s = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         Instant now = Instant.parse("2026-07-03T08:00:00Z");
-        long[] ids = new long[4];
+        long[] ids = new long[3];
         tx().executeWithoutResult(status -> {
             clock.setInstant(now);
             long u = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mt" + s + "','mt" + s + "@t.com','h','MT" + s + "')");
             long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
             jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-            long school = ins("INSERT INTO schools (code, name) VALUES ('MTS" + s + "','Sch')");
-            long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-            long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
-            long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u + "," + school + ",'TC" + s + "')");
-            long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u + "," + school + ",'SC" + s + "')");
-            long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
+            long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + s + "','G')");
+            long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','M')");
+            long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + u + "," + subj + ",'B','Bank')");
             long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + u + ")");
             long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + u + ")");
-            long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),1)");
-            ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + u + ")");
+            long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + u + "," + subj + ",'E','E','PUBLISHED',now(),1)");
             long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
             long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
             jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-            long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + "," + tp + ",'S" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "',60)");
-            jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + u + ")");
+            long session = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "',60)");
+            jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + u + "," + session + "," + u + ")");
             long attempt = attemptService.startAttempt(u, session, new StartAttemptRequest(attemptClientInstanceId)).attemptId();
             long aq = jdbc.queryForObject("SELECT id FROM attempt_questions WHERE attempt_id=" + attempt + " LIMIT 1", Long.class);
-            ids[0] = u; ids[1] = school; ids[2] = attempt; ids[3] = aq;
+            ids[0] = u; ids[1] = attempt; ids[2] = aq;
         });
-        return new Chain(ids[0], ids[1], ids[2], ids[3]);
+        return new Chain(ids[0], ids[1], ids[2]);
     }
 
     private void cleanup(long attemptId) {

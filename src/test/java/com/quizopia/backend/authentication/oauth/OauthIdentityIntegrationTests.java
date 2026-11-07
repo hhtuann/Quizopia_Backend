@@ -8,7 +8,6 @@ import com.quizopia.backend.identity.repository.ExternalIdentityRepository;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
-import com.quizopia.backend.workspace.repository.WorkspaceRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,7 +23,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 /**
  * Identity-M1 integration tests for the OAuth identity mapping (ADR-002 §3)
- * against a real PostgreSQL: new-identity provisioning (STUDENT + workspace +
+ * against a real PostgreSQL: new-identity provisioning (STUDENT +
  * verified email), stable issuer+subject → user resolution, email-collision
  * rejection (no auto-linking), and the one-time exchange-code semantics.
  */
@@ -47,16 +46,13 @@ class OauthIdentityIntegrationTests {
     private UserRoleRepository userRoleRepository;
 
     @Autowired
-    private WorkspaceRepository workspaceRepository;
-
-    @Autowired
     private SessionIssuanceService sessionIssuanceService;
 
     @Autowired
     private jakarta.persistence.EntityManager entityManager;
 
     @Test
-    void firstLoginProvisionsStudentWithWorkspaceAndVerifiedEmail() {
+    void firstLoginProvisionsStudentWithVerifiedEmail() {
         ValidatedOidcIdentity identity = identity();
 
         com.quizopia.backend.identity.domain.model.User user = identityService.resolveGoogleUser(identity);
@@ -66,10 +62,6 @@ class OauthIdentityIntegrationTests {
         assertThat(user.getUsername()).isEqualTo(expectedUsernameOf(identity.email()));
         assertThat(userRoleRepository.findActiveRoleCodesByUserId(user.getId(), Instant.now()))
                 .containsExactly("STUDENT");
-        assertThat(workspaceRepository.findByOwnerUserIdAndWorkspaceType(
-                user.getId(),
-                com.quizopia.backend.workspace.domain.model.WorkspaceType.PERSONAL))
-                .isPresent();
         // Google-only accounts must never authenticate with a usable password.
         assertThat(user.getPasswordHash()).startsWith("$argon2");
         assertThat(user.getLocalCredentialState())

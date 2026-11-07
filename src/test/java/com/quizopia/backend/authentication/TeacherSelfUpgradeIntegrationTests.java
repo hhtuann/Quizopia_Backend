@@ -208,25 +208,20 @@ class TeacherSelfUpgradeIntegrationTests extends AbstractAuthenticationIntegrati
     }
 
     @Test
-    void upgradeDoesNotTouchAttemptsOrWorkspaces() throws Exception {
+    void upgradeDoesNotTouchUserRows() throws Exception {
         String username = unique("hist");
         String email = emailFor(username);
         registerAndVerify(username, email, "Passw0rd!");
         String token = extractAccessToken(login(username, "Passw0rd!"));
         Long userId = userIdOf(username);
 
-        int workspacesBefore = ((Number) entityManager.createNativeQuery(
-                "SELECT count(*) FROM workspaces WHERE owner_user_id = " + userId).getSingleResult()).intValue();
         int userRowsBefore = ((Number) entityManager.createNativeQuery(
                 "SELECT count(*) FROM users WHERE id = " + userId).getSingleResult()).intValue();
 
         mockMvc.perform(post("/api/auth/upgrade-teacher").header("Authorization", "Bearer " + token));
 
-        int workspacesAfter = ((Number) entityManager.createNativeQuery(
-                "SELECT count(*) FROM workspaces WHERE owner_user_id = " + userId).getSingleResult()).intValue();
         int userRowsAfter = ((Number) entityManager.createNativeQuery(
                 "SELECT count(*) FROM users WHERE id = " + userId).getSingleResult()).intValue();
-        assertThat(workspacesAfter).isEqualTo(workspacesBefore);
         assertThat(userRowsAfter).isEqualTo(userRowsBefore).isEqualTo(1);
     }
 

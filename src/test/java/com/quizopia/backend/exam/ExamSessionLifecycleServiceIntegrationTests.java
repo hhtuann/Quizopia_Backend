@@ -45,19 +45,14 @@ class ExamSessionLifecycleServiceIntegrationTests {
     @Autowired private EntityManager entityManager;
 
     private long teacherUserId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
     private long examId;
 
     @BeforeEach
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('lc','lc@t','h','LC')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('LCS','Lifecycle School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'LCC')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
         examId = setupPublishedExam();
     }
 
@@ -315,7 +310,6 @@ class ExamSessionLifecycleServiceIntegrationTests {
         long sid = createDraftSession("FO1", Instant.now().plusSeconds(3600), Instant.now().plusSeconds(7200));
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('fo','fo@t','h','FO')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'FOC')");
         for (Runnable call : new Runnable[]{
                 () -> sessionService.scheduleSession(other, null, sid),
                 () -> sessionService.openSession(other, null, sid),
@@ -348,14 +342,14 @@ class ExamSessionLifecycleServiceIntegrationTests {
     // -- Helpers --
 
     private long setupPublishedExam() {
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'LCB','Bank')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + teacherUserId + "," + subjectId + ",'LCB','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long id = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "LCE", "T", null)).id();
+        Long id = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "LCE", "T", null)).id();
         examService.updateDraftComposition(teacherUserId, id, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
         jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", id);
@@ -379,9 +373,8 @@ class ExamSessionLifecycleServiceIntegrationTests {
 
     private long addParticipant(long sessionId, String code) {
         long uid = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('" + code + "','" + code + "@t','h','" + code + "')");
-        long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + uid + "," + schoolId + ",'" + code + "')");
-        return insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, status, added_by, version) "
-                + "VALUES (?,?,?,?,?,0)", schoolId, sessionId, sp, "ELIGIBLE", teacherUserId);
+        return insert("INSERT INTO exam_session_participants (exam_session_id, user_id, added_by) VALUES (?,?,?)",
+                sessionId, uid, teacherUserId);
     }
 
     private void assertDbState(long sessionId, String status, Object openedAtExpect, Object closedAtExpect) {

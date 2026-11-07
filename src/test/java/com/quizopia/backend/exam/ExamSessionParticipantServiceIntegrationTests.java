@@ -24,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,27 +44,22 @@ class ExamSessionParticipantServiceIntegrationTests {
     @Autowired private EntityManagerFactory entityManagerFactory;
 
     private long teacherUserId;
-    private long schoolId;
     private long sessionId;
     private long student1, student2, student3;
-    private long crossSchoolStudent;
 
     @BeforeEach
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('ps','ps@t','h','PS')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('PS','Part School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'PSC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'QB','Bank')");
+        long subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
         // Published exam
-        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "PE", "T", null)).id();
+        Long examId = examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "PE", "T", null)).id();
         examService.updateDraftComposition(teacherUserId, examId, new UpdateDraftCompositionRequest(0, null, null, List.of(
                 new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(q, 0, null))))));
         jdbc.update("UPDATE exams SET status='PUBLISHED', published_at=now(), total_points=1.00 WHERE id=?", examId);
@@ -75,84 +69,24 @@ class ExamSessionParticipantServiceIntegrationTests {
         Instant ends = starts.plusSeconds(7200);
         sessionId = sessionService.createSession(teacherUserId, null,
                 new CreateExamSessionRequest(examId, "PS1", "Part Session", starts, ends, 1, null, null, null)).id();
-        // Students same school
+        // Participant users
         student1 = createStudent("HS001", "Alice");
         student2 = createStudent("HS002", "Bob");
         student3 = createStudent("HS003", "Carol");
-        // Cross-school student
-        long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('XS','Cross')");
-        insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + otherSchool + ",'GL','G')");
-        long xUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('xu','xu@t','h','XU')");
-        crossSchoolStudent = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + xUser + "," + otherSchool + ",'XS001')");
     }
 
     private long createStudent(String code, String name) {
         long uid = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('" + code + "','" + code + "@t','h','" + name + "')");
-        return insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + uid + "," + schoolId + ",'" + code + "')");
+        return uid;
     }
 
-    // -- ADD --
+    // -- ACCESS --
 
     @Test
-    void bulkAddValidSuccess() {
-        AddParticipantsResponse r = participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(student1, student2)));
-        assertThat(r.added()).isEqualTo(2);
-        assertThat(r.duplicated()).isEmpty();
-        assertThat(r.invalid()).isEmpty();
-    }
-
-    @Test
-    void duplicateInRequestClassified() {
-        AddParticipantsResponse r = participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(student1, student1)));
-        assertThat(r.added()).isEqualTo(1);
-        assertThat(r.duplicated()).containsExactly(student1);
-    }
-
-    @Test
-    void duplicateAlreadyInDbClassified() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
-        AddParticipantsResponse r = participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(student1)));
-        assertThat(r.added()).isZero();
-        assertThat(r.duplicated()).containsExactly(student1);
-    }
-
-    @Test
-    void missingAndCrossSchoolInvalid() {
-        AddParticipantsResponse r = participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(999999L, crossSchoolStudent)));
-        assertThat(r.added()).isZero();
-        assertThat(r.invalid()).containsExactlyInAnyOrder(999999L, crossSchoolStudent);
-    }
-
-    @Test
-    void mixedClassification() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
-        AddParticipantsResponse r = participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(student1, student2, 999999L, crossSchoolStudent)));
-        assertThat(r.added()).isEqualTo(1);
-        assertThat(r.duplicated()).containsExactly(student1);
-        assertThat(r.invalid()).containsExactlyInAnyOrder(999999L, crossSchoolStudent);
-    }
-
-    @Test
-    void addOpenStateRejected() {
-        jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", sessionId);
-        entityManager.clear();
-        assertThatThrownBy(() -> participantService.addParticipants(teacherUserId, sessionId,
-                new AddParticipantsRequest(List.of(student1))))
-                .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_INVALID_STATE));
-    }
-
-    @Test
-    void addForeignSessionDenied() {
+    void listForeignSessionDenied() {
         long u2 = createUser("o1");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
-        assertThatThrownBy(() -> participantService.addParticipants(u2, sessionId,
-                new AddParticipantsRequest(List.of(student1))))
+        assertThatThrownBy(() -> participantService.listParticipants(u2, sessionId, null, 0, 20, null))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED));
     }
 
@@ -160,7 +94,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void listPaginatedWithFilter() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1, student2, student3)));
+        insertParticipants(student1, student2, student3);
         participantService.blockParticipant(teacherUserId, sessionId, getParticipantId(student1));
         // All
         PageResponse<ExamSessionParticipantResponse> all = participantService.listParticipants(teacherUserId, sessionId, null, 0, 20, null);
@@ -172,14 +106,14 @@ class ExamSessionParticipantServiceIntegrationTests {
         // Filter BLOCKED
         PageResponse<ExamSessionParticipantResponse> blocked = participantService.listParticipants(teacherUserId, sessionId, "BLOCKED", 0, 20, null);
         assertThat(blocked.items()).hasSize(1);
-        assertThat(blocked.items().get(0).studentProfileId()).isEqualTo(student1);
+        assertThat(blocked.items().get(0).userId()).isEqualTo(student1);
         assertThat(blocked.items().get(0).displayName()).isEqualTo("Alice");
-        assertThat(blocked.items().get(0).studentCode()).isEqualTo("HS001");
+        assertThat(blocked.items().get(0).studentCode()).isNull();
     }
 
     @Test
     void listNoAnswerLeak() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         PageResponse<ExamSessionParticipantResponse> list = participantService.listParticipants(teacherUserId, sessionId, null, 0, 20, null);
         assertThat(list.items()).hasSize(1);
         ExamSessionParticipantResponse p = list.items().get(0);
@@ -192,7 +126,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void blockUnblockSuccess() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         long pid = getParticipantId(student1);
         ExamSessionParticipantResponse blocked = participantService.blockParticipant(teacherUserId, sessionId, pid);
         assertThat(blocked.status()).isEqualTo("BLOCKED");
@@ -204,7 +138,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void blockIdempotent() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         long pid = getParticipantId(student1);
         participantService.blockParticipant(teacherUserId, sessionId, pid);
         ExamSessionParticipantResponse r2 = participantService.blockParticipant(teacherUserId, sessionId, pid);
@@ -213,7 +147,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void unblockIdempotent() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         long pid = getParticipantId(student1);
         ExamSessionParticipantResponse r = participantService.unblockParticipant(teacherUserId, sessionId, pid);
         assertThat(r.status()).isEqualTo("ELIGIBLE");
@@ -221,7 +155,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void blockClosedStateRejected() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         long pid = getParticipantId(student1);
         jdbc.update("UPDATE exam_sessions SET status='CLOSED', opened_at=now()-interval '2 hours', closed_at=now() WHERE id=?", sessionId);
         entityManager.clear();
@@ -231,20 +165,19 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void blockWrongSessionParticipantNotFound() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         // Create a different session + participant, then try to block in the wrong session
         Instant starts = Instant.now().plusSeconds(3600);
         Long session2 = sessionService.createSession(teacherUserId, null,
                 new CreateExamSessionRequest(jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=?", Long.class, sessionId), "PS2", "S2", starts, starts.plusSeconds(3600), 1, null, null, null)).id();
-        participantService.addParticipants(teacherUserId, session2, new AddParticipantsRequest(List.of(student2)));
-        long pid2 = jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND student_profile_id=?", Long.class, session2, student2);
+        long pid2 = insertParticipant(session2, student2);
         assertThatThrownBy(() -> participantService.blockParticipant(teacherUserId, sessionId, pid2))
                 .isInstanceOfSatisfying(ExamException.class, ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_PARTICIPANT_NOT_FOUND));
     }
 
     @Test
     void blockOpenStateAllowed() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         long pid = getParticipantId(student1);
         jdbc.update("UPDATE exam_sessions SET status='OPEN', opened_at=now() WHERE id=?", sessionId);
         entityManager.clear();
@@ -254,8 +187,20 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     // -- Helpers --
 
-    private long getParticipantId(long studentProfileId) {
-        return jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND student_profile_id=?", Long.class, sessionId, studentProfileId);
+    private long getParticipantId(long userId) {
+        return jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND user_id=?", Long.class, sessionId, userId);
+    }
+
+    private long insertParticipant(long sessionId, long userId) {
+        return jdbc.queryForObject(
+                "INSERT INTO exam_session_participants (exam_session_id, user_id, added_by) VALUES (?,?,?) RETURNING id",
+                Long.class, sessionId, userId, teacherUserId);
+    }
+
+    private void insertParticipants(long... userIds) {
+        for (long uid : userIds) {
+            insertParticipant(sessionId, uid);
+        }
     }
 
     // -- F1: query-count (no N+1; batch user-display query runs once) --
@@ -266,7 +211,7 @@ class ExamSessionParticipantServiceIntegrationTests {
         stats.setStatisticsEnabled(true);
 
         // Scenario N=1: 1 participant
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipant(sessionId, student1);
         entityManager.clear();
         stats.clear();
         participantService.listParticipants(teacherUserId, sessionId, null, 0, 20, null);
@@ -274,11 +219,9 @@ class ExamSessionParticipantServiceIntegrationTests {
         long userQueryExecN1 = userDisplayNameQueryExecutions(stats);
 
         // Scenario N=20: 19 more participants
-        List<Long> more = new ArrayList<>();
         for (int i = 0; i < 19; i++) {
-            more.add(createStudent("HS1" + i, "N" + i));
+            insertParticipant(sessionId, createStudent("HS1" + i, "N" + i));
         }
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(more));
         entityManager.clear();
         stats.clear();
         participantService.listParticipants(teacherUserId, sessionId, null, 0, 20, null);
@@ -309,7 +252,7 @@ class ExamSessionParticipantServiceIntegrationTests {
 
     @Test
     void listRejectsStudentCodeSort() {
-        participantService.addParticipants(teacherUserId, sessionId, new AddParticipantsRequest(List.of(student1)));
+        insertParticipants(student1);
         // studentCode is not a participant-entity property → EXAM_VALIDATION_ERROR (400), not a 500.
         assertThatThrownBy(() -> participantService.listParticipants(teacherUserId, sessionId, null, 0, 20, "studentCode,asc"))
                 .isInstanceOfSatisfying(ExamException.class,
@@ -355,16 +298,16 @@ class ExamSessionParticipantServiceIntegrationTests {
         assertThat(eligA).isNotEqualTo(eligB);
     }
 
-    private long insertParticipantAt(long studentProfileId, String addedAt) {
-        return insertParticipantWithStatus(studentProfileId, "ELIGIBLE", addedAt);
+    private long insertParticipantAt(long userId, String addedAt) {
+        return insertParticipantWithStatus(userId, "ELIGIBLE", addedAt);
     }
 
-    private long insertParticipantWithStatus(long studentProfileId, String status, String addedAt) {
+    private long insertParticipantWithStatus(long userId, String status, String addedAt) {
         String blockedAtExpr = "BLOCKED".equals(status) ? "'" + addedAt + "'" : "NULL";
         return jdbc.queryForObject(
-                "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, status, added_by, added_at, blocked_at, version) "
-                        + "VALUES (?,?,?,?,?,?," + blockedAtExpr + ",0) RETURNING id",
-                Long.class, schoolId, sessionId, studentProfileId, status, teacherUserId, Timestamp.valueOf(addedAt));
+                "INSERT INTO exam_session_participants (exam_session_id, user_id, status, added_by, added_at, blocked_at, version) "
+                        + "VALUES (?,?,?,?,?," + blockedAtExpr + ",0) RETURNING id",
+                Long.class, sessionId, userId, status, teacherUserId, Timestamp.valueOf(addedAt));
     }
 
     private long createUser(String prefix) {

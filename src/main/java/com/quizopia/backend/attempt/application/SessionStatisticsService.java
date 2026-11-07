@@ -36,8 +36,8 @@ public class SessionStatisticsService {
     }
 
     @SuppressWarnings("null")
-    public SessionStatisticsResponse getStatistics(Long userId, String primaryRole, Long sessionId) {
-        sessionResultService.authorizeSessionAccess(userId, primaryRole, sessionId);
+    public SessionStatisticsResponse getStatistics(Long userId, Long sessionId) {
+        sessionResultService.authorizeSessionAccess(userId, sessionId);
         List<SessionResultItem> best = sessionResultService.queryBestResults(sessionId);
 
         // Counts (user-based, issue #4 P0-1)

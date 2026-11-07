@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * observer stays connected and receives nothing.
  *
  * <p>§8 — missing-vs-unauthorized indistinguishability: the captured ERROR for nonexistent session,
- * foreign owner, cross-school, missing permission, and missing profile are all the SAME generic message.
+ * foreign teacher (not the creator), and missing permission are all the SAME generic message.
  *
  * <p>All connections use {@link StompTestConnection} try-with-resources. No {@code Thread.sleep}.
  */
@@ -60,10 +60,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     private long sessionId;
     private long teacherId;
     private String teacherToken;
-    private long schoolId;
     private String foreignTeacherToken;
-    private String crossSchoolTeacherToken;
-    private String noProfileTeacherToken;
 
     @BeforeEach
     void setUp() {
@@ -74,19 +71,8 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
         sessionId = createTeacherOwnedOpenSession("sub-tch-" + tag);
         teacherId = teacherIdForSession(sessionId);
         teacherToken = accessToken(teacherId, "sub-tch", List.of("TEACHER"));
-        schoolId = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-
         long foreign = insertUserWithRole("sub-foreign-" + tag, "TEACHER");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + foreign + "," + schoolId + ",'FT" + tag + "')");
         foreignTeacherToken = accessToken(foreign, "sub-foreign", List.of("TEACHER"));
-
-        long xschool = insertUserWithRole("sub-xschool-" + tag, "TEACHER");
-        long school2 = ins("INSERT INTO schools (code, name) VALUES ('XS" + tag + "','X')");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + xschool + "," + school2 + ",'XT" + tag + "')");
-        crossSchoolTeacherToken = accessToken(xschool, "sub-xschool", List.of("TEACHER"));
-
-        long noprofile = insertUserWithRole("sub-noprofile-" + tag, "TEACHER");
-        noProfileTeacherToken = accessToken(noprofile, "sub-noprofile", List.of("TEACHER"));
     }
 
     // ============================ §2 carry-over: SERVER_TIME_SYNC basic shape ============================
@@ -224,18 +210,7 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     }
 
     @Test void studentRejectedOnTeacherTopic() { assertTopicSubscribeRejected(studentToken, "/topic/exam-sessions/" + sessionId); }
-    @Test void nonTeacherWithProfileRejected() {
-        long uid = insertUserWithRole("noteach-", "STUDENT");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + uid + "," + schoolId + ",'NT')");
-        assertTopicSubscribeRejected(accessToken(uid, "noteach", List.of("STUDENT")), "/topic/exam-sessions/" + sessionId);
-    }
-    @Test void systemAdminOnlyRejected() {
-        long admin = insertUserWithRole("sysadmin-", "SYSTEM_ADMIN");
-        assertTopicSubscribeRejected(accessToken(admin, "sysadmin", List.of("SYSTEM_ADMIN")), "/topic/exam-sessions/" + sessionId);
-    }
-    @Test void foreignTeacherSameSchoolRejected() { assertTopicSubscribeRejected(foreignTeacherToken, "/topic/exam-sessions/" + sessionId); }
-    @Test void crossSchoolTeacherRejected() { assertTopicSubscribeRejected(crossSchoolTeacherToken, "/topic/exam-sessions/" + sessionId); }
-    @Test void missingTeacherProfileRejected() { assertTopicSubscribeRejected(noProfileTeacherToken, "/topic/exam-sessions/" + sessionId); }
+    @Test void foreignTeacherRejected() { assertTopicSubscribeRejected(foreignTeacherToken, "/topic/exam-sessions/" + sessionId); }
     @Test void nonexistentSessionRejected() { assertTopicSubscribeRejected(teacherToken, "/topic/exam-sessions/99999999"); }
     @Test void zeroSessionIdRejected() { assertTopicSubscribeRejected(teacherToken, "/topic/exam-sessions/0"); }
     @Test void negativeSessionIdRejected() { assertTopicSubscribeRejected(teacherToken, "/topic/exam-sessions/-1"); }
@@ -252,8 +227,6 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
     void teacherTopicRejectionsAreIndistinguishable() {
         String nonexistent = captureTopicRejectionError(teacherToken, "/topic/exam-sessions/99999999");
         String foreign = captureTopicRejectionError(foreignTeacherToken, "/topic/exam-sessions/" + sessionId);
-        String crossSchool = captureTopicRejectionError(crossSchoolTeacherToken, "/topic/exam-sessions/" + sessionId);
-        String noProfile = captureTopicRejectionError(noProfileTeacherToken, "/topic/exam-sessions/" + sessionId);
 
         jdbc.update("DELETE FROM role_permissions WHERE role_id=(SELECT id FROM roles WHERE code='TEACHER') "
                 + "AND permission_id=(SELECT id FROM permissions WHERE code='EXAM_SESSION_MONITOR')");
@@ -268,8 +241,8 @@ class WebSocketSubscribeIntegrationTests extends RealtimeStompTestBase {
 
         assertThat(nonexistent)
                 .as("all teacher-topic rejections share the same generic ERROR message")
-                .isEqualTo(foreign).isEqualTo(crossSchool).isEqualTo(noProfile).isEqualTo(noPermission);
-        List.of(nonexistent, foreign, crossSchool, noProfile, noPermission)
+                .isEqualTo(foreign).isEqualTo(noPermission);
+        List.of(nonexistent, foreign, noPermission)
                 .forEach(e -> assertErrorHasNoLeak(e, teacherToken, null));
     }
 

@@ -49,7 +49,6 @@ class Day8R4EvidenceTests {
 
     private long teacherUserId;
     private long sessionId;
-    private long schoolId;
     private long examQuestionId;
     private String tag;
 
@@ -61,24 +60,16 @@ class Day8R4EvidenceTests {
         teacherUserId = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('tchr" + tag + "','th" + tag + "@t.com','h','Teacher')");
         long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + teacherUserId + "," + tr + ")");
-        schoolId = ins("INSERT INTO schools (code, name) VALUES ('SC" + tag + "','School')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'M','Math')");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'TC" + tag + "')");
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + schoolId + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E','Exam','PUBLISHED',now(),1)");
-        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
-        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "SELECT workspace_id, " + teacherUserId + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
-                + " ON CONFLICT DO NOTHING");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + tag + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subj + ",'B','Bank')");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + teacherUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),1)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + tag + "'," + teacherUserId + ")");
         ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherUserId + ")");
         examQuestionId = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + examQuestionId + ",'A','a',false,0),(" + examQuestionId + ",'B','b',false,1),(" + examQuestionId + ",'C','c',true,2),(" + examQuestionId + ",'D','d',false,3)");
-        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + schoolId + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        sessionId = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
     }
 
     // C. correctRate = 50.00 (1 correct + 1 incorrect + 2 unanswered)
@@ -90,7 +81,7 @@ class Day8R4EvidenceTests {
         createStudentAndSubmit(); // unanswered 2
         em.flush(); em.clear();
 
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.bestResultCount()).isEqualTo(4);
         assertThat(s.perQuestionStatistics()).hasSize(1);
         var qs = s.perQuestionStatistics().get(0);
@@ -106,7 +97,7 @@ class Day8R4EvidenceTests {
     void correctRateNullWhenAllUnanswered() {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         var qs = s.perQuestionStatistics().get(0);
         assertThat(qs.answeredCount()).isZero();
         assertThat(qs.correctRate()).isNull();
@@ -117,8 +108,8 @@ class Day8R4EvidenceTests {
     void paginationPagesDoNotOverlap() {
         for (int i = 0; i < 15; i++) createStudentAndSubmit();
         em.flush(); em.clear();
-        var page0 = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 0, 10, null, null, null, null, null);
-        var page1 = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 1, 10, null, null, null, null, null);
+        var page0 = sessionResultService.getSessionResults(teacherUserId, sessionId, 0, 10, null, null, null, null, null);
+        var page1 = sessionResultService.getSessionResults(teacherUserId, sessionId, 1, 10, null, null, null, null, null);
         assertThat(page0.items()).hasSize(10);
         assertThat(page1.items()).hasSize(5);
         assertThat(page0.totalElements()).isEqualTo(15);
@@ -136,8 +127,8 @@ class Day8R4EvidenceTests {
     void defaultOrderingDeterministic() {
         for (int i = 0; i < 5; i++) createStudentAndSubmit();
         em.flush(); em.clear();
-        var page1 = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 0, 20, null, null, null, null, null);
-        var page2 = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 0, 20, null, null, null, null, null);
+        var page1 = sessionResultService.getSessionResults(teacherUserId, sessionId, 0, 20, null, null, null, null, null);
+        var page2 = sessionResultService.getSessionResults(teacherUserId, sessionId, 0, 20, null, null, null, null, null);
         // Deterministic: same order on repeat
         for (int i = 0; i < page1.items().size(); i++) {
             assertThat(page1.items().get(i).studentId()).isEqualTo(page2.items().get(i).studentId());
@@ -153,7 +144,7 @@ class Day8R4EvidenceTests {
     void fiftyStudentsOneBestRowEach() {
         for (int i = 0; i < 50; i++) createStudentAndSubmit();
         em.flush(); em.clear();
-        var page = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 0, 100, null, null, null, null, null);
+        var page = sessionResultService.getSessionResults(teacherUserId, sessionId, 0, 100, null, null, null, null, null);
         assertThat(page.totalElements()).isEqualTo(50);
         assertThat(page.items()).hasSize(50);
         // Each student appears exactly once
@@ -177,13 +168,13 @@ class Day8R4EvidenceTests {
         createStudentAndSubmit();
         em.flush(); em.clear();
 
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.perQuestionStatistics()).hasSize(2);
         // Ordered ascending by examQuestionId
         assertThat(s.perQuestionStatistics().get(0).examQuestionId())
                 .isLessThan(s.perQuestionStatistics().get(1).examQuestionId());
         // Stable ascending regardless of repeat
-        var s2 = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        var s2 = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s2.perQuestionStatistics().get(0).examQuestionId())
                 .isEqualTo(s.perQuestionStatistics().get(0).examQuestionId());
     }
@@ -193,7 +184,7 @@ class Day8R4EvidenceTests {
     void excelSubmittedAtIsNumericDateCell() throws Exception {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        byte[] bytes = exportService.export(teacherUserId, "TEACHER", sessionId);
+        byte[] bytes = exportService.export(teacherUserId, sessionId);
         try (var wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
             var results = wb.getSheet("Results");
             var submittedAtCell = results.getRow(1).getCell(5); // column index 5 = "Submitted At"
@@ -215,8 +206,8 @@ class Day8R4EvidenceTests {
     void excelResultsSheetMatchesApiDefaultOrder() throws Exception {
         for (int i = 0; i < 4; i++) createStudentAndSubmit();
         em.flush(); em.clear();
-        var apiPage = sessionResultService.getSessionResults(teacherUserId, "TEACHER", sessionId, 0, 100, null, null, null, null, null);
-        byte[] bytes = exportService.export(teacherUserId, "TEACHER", sessionId);
+        var apiPage = sessionResultService.getSessionResults(teacherUserId, sessionId, 0, 100, null, null, null, null, null);
+        byte[] bytes = exportService.export(teacherUserId, sessionId);
         try (var wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
             var results = wb.getSheet("Results");
             // Row 0 = header; rows 1..n = data in default order
@@ -240,8 +231,7 @@ class Day8R4EvidenceTests {
         long su = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('stu" + tag + UUID.randomUUID().toString().substring(0, 8) + "','s" + UUID.randomUUID() + "@t.com','h','Student')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + su + "," + sr + ")");
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + su + "," + schoolId + ",'SC" + tag + UUID.randomUUID().toString().substring(0, 8) + "')");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + schoolId + "," + sessionId + "," + sp + "," + teacherUserId + ")");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + su + "," + sessionId + "," + teacherUserId + ")");
         long attemptId = attemptService.startAttempt(su, sessionId, new com.quizopia.backend.attempt.dto.StartAttemptRequest(null)).attemptId();
         em.flush(); em.clear();
         if (optionKey != null) {

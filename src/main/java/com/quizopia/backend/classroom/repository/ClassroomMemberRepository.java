@@ -29,12 +29,6 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
     boolean existsByClassroomIdAndUserId(Long classroomId, Long userId);
 
     long deleteByClassroomIdAndUserId(Long classroomId, Long userId);
-
-    /** Legacy lookup kept for school-era rows and API compatibility. */
-    Optional<ClassroomMember> findByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
-
-    long deleteByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
-
     long countByClassroomId(Long classroomId);
 
     /**
@@ -45,8 +39,8 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
      */
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.data.jpa.repository.Query(value = """
-            INSERT INTO classroom_members (classroom_id, user_id, student_profile_id, school_id, added_at)
-            VALUES (:classroomId, :userId, NULL, NULL, now())
+            INSERT INTO classroom_members (classroom_id, user_id, added_at)
+            VALUES (:classroomId, :userId, now())
             ON CONFLICT (classroom_id, user_id) DO NOTHING
             """, nativeQuery = true)
     int insertMembershipIfAbsent(@org.springframework.data.repository.query.Param("classroomId") Long classroomId,

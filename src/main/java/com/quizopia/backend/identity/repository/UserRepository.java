@@ -42,35 +42,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmailIgnoreCase(String email);
 
     /**
-     * Admin user search with optional filters (NULL-safe). Used by
-     * {@code GET /api/users}. {@code search} matches username/email/display name
-     * case-insensitively; {@code status} filters by {@link UserStatus};
-     * {@code roleCode} keeps only users with an effective role assignment.
-     * Ordered by creation (newest first) then id for stable pagination.
-     */
-    @Query("""
-            select u from User u
-            where (:status is null or u.status = :status)
-              and ( lower(coalesce(:search, '')) = ''
-                    or lower(u.username) like lower(concat('%', :search, '%'))
-                    or lower(u.email) like lower(concat('%', :search, '%'))
-                    or lower(u.displayName) like lower(concat('%', :search, '%')) )
-              and ( :roleCode is null
-                    or exists (select 1 from UserRole ur
-                               join ur.role r
-                               where ur.user.id = u.id
-                                 and r.code = :roleCode
-                                 and (ur.expiresAt is null or ur.expiresAt > :now)) )
-            order by u.createdAt desc, u.id desc
-            """)
-    Page<User> searchForAdmin(
-            @Param("status") UserStatus status,
-            @Param("search") String search,
-            @Param("roleCode") String roleCode,
-            @Param("now") Instant now,
-            Pageable pageable);
-
-    /**
      * Identity-M3 reconciliation: fresh, row-locked user read. A locking
      * query re-reads committed state (defeats a stale managed instance) and
      * serializes against concurrent email changes through the update path.

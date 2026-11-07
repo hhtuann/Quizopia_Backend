@@ -1,10 +1,8 @@
 package com.quizopia.backend.question;
 
 import com.quizopia.backend.academic.domain.model.GradeLevel;
-import com.quizopia.backend.academic.domain.model.School;
 import com.quizopia.backend.academic.domain.model.Subject;
 import com.quizopia.backend.academic.repository.GradeLevelRepository;
-import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.SubjectRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
@@ -46,12 +44,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * transactional persistence service.
  *
  * <p>
- * Authorization matrix under test (deny by default, workspace boundary):
- * unauthenticated, STUDENT-only, ACADEMIC_ADMIN without teacher create
- * privilege, SYSTEM_ADMIN holding QUESTION_CREATE but no TEACHER role,
- * unrelated TEACHER, revoked org membership, missing bank, ARCHIVED bank —
- * all rejected; the bank creator (with or without a TeacherProfile) and
- * dual-role STUDENT+TEACHER users are accepted.
+ * Authorization matrix under test (deny by default, user ownership):
+ * unauthenticated, STUDENT-only, permission-holder without TEACHER role,
+ * unrelated TEACHER, missing bank, ARCHIVED bank — all rejected; the
+ * bank creator and dual-role STUDENT+TEACHER users are accepted.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -75,8 +71,6 @@ class MarkdownQuestionImportApiIntegrationTests {
     @Autowired
     private UserRepository userRepo;
     @Autowired
-    private SchoolRepository schoolRepo;
-    @Autowired
     private GradeLevelRepository glRepo;
     @Autowired
     private SubjectRepository subjectRepo;
@@ -99,19 +93,12 @@ class MarkdownQuestionImportApiIntegrationTests {
         teacherUserId = teacher.getId();
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherUserId);
-
-        School school = schoolRepo.saveAndFlush(new School("MD-API-SCH", "MD API School"));
-        Long schoolId = school.getId();
-        GradeLevel gl = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL-MDA", "Grade"));
-        Subject subject = subjectRepo.saveAndFlush(new Subject(schoolId, gl.getId(), "SUB-MDA", "Subject"));
-
-        jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + teacherUserId + "," + schoolId + ",'TC-MDA')");
+        GradeLevel gl = glRepo.saveAndFlush(new GradeLevel("GL-MDA", "Grade"));
+        Subject subject = subjectRepo.saveAndFlush(new Subject(gl.getId(), "SUB-MDA", "Subject"));
 
         bankId = bankService.createBank(teacherUserId,
-                        new CreateQuestionBankRequest(null, "MD-API-BANK", "MD API Bank", null, subject.getId()))
+                        new CreateQuestionBankRequest("MD-API-BANK", "MD API Bank", null, subject.getId()))
                 .id();
-        em.clear();
     }
 
     @AfterEach
@@ -122,16 +109,10 @@ class MarkdownQuestionImportApiIntegrationTests {
         jdbc.update("DELETE FROM question_banks WHERE code LIKE 'MD-%'");
         jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile')");
         jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile')");
-        jdbc.update("DELETE FROM teacher_profiles WHERE teacher_code = 'TC-MDA'");
         jdbc.update("DELETE FROM subjects WHERE code = 'SUB-MDA'");
         jdbc.update("DELETE FROM grade_levels WHERE code = 'GL-MDA'");
-        jdbc.update("DELETE FROM schools WHERE code = 'MD-API-SCH'");
-        jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
-        // Personal workspaces provisioned by the no-profile test own FK rows
-        // referencing the test user — remove them first.
-        jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile'))");
-        jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile'))");
-        jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile')");
+        jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'STUDENT') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
+        jdbc.update("DELETE FROM question_banks WHERE created_by_user_id IN (SELECT id FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile')");
         jdbc.update("DELETE FROM users WHERE username LIKE 'md-api-%' OR username = 'md-no-profile'");
     }
 
@@ -222,34 +203,19 @@ class MarkdownQuestionImportApiIntegrationTests {
     }
 
     @Test
-    void academicAdminWithoutTeacherRole_returns403() throws Exception {
-        User admin = userRepo.saveAndFlush(
-                new User("md-api-admin", "mdaadmin@test.com", "hash", "MD API Admin"));
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                + "SELECT ?, id FROM roles WHERE code = 'ACADEMIC_ADMIN'", admin.getId());
-
-        mockMvc.perform(post(ENDPOINT, bankId)
-                        .with(jwtFor(admin.getId()))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(jsonBody(SINGLE_CHOICE_DOC)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
-    }
-
-    @Test
     void nonTeacherHoldingQuestionCreate_returns403() throws Exception {
-        // SYSTEM_ADMIN is granted QUESTION_CREATE directly but holds no
+        // The STUDENT role is granted QUESTION_CREATE directly but holds no
         // TEACHER role — the import is a Teacher-only path.
         jdbc.update("INSERT INTO role_permissions (role_id, permission_id) "
-                + "SELECT (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN'), "
+                + "SELECT (SELECT id FROM roles WHERE code = 'STUDENT'), "
                 + "(SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
-        User admin = userRepo.saveAndFlush(
-                new User("md-api-sysadmin", "mdasys@test.com", "hash", "MD API SysAdmin"));
+        User student = userRepo.saveAndFlush(
+                new User("md-api-perm", "mdaperm@test.com", "hash", "MD API Perm"));
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                + "SELECT ?, id FROM roles WHERE code = 'SYSTEM_ADMIN'", admin.getId());
+                + "SELECT ?, id FROM roles WHERE code = 'STUDENT'", student.getId());
 
         mockMvc.perform(post(ENDPOINT, bankId)
-                        .with(jwtFor(admin.getId()))
+                        .with(jwtFor(student.getId()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody(SINGLE_CHOICE_DOC)))
                 .andExpect(status().isForbidden())
@@ -273,44 +239,26 @@ class MarkdownQuestionImportApiIntegrationTests {
     }
 
     @Test
-    void revokedOrgMembership_returns403_evenForCreator() throws Exception {
-        jdbc.update("""
-                UPDATE workspace_memberships SET status = 'REMOVED'
-                WHERE user_id = ? AND workspace_id = (
-                    SELECT workspace_id FROM question_banks WHERE id = ?
-                )
-                """, teacherUserId, bankId);
-        em.clear();
-
-        mockMvc.perform(post(ENDPOINT, bankId)
-                        .with(jwtFor(teacherUserId))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(jsonBody(SINGLE_CHOICE_DOC)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
-    }
-
-    @Test
-    void selfUpgradedTeacherWithoutProfile_importsIntoPersonalBank() throws Exception {
-        User noProfile = userRepo.saveAndFlush(
-                new User("md-no-profile", "mdnp@test.com", "hash", "No Profile Teacher"));
+    void teacherImportIntoOwnSubjectlessBank_succeeds() throws Exception {
+        User teacher = userRepo.saveAndFlush(
+                new User("md-no-profile", "mdnp@test.com", "hash", "Own Bank Teacher"));
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", noProfile.getId());
+                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacher.getId());
         em.clear();
 
-        Long personalBankId = bankService.createBank(noProfile.getId(),
-                        new CreateQuestionBankRequest(null, "MD-PERSONAL", "Personal", null, null))
+        Long ownBankId = bankService.createBank(teacher.getId(),
+                        new CreateQuestionBankRequest("MD-PERSONAL", "Personal", null, null))
                 .id();
 
-        mockMvc.perform(post(ENDPOINT, personalBankId)
-                        .with(jwtFor(noProfile.getId()))
+        mockMvc.perform(post(ENDPOINT, ownBankId)
+                        .with(jwtFor(teacher.getId()))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody(SINGLE_CHOICE_DOC)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.importedRows").value(1));
 
         Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM questions WHERE question_bank_id = ?", Integer.class, personalBankId);
+                "SELECT COUNT(*) FROM questions WHERE question_bank_id = ?", Integer.class, ownBankId);
         assertThat(count).isEqualTo(1);
     }
 

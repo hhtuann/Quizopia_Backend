@@ -150,25 +150,17 @@ public class SecurityFilterChainConfig {
                         // Review M1-06: linking start requires an authenticated JWT plus the
                         // account password (re-authentication) at the service layer.
                         .requestMatchers(HttpMethod.POST, "/api/auth/oauth/google/link").authenticated()
-                        // Workspace API (active-workspace switcher). Membership checks are
-                        // enforced in WorkspaceService (deny-by-default); this rule only lets
-                        // an authenticated JWT reach the controller (default is denyAll).
-                        .requestMatchers("/api/workspaces/**").authenticated()
+                        // Question bank content API. Ownership checks are enforced in
+                        // QuestionBankService/QuestionService (deny-by-default).
                         .requestMatchers("/api/question-banks/**").authenticated()
                         .requestMatchers("/api/questions/**").authenticated()
                         .requestMatchers("/api/notifications/**").authenticated()
-                        // Academic API (subjects CRUD + grade-levels). Permissions (SUBJECT_READ /
-                        // SUBJECT_CREATE / SUBJECT_UPDATE / SUBJECT_STATUS_UPDATE / GRADE_LEVEL_READ)
-                        // are enforced in AcademicService (deny-by-default); these rules only let an
+                        // Academic catalog API (subjects + grade-levels, read-only).
+                        // Permissions (SUBJECT_READ / GRADE_LEVEL_READ) are enforced in
+                        // AcademicService (deny-by-default); these rules only let an
                         // authenticated JWT reach the controller (default is denyAll).
                         .requestMatchers("/api/subjects/**").authenticated()
                         .requestMatchers("/api/grade-levels/**").authenticated()
-                        .requestMatchers("/api/schools/**").authenticated()
-                        // User management (SYSTEM_ADMIN) + role catalog. Permissions are enforced in
-                        // UserService (active SYSTEM_ADMIN role, deny-by-default); these rules only let
-                        // an authenticated JWT reach the controller (default is denyAll).
-                        .requestMatchers("/api/users/**").authenticated()
-                        .requestMatchers("/api/roles").authenticated()
                         .requestMatchers("/api/exam-purposes/**").authenticated()
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()
@@ -178,10 +170,11 @@ public class SecurityFilterChainConfig {
                         // ClassroomService (deny-by-default); this rule only lets an authenticated JWT
                         // reach the controller (default is denyAll).
                         .requestMatchers("/api/classrooms/**").authenticated()
-                        // Student onboarding (pending-students, assign-school, student search).
-                        // Permissions enforced in StudentOnboardingService (deny-by-default).
-                        .requestMatchers("/api/admin/**").authenticated()
-                        .requestMatchers("/api/students/**").authenticated()
+                        // Learner search for classroom composition (TEACHER-gated in
+                        // StudentSearchService). The /api/admin/** onboarding and
+                        // /api/users management APIs were decommissioned with the
+                        // organization architecture.
+                        .requestMatchers("/api/students/search").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }

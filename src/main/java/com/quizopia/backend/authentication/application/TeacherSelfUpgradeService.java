@@ -29,8 +29,8 @@ import java.util.Map;
  * is kept; no second user is created; nothing else changes.
  *
  * <p>Security properties: the endpoint accepts no role parameter (only
- * TEACHER can ever be granted this way — never ACADEMIC_ADMIN or
- * SYSTEM_ADMIN); the grant is a single user_roles insert whose primary key
+ * TEACHER can ever be granted this way); the grant is a single
+ * user_roles insert whose primary key
  * makes duplicates impossible, so double clicks and concurrent requests
  * converge on exactly one assignment (race losers adopt the winner's row);
  * every attempt is audited without secrets; and because

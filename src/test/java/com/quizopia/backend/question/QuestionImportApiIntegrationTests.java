@@ -1,21 +1,15 @@
 package com.quizopia.backend.question;
 
 import com.quizopia.backend.academic.domain.model.GradeLevel;
-import com.quizopia.backend.academic.domain.model.School;
 import com.quizopia.backend.academic.domain.model.Subject;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.repository.GradeLevelRepository;
-import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.SubjectRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.question.domain.model.QuestionBank;
 import com.quizopia.backend.question.domain.model.QuestionBankStatus;
 import com.quizopia.backend.question.importer.ExcelQuestionParser;
 import com.quizopia.backend.question.repository.QuestionBankRepository;
-import com.quizopia.backend.question.repository.QuestionRepository;
-import com.quizopia.backend.question.repository.QuestionVersionRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -69,31 +63,17 @@ class QuestionImportApiIntegrationTests {
         @Autowired
         private UserRepository userRepo;
         @Autowired
-        private SchoolRepository schoolRepo;
-        @Autowired
         private GradeLevelRepository glRepo;
         @Autowired
         private SubjectRepository subjectRepo;
         @Autowired
-        private TeacherProfileRepository teacherRepo;
-        @Autowired
         private com.quizopia.backend.question.application.QuestionBankService bankService;
-        @Autowired
-        private com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
         @Autowired
         private QuestionBankRepository bankRepo;
         @Autowired
-        private QuestionRepository questionRepo;
-        @Autowired
-        private QuestionVersionRepository versionRepo;
-        @Autowired
         private JdbcTemplate jdbc;
-        @jakarta.persistence.PersistenceContext
-        private jakarta.persistence.EntityManager em;
 
         private Long teacherUserId;
-        private Long teacherProfileId;
-        private Long schoolId;
         private Long subjectId;
         private Long bankId;
 
@@ -118,27 +98,14 @@ class QuestionImportApiIntegrationTests {
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherUserId);
 
-                School school = schoolRepo.saveAndFlush(new School("API-IMP-SCH", "API Import School"));
-                schoolId = school.getId();
-                GradeLevel gl = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL-IMP", "Grade"));
+                GradeLevel gl = glRepo.saveAndFlush(new GradeLevel("GL-IMP", "Grade"));
                 Subject subject = subjectRepo.saveAndFlush(
-                                new Subject(schoolId, gl.getId(), "SUB-IMP", "Subject"));
+                                new Subject(gl.getId(), "SUB-IMP", "Subject"));
                 subjectId = subject.getId();
 
-                TeacherProfile tp = teacherRepo.saveAndFlush(
-                                new TeacherProfile(teacherUserId, schoolId, "TC-API-IMP"));
-                teacherProfileId = tp.getId();
-
                 QuestionBank bank = bankRepo.saveAndFlush(new QuestionBank(
-                                schoolId, subjectId, teacherProfileId, "API-IMP-BANK", "API Import Bank"));
+                                teacherUserId, subjectId, "API-IMP-BANK", "API Import Bank"));
                 bankId = bank.getId();
-                // Detach trigger-filled fixtures so request-scoped loads see the
-                // persisted ownership (transitional ownership fill, ADR-001 §2.2).
-                em.clear();
-
-                // Lazily provision the org workspace + ACTIVE EDITOR membership
-                // (P2-C workspace resource-manage boundary).
-                organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
         }
 
         @AfterEach
@@ -150,19 +117,13 @@ class QuestionImportApiIntegrationTests {
                 jdbc.update("DELETE FROM question_versions");
                 jdbc.update("DELETE FROM questions");
                 jdbc.update("DELETE FROM question_banks WHERE code IN ('API-IMP-BANK','OTHER-API-BANK','ARCH-API-BANK')");
-                jdbc.update("DELETE FROM teacher_profiles WHERE teacher_code IN ('TC-API-IMP','TC-API-OTHER','TC-API-NOTP')");
                 jdbc.update("DELETE FROM subjects WHERE code = 'SUB-IMP'");
                 jdbc.update("DELETE FROM grade_levels WHERE code = 'GL-IMP'");
-                jdbc.update("DELETE FROM schools WHERE code = 'API-IMP-SCH'");
-                jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
-                jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
-                jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
-                // Personal workspaces provisioned by the no-profile tests own
-                // FK rows referencing the test users — remove them first.
-                jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')))");
-                jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')))");
-                jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
-                jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')");
+                jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'STUDENT') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
+                jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-perm','api-import-own','api-import-other','api-import-prevx'))");
+                jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-perm','api-import-own','api-import-other','api-import-prevx'))");
+                jdbc.update("DELETE FROM question_banks WHERE created_by_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-perm','api-import-own','api-import-other','api-import-prevx'))");
+                jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-perm','api-import-own','api-import-other','api-import-prevx')");
         }
 
         // ============================================================
@@ -305,39 +266,6 @@ class QuestionImportApiIntegrationTests {
                 assertThat(qCount).isZero();
         }
 
-        @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
-        @Test
-        void importExistingDuplicate_returns200WithError() throws Exception {
-                // Pre-insert a question with code "DUP-API-1".
-                var q = questionRepo.saveAndFlush(
-                                new com.quizopia.backend.question.domain.model.Question(bankId, "DUP-API-1",
-                                                teacherUserId));
-                versionRepo.saveAndFlush(new com.quizopia.backend.question.domain.model.QuestionVersion(
-                                q.getId(), 1, com.quizopia.backend.question.domain.model.QuestionType.SINGLE_CHOICE,
-                                "existing", teacherUserId, java.math.BigDecimal.ONE));
-
-                byte[] xlsx = workbookBytes(row -> {
-                        set(row, C_CODE, "dup-api-1"); // same code, different case
-                        set(row, C_TYPE, "SINGLE_CHOICE");
-                        set(row, C_CONTENT, "new");
-                        set(row, C_POINTS, "1");
-                        set(row, C_DIFFICULTY, "EASY");
-                        set(row, C_OPT_A, "a");
-                        set(row, C_OPT_B, "b");
-                        set(row, C_OPT_C, "c");
-                        set(row, C_OPT_D, "d");
-                        set(row, C_CORRECT, "A");
-                });
-
-                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
-                                .file(xlsxPart(xlsx))
-                                .with(jwtFor(teacherUserId)))
-                                .andExpect(status().isOk())
-                                .andExpect(jsonPath("$.importedRows").value(0))
-                                .andExpect(jsonPath("$.errors[0].code")
-                                                .value("QUESTION_IMPORT_DUPLICATE_CODE"));
-        }
-
         // ============================================================
         // Authorization tests (preflight runs before parse)
         // ============================================================
@@ -366,19 +294,19 @@ class QuestionImportApiIntegrationTests {
 
         @Test
         void nonTeacherWithQuestionCreate_returns403() throws Exception {
-                User admin = userRepo.saveAndFlush(
-                                new User("api-import-admin", "apia@test.com", "hash", "API Import Admin"));
+                User permHolder = userRepo.saveAndFlush(
+                                new User("api-import-perm", "apip@test.com", "hash", "API Import Perm"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                                + "SELECT ?, id FROM roles WHERE code = 'SYSTEM_ADMIN'", admin.getId());
-                // Grant QUESTION_CREATE to SYSTEM_ADMIN so the permission check passes,
+                                + "SELECT ?, id FROM roles WHERE code = 'STUDENT'", permHolder.getId());
+                // Grant QUESTION_CREATE to STUDENT so the permission check passes,
                 // but the active-TEACHER-role check must still deny.
                 jdbc.update("INSERT INTO role_permissions (role_id, permission_id) "
                                 + "SELECT r.id, p.id FROM roles r, permissions p "
-                                + "WHERE r.code = 'SYSTEM_ADMIN' AND p.code = 'QUESTION_CREATE'");
+                                + "WHERE r.code = 'STUDENT' AND p.code = 'QUESTION_CREATE'");
 
                 mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
                                 .file(xlsxPart(validSingleChoiceBytes()))
-                                .with(jwtFor(admin.getId())))
+                                .with(jwtFor(permHolder.getId())))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
         }
@@ -394,35 +322,20 @@ class QuestionImportApiIntegrationTests {
         }
 
         @Test
-        void teacherWithoutProfileOnForeignBank_returns403() throws Exception {
-                User teacherNoProfile = userRepo.saveAndFlush(
-                                new User("api-import-notp", "aintp@test.com", "hash", "API Import No TP"));
+        void teacherOnOwnSubjectlessBank_importsSuccessfully() throws Exception {
+                // Any TEACHER owns the banks they create (subject metadata optional).
+                User otherTeacher = userRepo.saveAndFlush(
+                                new User("api-import-own", "aio2@test.com", "hash", "API Import Own"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherNoProfile.getId());
-
-                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
-                                .file(xlsxPart(validSingleChoiceBytes()))
-                                .with(jwtFor(teacherNoProfile.getId())))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
-        }
-
-        @Test
-        void teacherWithoutProfileOnOwnPersonalBank_importsSuccessfully() throws Exception {
-                // P2-C (issue #18 audit): self-upgraded TEACHER without a
-                // TeacherProfile can import into their personal-workspace bank.
-                User teacherNoProfile = userRepo.saveAndFlush(
-                                new User("api-import-notp", "aintp@test.com", "hash", "API Import No TP"));
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherNoProfile.getId());
-                Long personalBankId = bankService.createBank(teacherNoProfile.getId(),
+                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", otherTeacher.getId());
+                Long ownBankId = bankService.createBank(otherTeacher.getId(),
                                 new com.quizopia.backend.question.dto.CreateQuestionBankRequest(
-                                                null, "API-IMP-PERSONAL", "Personal", null, null))
+                                                "API-IMP-PERSONAL", "Personal", null, null))
                                 .id();
 
-                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", personalBankId)
+                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", ownBankId)
                                 .file(xlsxPart(validSingleChoiceBytes()))
-                                .with(jwtFor(teacherNoProfile.getId())))
+                                .with(jwtFor(otherTeacher.getId())))
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.importedRows").value(1));
         }
@@ -433,12 +346,8 @@ class QuestionImportApiIntegrationTests {
                                 new User("api-import-other", "aio@test.com", "hash", "API Import Other"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", other.getId());
-                TeacherProfile otherTp = teacherRepo.saveAndFlush(
-                                new TeacherProfile(other.getId(), schoolId, "TC-API-OTHER"));
                 QuestionBank otherBank = bankRepo.saveAndFlush(new QuestionBank(
-                                schoolId, subjectId, otherTp.getId(), "OTHER-API-BANK", "Other API Bank"));
-                // Detach trigger-filled ownership so the guard sees the persisted creator.
-                em.clear();
+                                other.getId(), subjectId, "OTHER-API-BANK", "Other API Bank"));
 
                 // First teacher importing into second teacher's bank.
                 mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", otherBank.getId())

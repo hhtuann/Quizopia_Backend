@@ -58,28 +58,19 @@ class AttemptHttpIntegrationTests {
                                 + "VALUES ('ht','ht@t.com','h','HT')");
                 long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-                long school = insert("INSERT INTO schools (code, name) VALUES ('HS','HTTP School')");
-                long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-                long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school
-                                + "," + gl + ",'M','Math')");
-                long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                                + studentUserId + "," + school + ",'TC')");
-                long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + studentUserId + "," + school + ",'SC')");
+                long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+                long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl
+                                + ",'M','Math')");
                 long bank = insert(
-                                "INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                                                + school + "," + subj + "," + tp + ",'B','Bank')");
+                                "INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                                                + studentUserId + "," + subj + ",'B','Bank')");
                 long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q',"
                                 + studentUserId + ")");
                 long qv = insert(
                                 "INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES ("
                                                 + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-                long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES ("
-                                + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),1)");
-                insert(
-                                "INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES ("
-                                                + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId
-                                                + ")");
+                long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES ("
+                                + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),1)");
                 long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam
                                 + ",'S',0)");
                 long eq = insert(
@@ -90,12 +81,12 @@ class AttemptHttpIntegrationTests {
                                 + eq + ",'A','A',false,0),(" + eq + ",'B','B',false,1),(" + eq + ",'C','C',true,2),("
                                 + eq + ",'D','D',false,3)");
                 sessionId = insert(
-                                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                                                + school + "," + exam + "," + tp + ",'S','Sess','OPEN','"
+                                "INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                                                + exam + ",'S','Sess','OPEN','"
                                                 + baseTime.minusSeconds(3600) + "','" + baseTime.plusSeconds(7200)
                                                 + "',1," + studentUserId + ",'" + baseTime.minusSeconds(3600) + "',60)");
-                insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                                + school + "," + sessionId + "," + sp + "," + studentUserId + ")");
+                insert("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                                + studentUserId + "," + sessionId + "," + studentUserId + ")");
         }
 
         private String jwt() {
@@ -295,18 +286,6 @@ class AttemptHttpIntegrationTests {
         // === R4 Missing MockMvc cases ===
 
         @Test
-        void availableIgnoresProfileEnrollmentStatus() throws Exception {
-                // User-based model (issue #4 P0-1): StudentProfile enrollment status
-                // no longer gates PUBLIC session availability.
-                for (String status : new String[] { "INACTIVE", "GRADUATED", "WITHDRAWN" }) {
-                        jdbc.update("UPDATE student_profiles SET enrollment_status='" + status + "'");
-                        mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
-                                        .andExpect(status().isOk())
-                                        .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
-                }
-        }
-
-        @Test
         void classRestrictedSessionHiddenWithoutClassMembership() throws Exception {
                 jdbc.update("UPDATE exam_sessions SET visibility='CLASS_RESTRICTED' WHERE id=" + sessionId);
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
@@ -317,23 +296,12 @@ class AttemptHttpIntegrationTests {
         @Test
         void classRestrictedSessionVisibleToClassroomMember() throws Exception {
                 jdbc.update("UPDATE exam_sessions SET visibility='CLASS_RESTRICTED' WHERE id=" + sessionId);
-                long tpId = jdbc.queryForObject("SELECT id FROM teacher_profiles WHERE user_id=" + studentUserId,
-                                Long.class);
-                long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId,
-                                Long.class);
-                long classroom = insert("INSERT INTO classrooms (school_id, owner_teacher_id, owner_user_id, code, name) VALUES ("
-                                + school + "," + tpId
-                                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + tpId + "),'C1','Class 1')");
+                long classroom = insert("INSERT INTO classrooms (owner_user_id, code, name) VALUES ("
+                                + studentUserId + ",'C1','Class 1')");
                 jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES (" + classroom + ","
                                 + studentUserId + ")");
-                jdbc.update("INSERT INTO exam_session_classes (school_id, exam_session_id, classroom_id) VALUES ("
-                                + school + "," + sessionId + "," + classroom + ")");
-                // P0-R2: ORGANIZATION-workspace exam → the learner also needs an ACTIVE
-                // workspace membership on top of classroom membership.
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "SELECT e.workspace_id, " + studentUserId + ", 'MEMBER', 'ACTIVE' FROM exams e "
-                                + "WHERE e.id=(SELECT exam_id FROM exam_sessions WHERE id=" + sessionId
-                                + ") ON CONFLICT DO NOTHING");
+                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id) VALUES ("
+                                + sessionId + "," + classroom + ")");
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(studentUserId)))
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
@@ -485,26 +453,28 @@ class AttemptHttpIntegrationTests {
                                 .andExpect(jsonPath("$.code").value("ATTEMPT_OUTSIDE_WINDOW"));
         }
 
-        // === R7: missing-profile / SYSTEM_ADMIN / hidden-status HTTP edges ===
+        // === R7: role / hidden-status HTTP edges ===
 
         @Test
-        void availableAllowsUserWithoutStudentProfile() throws Exception {
+        void availableAllowsAnyStudentUser() throws Exception {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('mp2','mp2@t.com','h','MP2')");
                 long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-                // STUDENT role + EXAM_SESSION_READ, no StudentProfile → public learner,
-                // allowed (issue #4 P0-1: profile is optional provenance).
+                // STUDENT role + EXAM_SESSION_READ: any active learner may list
+                // PUBLIC sessions (permission-gated, not identity-gated).
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(u)))
                                 .andExpect(status().isOk())
                                 .andExpect(jsonPath("$.items[0].sessionId").value(sessionId));
         }
 
         @Test
-        void availableReturns403SystemAdminWithoutStudentRole() throws Exception {
+        void availableReturns403TeacherWithoutSessionRead() throws Exception {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sa','sa@t.com','h','SA')");
-                long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='SYSTEM_ADMIN'", Long.class);
+                long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-                // SYSTEM_ADMIN has no STUDENT role → no bypass; deny-by-default → 403.
+                jdbc.update("DELETE FROM role_permissions WHERE role_id=(SELECT id FROM roles WHERE code='TEACHER') "
+                                + "AND permission_id=(SELECT id FROM permissions WHERE code='EXAM_SESSION_READ')");
+                // Privileged TEACHER role without EXAM_SESSION_READ → no bypass; deny-by-default → 403.
                 mockMvc.perform(get("/api/exam-sessions/available").with(jwtWithSubject(u)))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
@@ -528,11 +498,11 @@ class AttemptHttpIntegrationTests {
         }
 
         @Test
-        void startAllowsUserWithoutStudentProfile() throws Exception {
+        void startAllowsAnyStudentUser() throws Exception {
                 long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sp2','sp2@t.com','h','SP2')");
                 long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + roleId + ")");
-                // PUBLIC session + STUDENT role: profile-less public learner may start.
+                // PUBLIC session + STUDENT role: any learner may start.
                 mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(jwtWithSubject(u))
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("{}"))

@@ -7,9 +7,9 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.Instant;
 
 /**
- * JPA entity mapping the {@code grade_levels} table. A grade level belongs to
- * exactly one school. The composite unique constraint {@code (school_id, id)}
- * is the target of the subjects composite foreign key.
+ * JPA entity mapping the {@code grade_levels} table. Since the
+ * user-centric refactor (V24) grade levels form a GLOBAL catalog — one
+ * row per code — shared by every user of the platform.
  */
 @Entity
 @Table(name = "grade_levels")
@@ -18,9 +18,6 @@ public class GradeLevel {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-    @Column(name = "school_id", nullable = false)
-    private Long schoolId;
 
     @Column(name = "code", nullable = false, length = 30)
     private String code;
@@ -42,11 +39,9 @@ public class GradeLevel {
     protected GradeLevel() {
     }
 
-    public GradeLevel(Long schoolId, String code, String name) {
-        School.requireNonNull(schoolId, "schoolId");
-        School.requireNonBlank("code", code);
-        School.requireNonBlank("name", name);
-        this.schoolId = schoolId;
+    public GradeLevel(String code, String name) {
+        Subject.requireNonBlank("code", code);
+        Subject.requireNonBlank("name", name);
         this.code = code;
         this.name = name;
     }
@@ -57,14 +52,6 @@ public class GradeLevel {
 
     public void setId(Long id) {
         this.id = id;
-    }
-
-    public Long getSchoolId() {
-        return schoolId;
-    }
-
-    public void setSchoolId(Long schoolId) {
-        this.schoolId = schoolId;
     }
 
     public String getCode() {
@@ -127,11 +114,8 @@ public class GradeLevel {
     public String toString() {
         return "GradeLevel{" +
                 "id=" + id +
-                ", schoolId=" + schoolId +
                 ", code='" + code + '\'' +
                 ", sortOrder=" + sortOrder +
-                ", createdAt=" + createdAt +
-                ", updatedAt=" + updatedAt +
                 '}';
     }
 }

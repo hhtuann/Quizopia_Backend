@@ -29,24 +29,19 @@ class V6V7SchemaIntegrationTests {
     private JdbcTemplate jdbc;
 
     private long userId;
-    private long schoolId;
     private long gradeLevelId;
     private long subjectId;
-    private long teacherProfileId;
     private long bankId;
 
     @BeforeEach
     void setUp() {
         userId = insert("INSERT INTO users (username, email, password_hash, display_name, status) "
                 + "VALUES ('s-test','s@test.com','h','ST','ACTIVE')");
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('TS','Test School')");
-        gradeLevelId = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL12','G12')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                + "VALUES (" + schoolId + "," + gradeLevelId + ",'MATH','Math')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + userId + "," + schoolId + ",'TC1')");
-        bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'B1','Bank')");
+        gradeLevelId = insert("INSERT INTO grade_levels (code, name) VALUES ('GL12','G12')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) "
+                + "VALUES (" + gradeLevelId + ",'MATH','Math')");
+        bankId = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + userId + "," + subjectId + ",'B1','Bank')");
     }
 
     // -- Flyway + table existence ------------------------------------------
@@ -61,11 +56,17 @@ class V6V7SchemaIntegrationTests {
 
     @Test
     void allV6V7TablesExist() {
-        for (String t : new String[]{"schools","grade_levels","subjects","teacher_profiles","student_profiles",
+        for (String t : new String[]{"grade_levels","subjects",
                 "question_banks","questions","question_versions","question_options"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
+        }
+        // The school-era tables are gone after V25.
+        for (String t : new String[]{"schools","teacher_profiles","student_profiles"}) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
+                    .as("legacy table %s", t).isZero();
         }
     }
 
@@ -119,43 +120,24 @@ class V6V7SchemaIntegrationTests {
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    // -- School-scope composite FKs ----------------------------------------
+    // -- Global catalog FKs (school scoping removed by V24/V25) ------------
 
     @Test
-    void subjectFkRejectsGradeLevelFromDifferentSchool() {
-        long s2 = insert("INSERT INTO schools (code, name) VALUES ('S2','S2')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL2','G2')");
-        assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                        + "VALUES (" + schoolId + "," + gl2 + ",'XS','X')"))
-                .isInstanceOf(DataIntegrityViolationException.class);
+    void bankAcceptsAnyGlobalSubject() {
+        // Subjects form one global catalog; any bank may reference any subject.
+        long gl2 = insert("INSERT INTO grade_levels (code, name) VALUES ('GL2','G2')");
+        long sub2 = insert("INSERT INTO subjects (grade_level_id, code, name) "
+                + "VALUES (" + gl2 + ",'SUB2','S2')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + userId + "," + sub2 + ",'XB','X')");
+        assertThat(bank).isPositive();
     }
 
     @Test
-    void bankFkRejectsCrossSchoolSubject() {
-        long s2 = insert("INSERT INTO schools (code, name) VALUES ('S3','S3')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL3','G3')");
-        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                + "VALUES (" + s2 + "," + gl2 + ",'SUB2','S2')");
+    void bankRejectsMissingSubject() {
         assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                        + "VALUES (" + schoolId + "," + sub2 + "," + teacherProfileId + ",'XB','X')"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void bankFkRejectsCrossSchoolOwner() {
-        long s2 = insert("INSERT INTO schools (code, name) VALUES ('S4','S4')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL4','G4')");
-        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                + "VALUES (" + s2 + "," + gl2 + ",'SUB3','S3')");
-        long user2 = insert("INSERT INTO users (username, email, password_hash, display_name, status) "
-                + "VALUES ('s-test-own','so@test.com','h','SO','ACTIVE')");
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + user2 + "," + s2 + ",'TC2')");
-        assertThatThrownBy(() -> jdbc.update(
-                "INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                        + "VALUES (" + schoolId + "," + sub2 + "," + tp2 + ",'XB2','X')"))
+                "INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                        + "VALUES (" + userId + ",99999999,'XB','X')"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -228,10 +210,20 @@ class V6V7SchemaIntegrationTests {
     }
 
     @Test
-    void teacherProfileUserIdUnique() {
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + userId + "," + schoolId + ",'DUP')"))
+    void bankCodeSameCreatorDifferentCaseRejected() {
+        // V24: creator-scoped code uniqueness (uk_question_banks_creator_code_ci).
+        assertThatThrownBy(() -> insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + userId + "," + subjectId + ",'b1','Dup')"))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void bankCodeTwoCreatorsSameCodeAccepted() {
+        long user2 = insert("INSERT INTO users (username, email, password_hash, display_name, status) "
+                + "VALUES ('s-test-own','so@test.com','h','SO','ACTIVE')");
+        long bank2 = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + user2 + "," + subjectId + ",'B1','Dup')");
+        assertThat(bank2).isPositive();
     }
 
     // -- Helpers ------------------------------------------------------------

@@ -139,11 +139,11 @@ public class ClassroomController {
         return classroomService.addMembers(userId, id, request);
     }
 
-    @DeleteMapping("/{id}/members/{studentProfileId}")
+    @DeleteMapping("/{id}/members/{userId}")
     public ResponseEntity<Void> removeMember(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
-            @PathVariable Long studentProfileId) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        classroomService.removeMember(userId, id, studentProfileId);
+            @PathVariable Long userId) {
+        Long callerId = Long.valueOf(jwt.getSubject());
+        classroomService.removeMember(callerId, id, userId);
         return ResponseEntity.ok().build();
     }
 

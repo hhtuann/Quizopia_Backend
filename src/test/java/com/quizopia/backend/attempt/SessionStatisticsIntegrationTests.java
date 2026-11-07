@@ -50,30 +50,22 @@ class SessionStatisticsIntegrationTests {
         teacherUserId = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('tch-" + tag + "','t" + tag + "@t.com','h','Teacher')");
         long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + teacherUserId + "," + tr + ")");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('SC" + tag + "','School')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','Math')");
-        ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + school + ",'TC" + tag + "')");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + tag + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
 
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'B" + tag + "','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'E" + tag + "','Exam','PUBLISHED',now(),1)");
-        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
-        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "SELECT workspace_id, " + teacherUserId + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
-                + " ON CONFLICT DO NOTHING");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacherUserId + ")");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subj + ",'B" + tag + "','Bank')");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + teacherUserId + "," + subj + ",'E" + tag + "','Exam','PUBLISHED',now(),1)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + tag + "'," + teacherUserId + ")");
         ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + teacherUserId + ")");
         long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        sessionId = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + ",(SELECT id FROM teacher_profiles WHERE user_id=" + teacherUserId + "),'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        sessionId = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S" + tag + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + teacherUserId + ",'" + now.minusSeconds(3600) + "',60)");
     }
 
     @Test
     void emptySessionAllZerosAndNulls() {
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.bestResultCount()).isEqualTo(0);
         assertThat(s.averageScore()).isNull();
         assertThat(s.averagePercentage()).isNull();
@@ -91,7 +83,7 @@ class SessionStatisticsIntegrationTests {
     void oneStudentBestResultHasStats() {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.bestResultCount()).isEqualTo(1);
         assertThat(s.startedStudentCount()).isEqualTo(1);
         assertThat(s.submittedStudentCount()).isEqualTo(1);
@@ -117,14 +109,14 @@ class SessionStatisticsIntegrationTests {
     void bucketSumEqualsBestResultCount() {
         for (int i = 0; i < 3; i++) createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         int bucketSum = s.distribution().stream().mapToInt(b -> b.count()).sum();
         assertThat(bucketSum).isEqualTo(s.bestResultCount());
     }
 
     @Test
     void distributionHas10Buckets() {
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.distribution()).hasSize(10);
         // Last bucket is [90, 100] inclusive
         var last = s.distribution().get(9);
@@ -135,7 +127,7 @@ class SessionStatisticsIntegrationTests {
 
     @Test
     void studentDeniedStatistics() {
-        assertThatThrownBy(() -> statsService.getStatistics(ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')"), "STUDENT", sessionId))
+        assertThatThrownBy(() -> statsService.getStatistics(ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')"), sessionId))
                 .isInstanceOf(AttemptException.class);
     }
 
@@ -144,7 +136,7 @@ class SessionStatisticsIntegrationTests {
         long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('ot','ot@t.com','h','OT')");
         long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + tr + ")");
-        assertThatThrownBy(() -> statsService.getStatistics(other, "TEACHER", sessionId))
+        assertThatThrownBy(() -> statsService.getStatistics(other, sessionId))
                 .isInstanceOf(AttemptException.class);
     }
 
@@ -152,7 +144,7 @@ class SessionStatisticsIntegrationTests {
     void noAnswerKeyFieldsInResponse() {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         assertThat(s.toString()).doesNotContain("answerKey").doesNotContain("expectedAnswer")
                 .doesNotContain("correctOption").doesNotContain("isCorrect");
     }
@@ -161,7 +153,7 @@ class SessionStatisticsIntegrationTests {
     void perQuestionCorrectPlusIncorrectEqualsAnswered() {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         for (var q : s.perQuestionStatistics()) {
             assertThat(q.correctCount() + q.incorrectCount()).isEqualTo(q.answeredCount());
         }
@@ -171,7 +163,7 @@ class SessionStatisticsIntegrationTests {
     void deterministicQuestionOrderByExamQuestionId() {
         createStudentAndSubmit();
         em.flush(); em.clear();
-        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, "TEACHER", sessionId);
+        SessionStatisticsResponse s = statsService.getStatistics(teacherUserId, sessionId);
         // Only 1 question in fixture; verify output is ordered by examQuestionId (stable).
         // For 2+ questions the SQL ORDER BY aq.exam_question_id guarantees it.
         assertThat(s.perQuestionStatistics()).hasSize(1);
@@ -182,9 +174,7 @@ class SessionStatisticsIntegrationTests {
         long su = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('stu-" + tag + UUID.randomUUID().toString().substring(0, 8) + "','s" + UUID.randomUUID() + "@t.com','h','Student')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + su + "," + sr + ")");
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + su + "," + school + ",'SC" + tag + UUID.randomUUID().toString().substring(0, 8) + "')");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + teacherUserId + ")");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + su + "," + sessionId + "," + teacherUserId + ")");
         long attemptId = attemptService.startAttempt(su, sessionId, new com.quizopia.backend.attempt.dto.StartAttemptRequest(null)).attemptId();
         em.flush(); em.clear();
         submitService.submitAttempt(su, attemptId, new SubmitRequest("stat-key-" + UUID.randomUUID()));

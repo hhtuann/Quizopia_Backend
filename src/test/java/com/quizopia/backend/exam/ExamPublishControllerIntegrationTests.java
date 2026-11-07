@@ -36,7 +36,6 @@ class ExamPublishControllerIntegrationTests {
     @Autowired private EntityManager entityManager;
 
     private Long teacherUserId;
-    private Long schoolId;
     private Long subjectId;
     private Long sourceQuestionId;
 
@@ -44,11 +43,8 @@ class ExamPublishControllerIntegrationTests {
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('pc','pc@t','h','PC')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('PCS','PC School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'PCT')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'QB','Bank')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Bank')");
         sourceQuestionId = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q1','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + sourceQuestionId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
@@ -92,7 +88,7 @@ class ExamPublishControllerIntegrationTests {
         Long examId = createAndComposeExam("EX3");
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o6','o6@t','h','O6')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'PC2')");
+
         mockMvc.perform(post("/api/exams/" + examId + "/publish")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(other))))
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))

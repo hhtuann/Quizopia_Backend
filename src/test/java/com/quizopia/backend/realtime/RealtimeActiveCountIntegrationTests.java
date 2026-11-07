@@ -77,9 +77,8 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
         sessionId = createTeacherOwnedOpenSession("cnt-" + tag);
         teacherId = teacherIdForSession(sessionId);
         teacherToken = accessToken(teacherId, "cnt-tch", List.of("TEACHER"));
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        studentId = addStudentParticipant("cnt-s1-" + tag, school);
-        studentId2 = addStudentParticipant("cnt-s2-" + tag, school);
+        studentId = addStudentParticipant("cnt-s1-" + tag);
+        studentId2 = addStudentParticipant("cnt-s2-" + tag);
         activeCount.reset();
     }
 
@@ -361,13 +360,10 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
     }
 
     private long newScheduledSession() {
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long owner = jdbc.queryForObject("SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId,
-                Long.class);
         return ins(
-                "INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
-                        + school + "," + exam + "," + owner + ",'SQLSCH','t','SCHEDULED','"
+                "INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                        + exam + ",'SQLSCH','t','SCHEDULED','"
                         + java.time.Instant.now().minusSeconds(3600) + "','" + java.time.Instant.now().plusSeconds(7200)
                         + "',2,60," + teacherId + ")");
     }
@@ -407,14 +403,11 @@ class RealtimeActiveCountIntegrationTests extends RealtimeStompTestBase {
 
     // --- helpers ---
 
-    private long addStudentParticipant(String tag, long school) {
+    private long addStudentParticipant(String tag) {
         long uid = insertUserWithRole(tag, "STUDENT");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + uid + "," + school + ",'SC"
-                + tag + "')");
         jdbc.update(
-                "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                        + school + "," + sessionId + ",(SELECT id FROM student_profiles WHERE user_id=" + uid + "),"
-                        + teacherId + ")");
+                "INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                        + uid + "," + sessionId + "," + teacherId + ")");
         return uid;
     }
 

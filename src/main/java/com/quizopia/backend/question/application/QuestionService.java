@@ -162,10 +162,9 @@ public class QuestionService {
 
     /**
      * The question's bank must pass {@link QuestionBankImportAccessGuard}:
-     * active TEACHER role, QUESTION_CREATE permission, bank creator equality,
-     * Phase 1 workspace resource-manage check and ACTIVE bank state (P2-C;
-     * supersedes the legacy TeacherProfile/school checks, which could not
-     * express personal workspace banks).
+     * active TEACHER role, QUESTION_CREATE permission, bank creator equality
+     * and ACTIVE bank state (P2-C; supersedes the legacy
+     * TeacherProfile/school checks of the school-era model).
      */
     private Question requireOwnedQuestion(Long userId, Long questionId) {
         Question question = questionRepository.findById(questionId)

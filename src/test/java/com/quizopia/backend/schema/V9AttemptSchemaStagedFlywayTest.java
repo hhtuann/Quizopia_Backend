@@ -70,23 +70,26 @@ class V9AttemptSchemaStagedFlywayTest {
                     .locations("classpath:db/migration")
                     .load().migrate();
 
-            // 5. Latest applied version is 16 (Task A workspace foundation V10–V12 +
-            //    Task B exam redesign V13–V15, which re-points the staged V8 chain onto
-            //    exams, + V16 user-based attempts).
+            // 5. Latest applied version is 25 (workspace era V10–V12, exam
+            //    redesign V13–V15 which re-points the staged V8 chain onto
+            //    exams, user-based attempts/participants V16/V17, identity
+            //    V18–V23, and the user-centric contract V24/V25).
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isEqualTo("23");
+                assertThat(rs.getString(1)).isEqualTo("25");
             }
 
-            // 5b. The staged legacy version row was mapped by the V14 backfill.
+            // 5b. The staged legacy version row was mapped by the V14 backfill
+            //     and its audit leftovers dropped by V25 (user-centric contract).
             try (Connection c = DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement();
-                 ResultSet rs = st.executeQuery("SELECT count(*) FROM legacy_exam_content_map")) {
+                 ResultSet rs = st.executeQuery(
+                         "SELECT count(*) FROM information_schema.tables WHERE table_name='legacy_exam_content_map'")) {
                 assertThat(rs.next()).isTrue();
-                assertThat(rs.getInt(1)).isEqualTo(1);
+                assertThat(rs.getInt(1)).isZero();
             }
 
             // 6. All six V9 tables now exist.
@@ -186,18 +189,26 @@ class V9AttemptSchemaStagedFlywayTest {
     }
 
     private void assertV8DataUnchanged(String url, String user, String pass, long[] ids) throws Exception {
-        long userId = ids[0], schoolId = ids[1], examId = ids[2], evId = ids[3], eqId = ids[4], sessionId = ids[5],
-                participantId = ids[6];
+        long userId = ids[0], examId = ids[2], eqId = ids[4], sessionId = ids[5], participantId = ids[6];
         try (Connection c = DriverManager.getConnection(url, user, pass);
              Statement st = c.createStatement()) {
             assertThat(exists(st, "users", userId)).isTrue();
-            assertThat(exists(st, "schools", schoolId)).isTrue();
             assertThat(exists(st, "exams", examId)).isTrue();
-            assertThat(exists(st, "exam_versions", evId)).isTrue();
             assertThat(exists(st, "exam_questions", eqId)).isTrue();
             assertThat(exists(st, "exam_sessions", sessionId)).isTrue();
             assertThat(exists(st, "exam_session_participants", participantId)).isTrue();
-            // V8 table counts unchanged (exactly the one chain row each in the leaf tables).
+            // V25 (user-centric contract) dropped the school/workspace-era
+            // tables after migrating their ownership onto users; the user
+            // content chain survives untouched.
+            for (String legacy : new String[]{"schools", "exam_versions", "legacy_exam_content_map",
+                    "teacher_profiles", "student_profiles", "workspaces", "workspace_memberships"}) {
+                try (ResultSet rs = st.executeQuery(
+                        "SELECT count(*) FROM information_schema.tables WHERE table_name='" + legacy + "'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).as("legacy table %s gone", legacy).isZero();
+                }
+            }
+            // Session count unchanged (exactly the one chain row).
             try (ResultSet rs = st.executeQuery("SELECT count(*) FROM exam_sessions")) {
                 assertThat(rs.next()).isTrue();
                 assertThat(rs.getInt(1)).isEqualTo(1);

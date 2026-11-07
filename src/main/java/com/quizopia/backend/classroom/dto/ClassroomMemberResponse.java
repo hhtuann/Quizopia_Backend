@@ -2,11 +2,12 @@ package com.quizopia.backend.classroom.dto;
 
 import java.time.Instant;
 
-/** Paginated member row (GET /api/classrooms/{id}/members). */
+/**
+ * Classroom member row (user-based membership).
+ */
 public record ClassroomMemberResponse(
         Long id,
-        Long studentProfileId,
-        String studentCode,
+        Long userId,
         String displayName,
         Instant addedAt
 ) {

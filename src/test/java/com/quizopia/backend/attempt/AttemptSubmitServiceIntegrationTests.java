@@ -54,22 +54,18 @@ class AttemptSubmitServiceIntegrationTests {
         studentUserId = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s','s@t.com','h','S')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('SS','Submit School')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','Math')");
-        long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),1)");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),1)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c',1,'{}'::jsonb," + studentUserId + ")");
         long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                + school + "," + exam + "," + tp + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + studentUserId + ")");
+        long session = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + exam + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + studentUserId + "," + session + "," + studentUserId + ")");
         attemptId = attemptService.startAttempt(studentUserId, session, new StartAttemptRequest(null)).attemptId();
         aqId = jdbc.queryForObject("SELECT id FROM attempt_questions WHERE attempt_id=" + attemptId + " LIMIT 1", Long.class);
     }
@@ -92,28 +88,22 @@ class AttemptSubmitServiceIntegrationTests {
         assertThatThrownBy(() -> submit(studentUserId, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void systemAdminWithoutStudentRejected403() {
-        long admin = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sa','sa@t.com','h','SA')");
-        long adminRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='SYSTEM_ADMIN'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + admin + "," + adminRole + ")");
-        assertThatThrownBy(() -> submit(admin, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
+    @Test void teacherWithoutSubmitPermissionRejected403() {
+        long teacher = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sa','sa@t.com','h','SA')");
+        long teacherRole = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + teacher + "," + teacherRole + ")");
+        // Privileged TEACHER role without ATTEMPT_SUBMIT → no bypass; deny-by-default → 403.
+        jdbc.update("DELETE FROM role_permissions WHERE role_id=(SELECT id FROM roles WHERE code='TEACHER') AND permission_id=(SELECT id FROM permissions WHERE code='ATTEMPT_SUBMIT')");
+        assertThatThrownBy(() -> submit(teacher, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void noProfileForeignAttemptRejected403() {
+    @Test void foreignUserWithoutOwnershipRejected403() {
         long np = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + np + "," + roleId + ")");
-        // Public learner passes the permission gate but does not own the attempt →
-        // ownership denial (issue #4 P0-1).
+        // Permission gate passes (STUDENT role) but the caller does not own the
+        // attempt → ownership denial.
         assertThatThrownBy(() -> submit(np, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test void inactiveProfileStillAccepted() {
-        // Profile enrollment status no longer gates submit (issue #4 P0-1);
-        // permission + user ownership are the only gates.
-        jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE'");
-        em.clear();
-        assertThat(submit(studentUserId, KEY).status()).isEqualTo("SUBMITTED");
     }
 
     @Test void missingAttemptRejected404() {
@@ -124,16 +114,6 @@ class AttemptSubmitServiceIntegrationTests {
         long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o','o@t.com','h','O')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) SELECT " + other + ", school_id, 'OS' FROM student_profiles WHERE user_id=" + studentUserId);
-        assertThatThrownBy(() -> submit(other, attemptId, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test void crossSchoolAttemptRejected403() {
-        long xs = ins("INSERT INTO schools (code, name) VALUES ('XS','XS')");
-        long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')");
-        long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + other + "," + xs + ",'XS')");
         assertThatThrownBy(() -> submit(other, attemptId, KEY)).satisfies(c -> assertThat(code(c)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
 
@@ -354,7 +334,7 @@ class AttemptSubmitServiceIntegrationTests {
     }
 
     @Test void anotherUserMayUseSameTextualKey() {
-        long other = createSecondStudentSameSchool();
+        long other = createSecondStudent();
         long attempt2 = startAttemptFor(other);
         submit(studentUserId, attemptId, KEY); // user 1, key
         assertThat(submit(other, attempt2, KEY).status()).isEqualTo("SUBMITTED"); // user 2 same key OK
@@ -398,16 +378,13 @@ class AttemptSubmitServiceIntegrationTests {
         return attemptService.startAttempt(userId, session, new StartAttemptRequest(null)).attemptId();
     }
 
-    private long createSecondStudentSameSchool() {
+    private long createSecondStudent() {
         long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s2','s2@t.com','h','S2')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) SELECT " + other + ", school_id, 'SC2' FROM student_profiles WHERE user_id=" + studentUserId);
         long session = jdbc.queryForObject("SELECT exam_session_id FROM attempts WHERE id=" + attemptId, Long.class);
         // add as participant so they can start an attempt in this session
-        long school = jdbc.queryForObject("SELECT school_id FROM attempts WHERE id=" + attemptId, Long.class);
-        long sp = jdbc.queryForObject("SELECT id FROM student_profiles WHERE user_id=" + other, Long.class);
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + studentUserId + ")");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + other + "," + session + "," + studentUserId + ")");
         return other;
     }
 

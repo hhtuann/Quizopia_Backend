@@ -109,7 +109,7 @@ class ExcelExportCleanupIntegrationTests {
         TrackingWorkbook wb = new TrackingWorkbook(false);
         TestExcelExportService.NEXT.set(wb);
 
-        byte[] bytes = exportService.export(fix[0], "TEACHER", fix[1]);
+        byte[] bytes = exportService.export(fix[0], fix[1]);
 
         assertThat(bytes).isNotEmpty();
         assertThat(wb.disposed).as("dispose() must run on success").isTrue();
@@ -123,7 +123,7 @@ class ExcelExportCleanupIntegrationTests {
         TestExcelExportService.NEXT.set(wb);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> exportService.export(fix[0], "TEACHER", fix[1]));
+                () -> exportService.export(fix[0], fix[1]));
 
         assertThat(thrown).isInstanceOf(AttemptException.class);
         assertThat(((AttemptException) thrown).getErrorCode())
@@ -140,18 +140,10 @@ class ExcelExportCleanupIntegrationTests {
         long teacher = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x" + tag + "','x" + tag + "@t.com','h','T')");
         long tr = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + teacher + "," + tr + ")");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('SC" + tag + "','S')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
-        long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacher + "," + school + ",'TC" + tag + "')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),1)");
-        // ORGANIZATION-workspace exam (school-based insert): the session creator needs an
-        // ACTIVE workspace membership for teacher authorization (issue #4 P0-2).
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "SELECT workspace_id, " + teacher + ", 'EDITOR', 'ACTIVE' FROM exams WHERE id=" + exam
-                + " ON CONFLICT DO NOTHING");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + teacher + ")");
-        long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + "," + tp + ",'S" + tag + "','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + teacher + ",'" + now.minusSeconds(3600) + "',60)");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','M')");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + teacher + "," + subj + ",'E','E','PUBLISHED',now(),1)");
+        long session = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S" + tag + "','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + teacher + ",'" + now.minusSeconds(3600) + "',60)");
         return new long[]{teacher, session};
     }
 

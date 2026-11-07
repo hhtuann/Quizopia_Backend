@@ -32,10 +32,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ul>
  *   <li>{@code EXAM_READ} - granted to both TEACHER (3.3) and STUDENT (3.4),
  *       used to verify {@code distinct} collapses duplicates.</li>
- *   <li>{@code QUESTION_CREATE} - granted to TEACHER only (3.3).</li>
+ *   <li>{@code QUESTION_CREATE} - granted to TEACHER only (3.3); used to
+ *       verify an expired role's permissions are excluded.</li>
  *   <li>{@code ATTEMPT_START} - granted to STUDENT only (3.4).</li>
- *   <li>{@code USER_READ} - granted to ACADEMIC_ADMIN (3.2) but not to TEACHER
- *       or STUDENT; used to verify an expired role's permissions are excluded.</li>
  * </ul>
  */
 @SpringBootTest
@@ -69,37 +68,31 @@ class RolePermissionRepositoryIntegrationTests {
 
         Role teacher = roleRepository.findByCode("TEACHER").orElseThrow();
         Role student = roleRepository.findByCode("STUDENT").orElseThrow();
-        Role academicAdmin = roleRepository.findByCode("ACADEMIC_ADMIN").orElseThrow();
 
         // evaluationNow is one day in the future so that every non-null
         // expiresAt used below remains greater than assignedAt at insert time
-        // (no constraint violation). ACADEMIC_ADMIN's expiresAt still falls
-        // before evaluationNow, so it is treated as expired when queried.
+        // (no constraint violation). TEACHER's expiresAt still falls before
+        // evaluationNow, so it is treated as expired when queried.
         Instant evaluationNow = Instant.now().plusSeconds(86400);
 
         userRoleRepository.saveAllAndFlush(List.of(
-                new UserRole(user, teacher, null, null),
-                new UserRole(user, student, null, evaluationNow.plusSeconds(3600)),
-                new UserRole(user, academicAdmin, null, evaluationNow.minusSeconds(3600))
+                new UserRole(user, teacher, null, evaluationNow.minusSeconds(3600)),
+                new UserRole(user, student, null, evaluationNow.plusSeconds(3600))
         ));
 
         List<String> effectiveCodes =
                 rolePermissionRepository.findEffectivePermissionCodesByUserId(user.getId(), evaluationNow);
 
-        // EXAM_READ is granted to both active roles (TEACHER + STUDENT);
-        // distinct must collapse the two grants into a single occurrence.
+        // Only the STUDENT grant is active; EXAM_READ arrives once.
         assertThat(effectiveCodes).contains("EXAM_READ");
         assertThat(Collections.frequency(effectiveCodes, "EXAM_READ")).isEqualTo(1);
-
-        // QUESTION_CREATE is granted to TEACHER only and TEACHER is active.
-        assertThat(effectiveCodes).contains("QUESTION_CREATE");
 
         // ATTEMPT_START is granted to STUDENT only and STUDENT is active.
         assertThat(effectiveCodes).contains("ATTEMPT_START");
 
-        // USER_READ is granted to ACADEMIC_ADMIN only among these roles, but
-        // ACADEMIC_ADMIN is expired, so its permissions must be excluded.
-        assertThat(effectiveCodes).doesNotContain("USER_READ");
+        // QUESTION_CREATE is granted to TEACHER only, but the TEACHER
+        // assignment is expired, so its permissions must be excluded.
+        assertThat(effectiveCodes).doesNotContain("QUESTION_CREATE");
     }
 
     @Test

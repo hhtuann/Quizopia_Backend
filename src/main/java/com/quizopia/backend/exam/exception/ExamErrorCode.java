@@ -6,18 +6,14 @@ import org.springframework.http.HttpStatusCode;
 public enum ExamErrorCode {
     EXAM_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Exam request validation failed"),
     EXAM_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this exam resource"),
-    EXAM_TEACHER_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "Teacher profile not found for the current user"),
+
     EXAM_SUBJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "Subject not found"),
-    EXAM_SUBJECT_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Subject does not belong to the caller's school"),
+
     EXAM_PURPOSE_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam purpose not found"),
-    EXAM_PURPOSE_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Exam purpose does not belong to the caller's school"),
-    EXAM_SCHOOL_WORKSPACE_NOT_FOUND(HttpStatus.NOT_FOUND, "No organization workspace found for the caller's school"),
+
     EXAM_CODE_CONFLICT(HttpStatus.CONFLICT, "Exam code already exists for this owner"),
     EXAM_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam not found"),
-    EXAM_VERSION_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam version not found"),
-    EXAM_VERSION_NOT_DRAFT(HttpStatus.CONFLICT, "Exam version is not in DRAFT state"),
     EXAM_NOT_DRAFT(HttpStatus.CONFLICT, "Exam is not in DRAFT state"),
-    EXAM_ALREADY_PUBLISHED(HttpStatus.CONFLICT, "Exam is already published"),
     EXAM_NOT_PUBLISHED(HttpStatus.CONFLICT, "Exam is not published"),
     EXAM_ARCHIVE_CONFLICT(HttpStatus.CONFLICT, "Exam has scheduled or open sessions and cannot be archived"),
     EXAM_SESSION_NOT_PUBLISHED_EXAM(HttpStatus.CONFLICT, "Sessions can only be created for a PUBLISHED exam"),

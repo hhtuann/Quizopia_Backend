@@ -3,8 +3,6 @@ package com.quizopia.backend.authentication;
 import com.quizopia.backend.testsupport.AbstractAuthenticationIntegrationTests;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import com.quizopia.backend.testsupport.TestClockConfig;
-import com.quizopia.backend.user.application.UserService;
-import com.quizopia.backend.user.dto.UpdateUserRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,8 +20,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 /**
  * F3 regression (independent reset security review): a pending reset token
- * must NOT survive a password change or an admin email reassignment — the
- * shared credential-mutation event supersedes it in the same transaction.
+ * must NOT survive a password change — the shared credential-mutation event
+ * supersedes it in the same transaction.
  */
 @SpringBootTest
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
@@ -33,7 +31,6 @@ class PasswordResetSupersessionIntegrationTests extends AbstractAuthenticationIn
 
     @Autowired private JdbcTemplate jdbc;
     @Autowired private com.quizopia.backend.testsupport.MutableClock clock;
-    @Autowired private UserService userService;
     @Autowired private com.quizopia.backend.notification.email.CapturePasswordResetMailSender resetMailbox;
 
     private String username;
@@ -89,31 +86,5 @@ class PasswordResetSupersessionIntegrationTests extends AbstractAuthenticationIn
         assertThat(resetStatus(token)).isEqualTo(400);
     }
 
-    @Test
-    void adminEmailReassignmentSupersedesPendingResetToken() throws Exception {
-        String token = requestToken();
-        Long targetId = jdbc.queryForObject(
-                "SELECT id FROM users WHERE username = ?", Long.class, username);
-        Long adminId = createSystemAdmin();
 
-        userService.updateUser(adminId, targetId, new UpdateUserRequest(null, "moved-" + username + "@example.test"));
-
-        String status = jdbc.queryForObject(
-                "SELECT status FROM password_reset_challenges WHERE user_id = ?", String.class, targetId);
-        assertThat(status).isEqualTo("SUPERSEDED");
-        assertThat(resetStatus(token)).isEqualTo(400);
-    }
-
-    private Long createSystemAdmin() {
-        String admin = "sysadmin" + System.nanoTime();
-        jdbc.update("INSERT INTO users (username, email, password_hash, display_name, status, token_version,"
-                        + " failed_login_attempts, password_changed_at, local_credential_state,"
-                        + " login_requires_email_verification, created_at, updated_at)"
-                        + " VALUES (?, ?, 'x', 'Admin', 'ACTIVE', 0, 0, now(), 'DISABLED', false, now(), now())",
-                admin, admin + "@example.test");
-        Long id = jdbc.queryForObject("SELECT id FROM users WHERE username = ?", Long.class, admin);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id, assigned_at)"
-                + " SELECT ?, id, now() FROM roles WHERE code = 'SYSTEM_ADMIN'", id);
-        return id;
-    }
 }

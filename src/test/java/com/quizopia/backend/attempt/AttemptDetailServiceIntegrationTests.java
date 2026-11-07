@@ -41,8 +41,6 @@ class AttemptDetailServiceIntegrationTests {
     @Autowired private EntityManager em;
 
     private long studentUserId;
-    private long studentProfileId;
-    private long schoolId;
     private long sessionId;
     private long aqSingleId;
     private long aqMultipleId;
@@ -56,14 +54,10 @@ class AttemptDetailServiceIntegrationTests {
         studentUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('d','d@t.com','h','D')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('DS','Detail School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'M','Math')");
-        long teacher = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + schoolId + ",'TC')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + schoolId + ",'SC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subj + "," + teacher + ",'B','Bank')");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacher + ",'E','Exam','PUBLISHED',now(),4)");
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',4,now()," + studentUserId + ")");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
+        long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),4)");
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         String numericKey = "'{\"expectedAnswer\":\"2.50\",\"requiredInputLength\":4,\"roundingInstruction\":\"two decimals\"}'::jsonb";
         long eqSingle = eq(exam, sec, bank, "SINGLE_CHOICE", 0, studentUserId);
@@ -73,9 +67,9 @@ class AttemptDetailServiceIntegrationTests {
         long eqTf = eq(exam, sec, bank, "TRUE_FALSE_MATRIX", 2, studentUserId);
         opts(eqTf, "A", "B", "C", "D");
         long eqNumeric = eqNumeric(exam, sec, bank, 3, studentUserId, numericKey);
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                + schoolId + "," + exam + "," + teacher + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + schoolId + "," + sessionId + "," + studentProfileId + "," + studentUserId + ")");
+        sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + exam + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + studentUserId + "," + sessionId + "," + studentUserId + ")");
         // Start an attempt to materialize the snapshot, then capture the attempt_question ids by type.
         long attemptId = attemptService.startAttempt(studentUserId, sessionId, new StartAttemptRequest(null)).attemptId();
         aqSingleId = aqId(attemptId, eqSingle);
@@ -145,47 +139,33 @@ class AttemptDetailServiceIntegrationTests {
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o','o@t.com','h','O')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + other + "," + schoolId + ",'OS')");
         assertThatThrownBy(() -> queryService.getAttemptDetail(other, a))
                 .isInstanceOf(AttemptException.class)
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_NOT_FOUND"));
     }
 
     @Test
-    void detailCrossSchoolAttemptReturns404() {
+    void detailOtherUserAttemptReturns404() {
         long a = activeAttempt();
-        long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('XS','XSchool')");
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + other + "," + otherSchool + ",'XS')");
         assertThatThrownBy(() -> queryService.getAttemptDetail(other, a))
                 .isInstanceOf(AttemptException.class)
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_NOT_FOUND"));
     }
 
     @Test
-    void detailNoProfileForeignAttemptReturns404() {
+    void detailNonOwnerAttemptReturns404() {
         long a = activeAttempt();
-        long noProfile = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
+        long nonOwner = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + noProfile + "," + roleId + ")");
-        // Public learner passes the permission gate but does not own the attempt →
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + nonOwner + "," + roleId + ")");
+        // The caller passes the permission gate but does not own the attempt →
         // 404 anti-enumeration (issue #4 P0-1).
-        assertThatThrownBy(() -> queryService.getAttemptDetail(noProfile, a))
+        assertThatThrownBy(() -> queryService.getAttemptDetail(nonOwner, a))
                 .isInstanceOf(AttemptException.class)
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_NOT_FOUND"));
-    }
-
-    @Test
-    void detailInactiveProfileStillAllowed() {
-        long a = activeAttempt();
-        // Profile enrollment status no longer gates access (issue #4 P0-1):
-        // permission + user ownership are the only gates.
-        jdbc.update("UPDATE student_profiles SET enrollment_status='INACTIVE' WHERE id=" + studentProfileId);
-        em.clear();
-        AttemptDetailResponse r = queryService.getAttemptDetail(studentUserId, a);
-        assertThat(r.status()).isEqualTo("IN_PROGRESS");
     }
 
     @Test
@@ -200,17 +180,6 @@ class AttemptDetailServiceIntegrationTests {
     void detailRevokedAnswerReadReturns403() {
         revoke("ATTEMPT_ANSWER_READ");
         assertThatThrownBy(() -> queryService.getAttemptDetail(studentUserId, activeAttempt()))
-                .isInstanceOf(AttemptException.class)
-                .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test
-    void detailSystemAdminWithoutStudentReturns403() {
-        long a = activeAttempt();
-        long admin = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sa','sa@t.com','h','SA')");
-        long adminRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='SYSTEM_ADMIN'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + admin + "," + adminRoleId + ")");
-        assertThatThrownBy(() -> queryService.getAttemptDetail(admin, a))
                 .isInstanceOf(AttemptException.class)
                 .satisfies(e -> assertThat(code(e)).isEqualTo("ATTEMPT_ACCESS_DENIED"));
     }
@@ -341,7 +310,7 @@ class AttemptDetailServiceIntegrationTests {
     // ============================================================
 
     private long activeAttempt() {
-        return jdbc.queryForObject("SELECT id FROM attempts WHERE student_profile_id=" + studentProfileId
+        return jdbc.queryForObject("SELECT id FROM attempts WHERE user_id=" + studentUserId
                 + " AND status='IN_PROGRESS' ORDER BY id DESC LIMIT 1", Long.class);
     }
 

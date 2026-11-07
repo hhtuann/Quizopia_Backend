@@ -17,13 +17,8 @@ import java.util.Optional;
 
 public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> {
 
-    Optional<ExamSession> findByIdAndOwnerTeacherId(Long id, Long ownerTeacherId);
-
-    boolean existsByOwnerTeacherIdAndCodeIgnoreCase(Long ownerTeacherId, String code);
-
     boolean existsByCreatedByAndCodeIgnoreCase(Long createdBy, String code);
 
-    List<ExamSession> findAllByOwnerTeacherId(Long ownerTeacherId);
 
     Page<ExamSession> findAllByExamIdOrderByIdDesc(Long examId, Pageable pageable);
 
@@ -64,9 +59,8 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
     @Query("SELECT s FROM ExamSession s WHERE s.id = :id")
     Optional<ExamSession> findByIdForUpdate(@Param("id") Long id);
 
-    @Query("SELECT s FROM ExamSession s JOIN Exam e ON e.id = s.examId "
+    @Query("SELECT s FROM ExamSession s "
             + "WHERE s.createdBy = :userId "
-            + "AND e.workspaceId IN :workspaceIds "
             + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(s.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(s.title) LIKE LOWER(CONCAT('%', :search, '%'))) "
@@ -76,7 +70,6 @@ public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> 
                                         @Param("search") String search,
                                         @Param("status") ExamSessionStatus status,
                                         @Param("examId") Long examId,
-                                        @Param("workspaceIds") List<Long> workspaceIds,
                                         Pageable pageable);
 
     /** Active sessions of an exam (archive guard). */

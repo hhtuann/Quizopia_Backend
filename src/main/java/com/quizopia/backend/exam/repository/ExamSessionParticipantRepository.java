@@ -17,7 +17,7 @@ public interface ExamSessionParticipantRepository extends JpaRepository<ExamSess
 
     List<ExamSessionParticipant> findAllByExamSessionIdOrderByIdAsc(Long examSessionId);
 
-    boolean existsByExamSessionIdAndStudentProfileId(Long examSessionId, Long studentProfileId);
+
 
     Optional<ExamSessionParticipant> findByIdAndExamSessionId(Long id, Long examSessionId);
 
@@ -35,8 +35,9 @@ public interface ExamSessionParticipantRepository extends JpaRepository<ExamSess
     /** User-based participant lookup (V17, issue #4 P0-R8). */
     Optional<ExamSessionParticipant> findByExamSessionIdAndUserId(Long examSessionId, Long userId);
 
-    /** Batch existing-membership check by user (legacy bulk-add duplicate classification, P0-R9). */
+    /** Batch existing-membership check by user (duplicate classification, P0-R9). */
     List<ExamSessionParticipant> findAllByExamSessionIdAndUserIdIn(Long examSessionId, List<Long> userIds);
+
 
     /** User-based participant lock for block/unblock (V17). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
@@ -44,7 +45,7 @@ public interface ExamSessionParticipantRepository extends JpaRepository<ExamSess
     Optional<ExamSessionParticipant> findByExamSessionIdAndUserIdForUpdate(@Param("sessionId") Long sessionId,
                                                                            @Param("userId") Long userId);
 
-    List<ExamSessionParticipant> findAllByExamSessionIdAndStudentProfileIdIn(Long examSessionId, List<Long> studentProfileIds);
+
 
     long countByExamSessionId(Long examSessionId);
 

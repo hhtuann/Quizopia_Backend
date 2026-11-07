@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Submit endpoint (A3.2-4): {@code POST /api/attempts/{attemptId}/submit} — the 6th Day 7 REST endpoint,
  * extended with Day 8 auto-grading.
  *
- * <p>Authorization (STUDENT role + {@code ATTEMPT_SUBMIT} + ACTIVE profile), the status/idempotency
+ * <p>Authorization ({@code ATTEMPT_SUBMIT} learner permission), the status/idempotency
  * rules ({@code IMMUTABLE_CACHED_RESPONSE} / {@code ATTEMPT_ALREADY_SUBMITTED} /
  * {@code ATTEMPT_IDEMPOTENCY_CONFLICT}), the deadline check, and the atomic transition are enforced
  * in {@link AttemptSubmitService}. Day 8 adds: atomic auto-grading ({@link

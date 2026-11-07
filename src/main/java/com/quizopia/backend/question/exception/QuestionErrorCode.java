@@ -11,7 +11,6 @@ public enum QuestionErrorCode {
 
     QUESTION_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Question bank request validation failed"),
     QUESTION_BANK_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this question bank resource"),
-    QUESTION_SUBJECT_SCHOOL_MISMATCH(HttpStatus.FORBIDDEN, "Subject does not belong to the caller's school"),
     QUESTION_SUBJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "Subject not found"),
     QUESTION_BANK_NOT_FOUND(HttpStatus.NOT_FOUND, "Question bank not found"),
     QUESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Question not found"),

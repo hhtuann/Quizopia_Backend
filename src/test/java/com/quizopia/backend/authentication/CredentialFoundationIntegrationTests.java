@@ -31,9 +31,6 @@ class CredentialFoundationIntegrationTests extends AbstractAuthenticationIntegra
     @Autowired RefreshService refresh;
     @Autowired SessionIssuanceService issuance;
     @Autowired TransactionTemplate tx;
-    @Autowired com.quizopia.backend.user.application.UserService admins;
-    @Autowired com.quizopia.backend.identity.repository.RoleRepository roles;
-    @Autowired com.quizopia.backend.identity.repository.UserRoleRepository userRoles;
     @Autowired EntityManager em;
     private static final String PASSWORD = "Passw0rd!";
     private static final ClientContext CLIENT = new ClientContext("foundation-test", "127.0.0.1");
@@ -123,31 +120,6 @@ class CredentialFoundationIntegrationTests extends AbstractAuthenticationIntegra
         assertThatThrownBy(() -> issuance.issue(stale, CLIENT)).isInstanceOf(AuthenticationException.class);
     }
 
-    @Test
-    void adminEmailReassignmentDeletesConsumedAndPendingProofsEvenWhenChangedBack() throws Exception {
-        User admin = seed(LocalCredentialState.ENABLED);
-        tx.executeWithoutResult(s -> userRoles.saveAndFlush(new UserRole(users.findById(admin.getId()).orElseThrow(),
-                roles.findByCode("SYSTEM_ADMIN").orElseThrow(), null, null)));
-        String name = "email-" + UUID.randomUUID().toString().substring(0, 8);
-        String original = name + "@example.com";
-        registerAndVerify(name, original, PASSWORD);
-        Long id = users.findIdByEmailIgnoreCase(original).orElseThrow();
-        Number before = (Number) em.createNativeQuery("select count(*) from email_verification_challenges where user_id=:id")
-                .setParameter("id", id).getSingleResult();
-        assertThat(before.intValue()).isPositive();
-        admins.updateUser(admin.getId(), id, new com.quizopia.backend.user.dto.UpdateUserRequest(null, name + "@changed.example.com"));
-        admins.updateUser(admin.getId(), id, new com.quizopia.backend.user.dto.UpdateUserRequest(null, original));
-        Number after = (Number) em.createNativeQuery("select count(*) from email_verification_challenges where user_id=:id")
-                .setParameter("id", id).getSingleResult();
-        assertThat(after.intValue()).isZero();
-        assertThat(users.findById(id).orElseThrow().getEmailVerifiedAt()).isNull();
-        String created = "admin-created-" + UUID.randomUUID().toString().substring(0, 8);
-        admins.createUser(admin.getId(), new com.quizopia.backend.user.dto.CreateUserRequest(created,
-                created + "@example.com", PASSWORD, "Created User",
-                com.quizopia.backend.authentication.dto.AccountType.STUDENT, null));
-        assertThat(users.findByUsernameIgnoreCase(created).orElseThrow().getLocalCredentialState())
-                .isEqualTo(LocalCredentialState.ENABLED);
-    }
 
     @Test
     void unknownIdentifierRetainsGenericInvalidCredentialsOutcome() {

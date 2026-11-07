@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Tests the class-based visibility refactor of {@link AttemptService}: PUBLIC sessions are
- * visible/startable by any same-school student; CLASS_RESTRICTED sessions only by assigned-class
+ * visible/startable by any active student user; CLASS_RESTRICTED sessions only by assigned-class
  * members. Replaces the obsolete participant-based tests (blocked/not-found).
  */
 @SpringBootTest
@@ -38,9 +38,6 @@ class AttemptAuthorizationRefactorTests {
     @Autowired private MutableClock clock;
 
     private long studentUserId;
-    private long schoolId;
-    private long studentProfileId;
-    private long teacherId;
     private long examId;
     private long publicSessionId;
     private long classRestrictedSessionId;
@@ -56,26 +53,18 @@ class AttemptAuthorizationRefactorTests {
                 + "VALUES ('sar" + tag + "','sar" + tag + "@t.com','h','Student')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + sr + ")");
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('AR" + tag + "','School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'M','Math')");
-        teacherId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + studentUserId + "," + schoolId + ",'TC" + tag + "')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
-                + "VALUES (" + studentUserId + "," + schoolId + ",'SC" + tag + "')");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + tag + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
 
         // Exam chain (1 SINGLE_CHOICE question with 4 options).
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                + "VALUES (" + schoolId + "," + subj + "," + teacherId + ",'B','Bank')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-        long examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
-                + "published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacherId
+        long examId = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, "
+                + "published_at, total_points) VALUES (" + studentUserId + "," + subj
                 + ",'E','Exam','PUBLISHED',now(),1)");
-        // Legacy provenance row (exam_versions is an audit table).
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
-                + "published_at, created_by) VALUES (" + schoolId + "," + examId + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
         this.examId = examId;
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId + ",'S',0)");
         long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
@@ -85,21 +74,20 @@ class AttemptAuthorizationRefactorTests {
                 + "VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
 
         // PUBLIC session (DB default is PUBLIC, but explicit for clarity).
-        publicSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + schoolId + "," + examId + ","
-                + teacherId + ",'PUB','Public','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
+        publicSessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, "
+                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + examId + ","
+                + "'PUB','Public','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
                 + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','PUBLIC',60)");
 
         // CLASS_RESTRICTED session.
-        classRestrictedSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + schoolId + "," + examId + ","
-                + teacherId + ",'CLS','ClassRestricted','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
+        classRestrictedSessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, "
+                + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES (" + examId + ","
+                + "'CLS','ClassRestricted','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
                 + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
 
-        // Classroom owned by the teacher (NOT yet assigned to the class-restricted session, student NOT yet a member).
-        classroomId = insert("INSERT INTO classrooms (school_id, owner_teacher_id, owner_user_id, code, name) "
-                + "VALUES (" + schoolId + "," + teacherId
-                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + teacherId + "),'CLS-A','Class A')");
+        // Classroom owned by the exam creator (NOT yet assigned to the class-restricted session, student NOT yet a member).
+        classroomId = insert("INSERT INTO classrooms (owner_user_id, code, name) "
+                + "VALUES (" + studentUserId + ",'CLS-A','Class A')");
     }
 
     // ============================================================
@@ -107,7 +95,7 @@ class AttemptAuthorizationRefactorTests {
     // ============================================================
 
     @Test
-    void publicSessionVisibleToSameSchoolStudent() {
+    void publicSessionVisibleToStudent() {
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
         assertThat(resp.items()).extracting(i -> i.sessionId()).contains(publicSessionId);
         assertThat(resp.items()).extracting(i -> i.sessionId()).doesNotContain(classRestrictedSessionId);
@@ -117,7 +105,7 @@ class AttemptAuthorizationRefactorTests {
     void classRestrictedSessionVisibleToClassMember() {
         // Assign classroom to the CLASS_RESTRICTED session + add student as member.
         assignClassToSession(classroomId, classRestrictedSessionId);
-        addMemberToClassroom(studentProfileId, classroomId);
+        addMemberToClassroom(studentUserId, classroomId);
 
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(studentUserId);
         assertThat(resp.items()).extracting(i -> i.sessionId()).contains(classRestrictedSessionId);
@@ -133,14 +121,11 @@ class AttemptAuthorizationRefactorTests {
     }
 
     @Test
-    void crossSchoolStudentCanSeePublicSession() {
-        // PUBLIC sessions are platform-wide (ADR-001 §2.3) — no same-school check.
-        // Create a student in a different school.
-        long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS','Other')");
+    void otherUserCanSeePublicSession() {
+        // PUBLIC sessions are platform-wide — any active student user can see them.
         long osUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('os','os@t.com','h','OS')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + osUser + "," + sr + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + osUser + "," + otherSchool + ",'OS')");
 
         AvailableSessionsResponse resp = attemptService.getAvailableSessions(osUser);
         assertThat(resp.items()).extracting(i -> i.sessionId()).contains(publicSessionId);
@@ -151,7 +136,7 @@ class AttemptAuthorizationRefactorTests {
     // ============================================================
 
     @Test
-    void startPublicSessionSucceedsForSameSchoolStudent() {
+    void startPublicSessionSucceedsForStudent() {
         StartAttemptResponse r = attemptService.startAttempt(studentUserId, publicSessionId, new StartAttemptRequest(null));
         assertThat(r.status()).isEqualTo("IN_PROGRESS");
     }
@@ -159,7 +144,7 @@ class AttemptAuthorizationRefactorTests {
     @Test
     void startClassRestrictedSucceedsForMember() {
         assignClassToSession(classroomId, classRestrictedSessionId);
-        addMemberToClassroom(studentProfileId, classroomId);
+        addMemberToClassroom(studentUserId, classroomId);
 
         StartAttemptResponse r = attemptService.startAttempt(studentUserId, classRestrictedSessionId, new StartAttemptRequest(null));
         assertThat(r.status()).isEqualTo("IN_PROGRESS");
@@ -184,13 +169,11 @@ class AttemptAuthorizationRefactorTests {
     }
 
     @Test
-    void startCrossSchoolPublicSessionSucceeds() {
-        // PUBLIC is platform-wide (ADR-001 §2.3): a cross-school student may start.
-        long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('OS2','Other2')");
+    void startPublicSessionSucceedsForOtherUser() {
+        // PUBLIC is platform-wide: any active student user may start.
         long osUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('os2','os2@t.com','h','OS2')");
         long sr = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + osUser + "," + sr + ")");
-        insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + osUser + "," + otherSchool + ",'OS2')");
 
         StartAttemptResponse r = attemptService.startAttempt(osUser, publicSessionId, new StartAttemptRequest(null));
         assertThat(r.status()).isEqualTo("IN_PROGRESS");
@@ -201,19 +184,13 @@ class AttemptAuthorizationRefactorTests {
     // ============================================================
 
     private void assignClassToSession(long classroomId, long sessionId) {
-        jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) VALUES ("
-                + sessionId + "," + classroomId + "," + schoolId + ")");
+        jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id) VALUES ("
+                + sessionId + "," + classroomId + ")");
     }
 
-    private void addMemberToClassroom(long studentProfileId, long classroomId) {
-        jdbc.update("INSERT INTO classroom_members (classroom_id, student_profile_id, school_id) VALUES ("
-                + classroomId + "," + studentProfileId + "," + schoolId + ")");
-        // P0-R2: the fixture exam lives in an ORGANIZATION workspace, so a CLASS_RESTRICTED
-        // member additionally needs an ACTIVE workspace membership.
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "SELECT e.workspace_id, sp.user_id, 'MEMBER', 'ACTIVE' "
-                + "FROM exams e, student_profiles sp WHERE e.id=" + examId
-                + " AND sp.id=" + studentProfileId + " ON CONFLICT DO NOTHING");
+    private void addMemberToClassroom(long userId, long classroomId) {
+        jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES ("
+                + classroomId + "," + userId + ")");
     }
 
     private long insert(String sql) {

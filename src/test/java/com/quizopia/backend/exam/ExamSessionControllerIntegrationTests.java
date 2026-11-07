@@ -32,7 +32,6 @@ class ExamSessionControllerIntegrationTests {
     @Autowired private EntityManager entityManager;
 
     private Long teacherUserId;
-    private Long schoolId;
     private Long subjectId;
     private Long sourceQuestionId;
 
@@ -40,11 +39,8 @@ class ExamSessionControllerIntegrationTests {
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sc','sc@t','h','SC')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('SCS','SC School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'SCT')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'QB','Bank')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Bank')");
         sourceQuestionId = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q1','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + sourceQuestionId + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
@@ -144,7 +140,7 @@ class ExamSessionControllerIntegrationTests {
         Long sessionId = createSession(examId, "F1");
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o7','o7@t','h','O7')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'SC2')");
+
         mockMvc.perform(get("/api/exam-sessions/" + sessionId).with(jwt().jwt(j -> j.subject(String.valueOf(other)))))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("EXAM_SESSION_ACCESS_DENIED"));
