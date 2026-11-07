@@ -178,9 +178,18 @@ public class SecurityFilterChainConfig {
                         // Community owner API (issue #40, ADR-006 §7): authenticated only.
                         // Role/permission gates (COMMUNITY_PUBLISH etc.), owner checks and
                         // anti-enumeration 404s are enforced in CommunityService
-                        // (deny-by-default). The anonymous /api/public/community/** GET
-                        // routes arrive with issue #41.
+                        // (deny-by-default).
                         .requestMatchers("/api/community/**").authenticated()
+                        // Community public discovery (issue #41, ADR-006 §7): anonymous,
+                        // exact-path, GET-only — /publications, /publications/{id},
+                        // /categories and /tags. Every other method on these paths falls
+                        // through to the deny-by-default chain (401 anonymous); nothing
+                        // else under /api/public is open.
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/public/community/publications",
+                                "/api/public/community/publications/*",
+                                "/api/public/community/categories",
+                                "/api/public/community/tags").permitAll()
                         .anyRequest().denyAll());
         return http.build();
     }
