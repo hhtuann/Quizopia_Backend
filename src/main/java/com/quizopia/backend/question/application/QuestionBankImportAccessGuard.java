@@ -18,23 +18,21 @@ import java.util.List;
  * (Excel import, Markdown import and single-question editing).
  *
  * <p>Policy (P2-C, issue #18 authorization audit — supersedes the legacy
- * {@code TeacherProfile}/school-same checks that predate the Phase 1
- * workspace migration and could not express personal-workspace banks):
+ * {@code TeacherProfile}/school-same checks of the school-era model,
+ * which could not express user-owned banks):
  *
  * <ol>
  *   <li>active {@code TEACHER} role (deny by default);</li>
  *   <li>{@code QUESTION_CREATE} effective permission;</li>
  *   <li>bank exists (404) and is {@code ACTIVE};</li>
  *   <li>caller is the bank creator ({@code created_by_user_id});</li>
- *   <li>Phase 1 resource boundary (issue #4 P0-2): personal workspace →
- *       owner only; organization workspace → ACTIVE membership required —
- *       creation-time ownership never overrides a revoked membership.</li>
+ *   <li>user-centric resource boundary (issue #4 P0-2): only the bank
+ *       creator may write into the bank — ownership is the single grant.</li>
  * </ol>
  *
- * <p>This mirrors {@code QuestionBankService.listQuestions} (creator equality
- * on top of the workspace boundary) at manage level, so a self-upgraded
- * teacher without a {@code TeacherProfile} can import into their personal
- * bank while unrelated teachers, revoked members and non-teachers are denied.
+ * <p>This mirrors {@code QuestionBankService.listQuestions} (creator
+ * equality) at manage level, so any TEACHER bank owner can import into
+ * their own bank while unrelated teachers and non-teachers are denied.
  * UI gating is never authorization; every import/edit path re-runs this
  * check server-side.
  */
@@ -61,7 +59,7 @@ public class QuestionBankImportAccessGuard {
      * authorized bank.
      *
      * @throws QuestionException QUESTION_BANK_ACCESS_DENIED (role / permission /
-     *                           creator / workspace / non-ACTIVE) or
+     *                           non-creator / non-ACTIVE) or
      *                           QUESTION_BANK_NOT_FOUND
      */
     public QuestionBank requireImportAccess(Long userId, Long bankId) {

@@ -15,12 +15,12 @@ import java.util.List;
  * DB — no JWT-claim authority, no role hierarchy, no SYSTEM_ADMIN bypass).
  *
  * <p>User-based model (issue #4 P0-1): permission possession IS the attempt
- * capability — a public user (no school, no StudentProfile) with the learner
- * permissions may discover/start/submit attempts; legacy StudentProfile is
- * optional provenance only and no longer gates access. The STUDENT role
- * carries the learner permissions natively; since V16 the TEACHER role also
- * carries ATTEMPT_START/ATTEMPT_ANSWER_SAVE/ATTEMPT_SUBMIT so one account
- * can act as creator and learner (dual capability, server-side).
+ * capability — any active user holding the learner permissions may
+ * discover/start/submit attempts (no profile or school prerequisite). The
+ * STUDENT role carries the learner permissions natively; since V16 the
+ * TEACHER role also carries ATTEMPT_START/ATTEMPT_ANSWER_SAVE/ATTEMPT_SUBMIT
+ * so one account can act as creator and learner (dual capability,
+ * server-side).
  */
 @Component
 public class AttemptAuthorizationService {

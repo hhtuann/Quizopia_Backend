@@ -23,7 +23,7 @@ public class AvailableSessionController {
     /**
      * Participant pre-flight for a shared session link (P2-D, issue #20):
      * server-authorized state for one session — same eligibility policy as
-     * discovery/start (visibility, classroom + workspace membership, BLOCKED,
+     * discovery/start (visibility, classroom membership, BLOCKED,
      * lifecycle, window, attempt quota), WITHOUT starting an attempt and
      * without creator-only metadata. See
      * {@link AttemptService#getSessionEligibility(Long, Long)}.

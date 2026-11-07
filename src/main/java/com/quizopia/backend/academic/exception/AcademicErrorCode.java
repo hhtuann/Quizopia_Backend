@@ -11,16 +11,7 @@ import org.springframework.http.HttpStatusCode;
  */
 public enum AcademicErrorCode {
 
-    ACADEMIC_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this academic resource"),
-    ACADEMIC_TEACHER_PROFILE_NOT_FOUND(HttpStatus.NOT_FOUND, "Teacher profile not found for the current user"),
-    ACADEMIC_SUBJECT_NOT_FOUND(HttpStatus.NOT_FOUND, "Subject not found"),
-    ACADEMIC_SUBJECT_CODE_CONFLICT(HttpStatus.CONFLICT, "A subject with this code already exists for the school and grade level"),
-    ACADEMIC_GRADE_LEVEL_NOT_FOUND(HttpStatus.NOT_FOUND, "Grade level not found in this school"),
-    ACADEMIC_SCHOOL_NOT_FOUND(HttpStatus.NOT_FOUND, "School not found"),
-    ACADEMIC_SCHOOL_CODE_CONFLICT(HttpStatus.CONFLICT, "A school with this code already exists"),
-    ACADEMIC_STUDENT_ALREADY_ASSIGNED(HttpStatus.CONFLICT, "Student already has a profile"),
-    ACADEMIC_STUDENT_NOT_FOUND(HttpStatus.NOT_FOUND, "User is not a registered student"),
-    ACADEMIC_SCHOOL_COUNTER_FAILED(HttpStatus.CONFLICT, "Failed to generate student code");
+    ACADEMIC_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this academic resource");
 
     private final HttpStatusCode status;
     private final String defaultMessage;

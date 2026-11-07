@@ -32,8 +32,8 @@ import java.util.List;
  * until the OTP is verified (see {@link EmailVerificationService}).
  *
  * <p>Password is hashed with Argon2id, phone is encrypted with AES-256-GCM
- * (only ciphertext stored), and a personal workspace is provisioned
- * transactionally and idempotently (ADR-001). Concurrent registrations of the
+ * (only ciphertext stored), and the STUDENT role grant is written
+ * transactionally and idempotently. Concurrent registrations of the
  * same username/email are settled by the DB unique indexes and mapped to 409.
  */
 @Service

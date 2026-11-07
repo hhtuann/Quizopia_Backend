@@ -161,7 +161,7 @@ public class ExamSessionParticipantService {
                 block ? "EXAM_SESSION_PARTICIPANT_BLOCK" : "EXAM_SESSION_PARTICIPANT_UNBLOCK");
         // Lock order: session FIRST, then participant. Concurrent toggles serialize
         // here and re-read the latest committed state, so @Version never conflicts
-        // on flush. Shared workspace policy (issue #4 P0-R6).
+        // on flush. Creator-owned session resolution (issue #4 P0-R6).
         ExamSession session = sessionService.resolveOwnedSession(userId, null, sessionId, true);
         // Block/unblock allowed in DRAFT, SCHEDULED, OPEN.
         if (session.getStatus() != ExamSessionStatus.DRAFT

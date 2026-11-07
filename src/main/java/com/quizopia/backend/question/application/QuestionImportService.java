@@ -21,12 +21,11 @@ import java.util.List;
  * a bank.
  *
  * <p>
- * Authorization (deny by default, P2-C workspace boundary): active TEACHER
- * role → QUESTION_CREATE permission → bank creator equality → Phase 1
- * workspace resource-manage check → ACTIVE state, via the shared
- * {@link QuestionBankImportAccessGuard}. This supersedes the legacy
- * TeacherProfile/school-same checks so a self-upgraded teacher without a
- * TeacherProfile can import into their personal bank (issue #18 audit).
+ * Authorization (deny by default, P2-C): active TEACHER role →
+ * QUESTION_CREATE permission → bank creator equality → ACTIVE state, via
+ * the shared {@link QuestionBankImportAccessGuard}. This supersedes the
+ * legacy TeacherProfile/school-same checks of the school-era model
+ * (issue #18 audit).
  *
  * <p>
  * Duplicate detection: question codes are generated at import time; a
@@ -119,7 +118,7 @@ public class QuestionImportService {
      * optimisation and security gate at the API layer.
      *
      * @throws QuestionException QUESTION_BANK_ACCESS_DENIED (role / permission /
-     *                           creator / workspace / non-ACTIVE) or
+     *                           non-creator / non-ACTIVE) or
      *                           QUESTION_BANK_NOT_FOUND
      */
     public void authorizeImportAccess(Long userId, Long bankId) {

@@ -40,8 +40,8 @@ import java.util.regex.Pattern;
  *
  * <p><strong>Authorization</strong> — deny by default via
  * {@link QuestionBankImportAccessGuard}: active TEACHER role,
- * QUESTION_CREATE permission, bank creator equality, Phase 1 workspace
- * boundary and ACTIVE bank state. Re-authorized inside the persistence
+ * QUESTION_CREATE permission, bank creator equality and ACTIVE bank
+ * state. Re-authorized inside the persistence
  * transaction; the controller also runs the same checks as an early-out
  * before parsing.
  *

@@ -41,9 +41,9 @@ public class ResultController {
 
     /**
      * Resource-based attempt result detail (issue #4 P0-R1): own attempt by
-     * user ownership + ATTEMPT_READ permission; organizer path via workspace
-     * policy; SYSTEM_ADMIN explicit (DB-verified). The resolved role no
-     * longer participates in the decision.
+     * user ownership + ATTEMPT_READ permission; organizer path via session
+     * ownership (the session creator). The resolved role no longer
+     * participates in the decision.
      */
     @GetMapping("/api/attempts/{attemptId}/result")
     public AttemptResultResponse getAttemptResult(@AuthenticationPrincipal Jwt jwt,

@@ -8,16 +8,16 @@ import java.util.UUID;
 /**
  * The shared realtime-event envelope (frozen contract A9.6). Carries NO answer payload, answer key,
  * score, grade, studentCode, username, email, schoolId, submissionIdempotencyKey, or
- * clientInstanceId — the only domain identity fields are {@code userId} (primary, issue #4 P0-1)
- * and the legacy {@code studentProfileId} provenance.
+ * clientInstanceId — the only domain identity field is {@code userId} (primary, issue #4 P0-1);
+ * the {@code studentProfileId} slot is a legacy placeholder (always null) kept for shape.
  *
  * <p><b>Nullability per event:</b>
  * <ul>
  *   <li>{@code eventId} / {@code eventType} / {@code occurredAt} / {@code serverTime} — always present.</li>
  *   <li>{@code sessionId} — required on SESSION_*, ATTEMPT_*, ACTIVE_COUNT_CHANGED; null on SERVER_TIME_SYNC.</li>
- *   <li>{@code attemptId} / {@code userId} / {@code studentProfileId} — required on ATTEMPT_*;
- *       {@code userId} is the primary owner identity; {@code studentProfileId} may be null for
- *       public (profile-less) users; null elsewhere.</li>
+ *   <li>{@code attemptId} / {@code userId} — required on ATTEMPT_*;
+ *       {@code userId} is the owner identity; {@code studentProfileId} is a legacy
+ *       always-null placeholder; null elsewhere.</li>
  *   <li>{@code activeCount} — required on ACTIVE_COUNT_CHANGED; null/optional elsewhere.</li>
  * </ul>
  * {@link JsonInclude.Include#NON_NULL} omits the null fields so each event carries only its contract fields.

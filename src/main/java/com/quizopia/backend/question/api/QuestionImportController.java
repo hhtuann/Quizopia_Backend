@@ -245,7 +245,7 @@ public class QuestionImportController {
      * <p>
      * Phases mirror the Excel endpoint:
      * <ol>
-     * <li><b>Preflight auth</b> — deny-by-default workspace/creator checks
+     * <li><b>Preflight auth</b> — deny-by-default creator-ownership checks
      * before the document is parsed.</li>
      * <li><b>Body validation</b> — blank source (400) and explicit size cap
      * ({@link MarkdownQuestionImportService#MAX_MARKDOWN_CHARS}, 413).</li>

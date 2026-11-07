@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>{@code GET /api/attempts/{attemptId}} — single-attempt detail (questions + saved answers).</li>
  *   <li>{@code GET /api/attempts/my} — paginated own-attempt history.</li>
  * </ul>
- * No mutation, no autosave, no submit. Authorization (STUDENT role + effective permission + profile)
+ * No mutation, no autosave, no submit. Authorization (effective learner permission)
  * is enforced inside {@link AttemptQueryService} via {@code AttemptAuthorizationService} (DB-driven,
  * deny-by-default — JWT authorities are not trusted).
  */

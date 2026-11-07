@@ -38,7 +38,7 @@ import java.util.UUID;
  * <ul>
  *   <li>{@code external_identities (provider, issuer, subject)} decides the
  *       user for an identity — concurrent first logins converge on exactly one
- *       user, identity, STUDENT grant and personal workspace;</li>
+ *       user, identity and STUDENT grant;</li>
  *   <li>{@code users lower(email)} enforces the no-takeover policy: a Google
  *       login may never claim an existing password account's address.</li>
  * </ul>
@@ -48,8 +48,8 @@ import java.util.UUID;
  * collides with an existing password account is REJECTED on the LOGIN flow —
  * linking requires the authenticated, re-verified flow in
  * {@link GoogleLinkService}. New users get a per-account random password hash
- * (unusable, never returned), the STUDENT role, a personal workspace, and a
- * verified email (the provider asserted {@code email_verified}).
+ * (unusable, never returned), the STUDENT role, and a verified email (the
+ * provider asserted {@code email_verified}).
  */
 @Service
 public class OauthIdentityService {
@@ -201,7 +201,7 @@ public class OauthIdentityService {
         });
     }
 
-    /** Runs INSIDE a transaction: user + role + workspace + identity link. */
+    /** Runs INSIDE a transaction: user + role + identity link. */
     private User provisionNewGoogleUser(ValidatedOidcIdentity identity) {
         Instant now = Instant.now(clock);
         // Idempotence under concurrency: re-check inside the transaction.

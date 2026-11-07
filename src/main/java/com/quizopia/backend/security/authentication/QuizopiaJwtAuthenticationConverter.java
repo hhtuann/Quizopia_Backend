@@ -38,8 +38,8 @@ import java.util.Objects;
  * </ol>
  * Authorities use one stable convention: roles become {@code ROLE_<CODE>}
  * (e.g. {@code ROLE_STUDENT}); permissions become their raw code (e.g.
- * {@code EXAM_READ}). SYSTEM_ADMIN is never implicitly granted academic
- * permissions.
+ * {@code EXAM_READ}); permissions are only ever those explicitly assigned
+ * to the user's roles in the database.
  *
  * <p>
  * All controlled failures throw {@link OAuth2AuthenticationException} so the
