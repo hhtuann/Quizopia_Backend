@@ -76,7 +76,7 @@ class AttemptConstraintTranslationIntegrationTests {
     // A. Duplicate constraint → 409 ATTEMPT_DUPLICATE_START.
     @Test
     void duplicateConstraintReturns409() throws Exception {
-        armTrigger("uk_attempts_one_active_per_session_student");
+        armTrigger("uk_attempts_one_active_per_session_user");
         mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/attempts").with(jwt().jwt(j -> j.subject(String.valueOf(studentUserId))))
                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isConflict())
