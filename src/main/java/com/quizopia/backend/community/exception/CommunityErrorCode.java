@@ -12,10 +12,16 @@ public enum CommunityErrorCode {
 
     COMMUNITY_VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Community request validation failed"),
     COMMUNITY_TAG_INVALID(HttpStatus.BAD_REQUEST, "Invalid community tag"),
-    COMMUNITY_ALIAS_INVALID(HttpStatus.BAD_REQUEST, "Author alias must not match the account email or username"),
+    COMMUNITY_ALIAS_INVALID(HttpStatus.BAD_REQUEST,
+            "Author alias must not match the account email or username"),
     COMMUNITY_CATEGORY_NOT_FOUND(HttpStatus.BAD_REQUEST, "Unknown community category"),
+    COMMUNITY_IDEMPOTENCY_KEY_INVALID(HttpStatus.BAD_REQUEST,
+            "Idempotency-Key header must be 8-128 printable ASCII characters"),
+
 
     COMMUNITY_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this community resource"),
+    COMMUNITY_FORK_NOT_ALLOWED(HttpStatus.FORBIDDEN,
+            "This publication does not allow forking (reuse policy NO_FORK)"),
 
     COMMUNITY_NOT_FOUND(HttpStatus.NOT_FOUND, "Community publication not found"),
 
@@ -25,6 +31,8 @@ public enum CommunityErrorCode {
     COMMUNITY_PUBLISH_INELIGIBLE(HttpStatus.CONFLICT, "The exam is not eligible for community publication"),
     COMMUNITY_ALIAS_REQUIRED(HttpStatus.CONFLICT, "A public author alias is required before publishing"),
     COMMUNITY_REPORT_NOT_OPEN(HttpStatus.CONFLICT, "The report is no longer open"),
+    COMMUNITY_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT,
+            "The Idempotency-Key was already used for a different publication"),
 
     COMMUNITY_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "Community rate limit exceeded");
 

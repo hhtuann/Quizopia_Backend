@@ -119,11 +119,11 @@ class V17UserBasedParticipantsStagedFlywayTest {
                 // Latest version is 28 (the user-centric contract V24/V25
                 // ran after V17 and dropped the school/profile provenance
                 // but kept the user-based participant rows untouched; the
-                // community era V26–V28 followed).
+                // community era V26–V29 followed).
                 try (ResultSet rs = st.executeQuery("SELECT version FROM flyway_schema_history WHERE success "
                         + "ORDER BY installed_rank DESC LIMIT 1")) {
                     rs.next();
-                    assertThat(rs.getString(1)).isEqualTo("28");
+                    assertThat(rs.getString(1)).isEqualTo("29");
                 }
             }
         }
