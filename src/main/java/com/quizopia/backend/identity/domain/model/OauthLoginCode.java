@@ -36,6 +36,9 @@ public class OauthLoginCode {
     @Column(name = "code_hash", nullable = false, length = 64)
     private String codeHash;
 
+    @Column(name = "credential_epoch", nullable = false)
+    private int credentialEpoch;
+
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
@@ -52,6 +55,7 @@ public class OauthLoginCode {
     public OauthLoginCode(UUID id, User user, String codeHash, Instant expiresAt) {
         this.id = id;
         this.user = user;
+        this.credentialEpoch = user.getTokenVersion();
         this.codeHash = codeHash;
         this.expiresAt = expiresAt;
     }
@@ -74,6 +78,10 @@ public class OauthLoginCode {
 
     public User getUser() {
         return user;
+    }
+
+    public int getCredentialEpoch() {
+        return credentialEpoch;
     }
 
     public String getCodeHash() {

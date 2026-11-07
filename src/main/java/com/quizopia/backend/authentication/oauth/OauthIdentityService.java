@@ -71,6 +71,7 @@ public class OauthIdentityService {
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
+    private final com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity;
 
     public OauthIdentityService(ExternalIdentityRepository externalIdentityRepository,
             com.quizopia.backend.identity.repository.OauthLoginCodeRepository oauthLoginCodeRepository,
@@ -81,7 +82,8 @@ public class OauthIdentityService {
             com.quizopia.backend.security.token.RefreshTokenHasher sha256Hasher,
             WorkspaceProvisioningService workspaceProvisioningService,
             Clock clock,
-            TransactionTemplate tx) {
+            TransactionTemplate tx,
+            com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity) {
         this.externalIdentityRepository = externalIdentityRepository;
         this.oauthLoginCodeRepository = oauthLoginCodeRepository;
         this.userRepository = userRepository;
@@ -92,6 +94,7 @@ public class OauthIdentityService {
         this.workspaceProvisioningService = workspaceProvisioningService;
         this.clock = clock;
         this.tx = tx;
+        this.credentialSecurity = credentialSecurity;
     }
 
     /**
@@ -103,7 +106,7 @@ public class OauthIdentityService {
         for (int attempt = 1; attempt <= PROVISION_ATTEMPTS; attempt++) {
             ExternalIdentity existing = findByIdentity(identity).orElse(null);
             if (existing != null) {
-                return recordExistingLogin(existing);
+                return recordExistingLogin(existing, identity);
             }
             if (emailExists(identity.email())) {
                 // Review R2-M1-A: this read pair (identity absent → email
@@ -118,7 +121,7 @@ public class OauthIdentityService {
                     return recordExistingLogin(
                             externalIdentityRepository.findByProviderAndIssuerAndSubject(
                                             ExternalProvider.GOOGLE, identity.issuer(), identity.subject())
-                                    .orElseThrow());
+                                    .orElseThrow(), identity);
                 }
                 log.info("Google login rejected: email already belongs to a different account");
                 throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
@@ -137,7 +140,7 @@ public class OauthIdentityService {
                 if (winner != null) {
                     log.info("Conflict inside provisioning resolved to same-identity user {}",
                             winner.getId());
-                    return winner;
+                    return recordExistingLogin(findByIdentity(identity).orElseThrow(), identity);
                 }
                 throw conflict;
             } catch (DataIntegrityViolationException race) {
@@ -146,7 +149,7 @@ public class OauthIdentityService {
                 User winner = resolveEmailCollisionByIdentity(identity);
                 if (winner != null) {
                     log.info("Concurrent Google login for subject resolved to user {}", winner.getId());
-                    return winner;
+                    return recordExistingLogin(findByIdentity(identity).orElseThrow(), identity);
                 }
                 if (emailExists(identity.email())) {
                     // A concurrent password registration claimed the address.
@@ -178,18 +181,19 @@ public class OauthIdentityService {
     }
 
     /** Login bookkeeping for an already-linked identity (fresh short tx). */
-    private User recordExistingLogin(ExternalIdentity existing) {
-        Instant now = Instant.now(clock);
+    private User recordExistingLogin(ExternalIdentity existing, ValidatedOidcIdentity identity) {
+        Long userId = existing.getUser().getId();
         return tx.execute(status -> {
+            User user = credentialSecurity.lockUser(userId);
+            Instant now = Instant.now(clock);
             ExternalIdentity managed = externalIdentityRepository.findById(existing.getId())
                     .orElseThrow();
-            User user = managed.getUser();
             assertLoginAllowed(user);
             managed.recordLogin(now);
             externalIdentityRepository.saveAndFlush(managed);
             user.setLastLoginAt(now);
-            if (user.getEmailVerifiedAt() == null) {
-                // The provider re-asserted email_verified this login.
+            if (user.getEmailVerifiedAt() == null && identity.emailVerified()
+                    && user.getEmail().trim().equalsIgnoreCase(identity.email().trim())) {
                 user.setEmailVerifiedAt(now);
             }
             userRepository.saveAndFlush(user);
@@ -203,7 +207,7 @@ public class OauthIdentityService {
         // Idempotence under concurrency: re-check inside the transaction.
         ExternalIdentity existing = findByIdentity(identity).orElse(null);
         if (existing != null) {
-            return existing.getUser();
+            return recordExistingLogin(existing, identity);
         }
         if (emailExists(identity.email())) {
             // Review R3-M1-01: inside THIS transaction the same read-pair
@@ -213,7 +217,7 @@ public class OauthIdentityService {
             // only a genuinely foreign owner of the address throws.
             ExternalIdentity innerWinner = findByIdentity(identity).orElse(null);
             if (innerWinner != null) {
-                return innerWinner.getUser();
+                return recordExistingLogin(innerWinner, identity);
             }
             throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
         }
@@ -234,46 +238,34 @@ public class OauthIdentityService {
      * Google email does not match the account address.
      */
     public User linkGoogleIdentityToUser(User user, ValidatedOidcIdentity identity) {
-        ExternalIdentity existing = findByIdentity(identity).orElse(null);
-        if (existing != null) {
-            if (existing.getUser().getId().equals(user.getId())) {
-                return existing.getUser(); // idempotent
+        return linkGoogleIdentityToUser(user.getId(), user.getTokenVersion(), identity);
+    }
+
+    public User linkGoogleIdentityToUser(Long userId, int proofEpoch, ValidatedOidcIdentity identity) {
+        return tx.execute(status -> {
+            User managed = credentialSecurity.lockUser(userId);
+            credentialSecurity.requireActiveUnlocked(managed);
+            if (managed.getTokenVersion() != proofEpoch) {
+                throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
             }
-            throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
-        }
-        if (!user.getEmail().equalsIgnoreCase(identity.email())) {
-            // Strict policy: linking only proves THIS account's address.
-            throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
-        }
-        try {
-            return tx.execute(status -> {
-                ExternalIdentity race = findByIdentity(identity).orElse(null);
-                if (race != null) {
-                    if (race.getUser().getId().equals(user.getId())) {
-                        return race.getUser();
-                    }
-                    throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
-                }
-                User managed = userRepository.findById(user.getId()).orElseThrow();
+            if (!identity.emailVerified()
+                    || !managed.getEmail().trim().equalsIgnoreCase(identity.email().trim())) {
+                throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
+            }
+            ExternalIdentity existing = findByIdentity(identity).orElse(null);
+            if (existing != null && !existing.getUser().getId().equals(userId)) {
+                throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
+            }
+            if (existing == null) {
                 externalIdentityRepository.saveAndFlush(new ExternalIdentity(
                         managed, ExternalProvider.GOOGLE, identity.issuer(), identity.subject(),
                         identity.email(), identity.emailVerified()));
-                // Google verified ownership of the account's address: this is
-                // a real email-ownership proof for the account too.
-                if (managed.getEmailVerifiedAt() == null) {
-                    managed.setEmailVerifiedAt(Instant.now(clock));
-                    userRepository.saveAndFlush(managed);
-                }
-                return managed;
-            });
-        } catch (DataIntegrityViolationException race) {
-            // Fresh-transaction re-read; never reuse the aborted one.
-            ExternalIdentity winner = findByIdentity(identity).orElse(null);
-            if (winner != null && winner.getUser().getId().equals(user.getId())) {
-                return winner.getUser();
             }
-            throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_EMAIL_CONFLICT);
-        }
+            if (managed.getEmailVerifiedAt() == null) {
+                managed.setEmailVerifiedAt(Instant.now(clock));
+            }
+            return managed;
+        });
     }
 
     /**
@@ -281,15 +273,24 @@ public class OauthIdentityService {
      * value is returned exactly once; only its SHA-256 hash is stored.
      */
     public String mintExchangeCode(User user) {
-        byte[] bytes = new byte[32];
-        secureRandom.nextBytes(bytes);
-        String rawCode = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        com.quizopia.backend.identity.domain.model.OauthLoginCode code =
-                new com.quizopia.backend.identity.domain.model.OauthLoginCode(
-                        UUID.randomUUID(), user, sha256Hasher.hash(rawCode),
-                        Instant.now(clock).plus(EXCHANGE_CODE_TTL));
-        oauthLoginCodeRepository.save(code);
-        return rawCode;
+        return mintExchangeCode(user.getId(), user.getTokenVersion());
+    }
+
+    public String mintExchangeCode(Long userId, int proofEpoch) {
+        return tx.execute(status -> {
+            User locked = credentialSecurity.lockUser(userId);
+            credentialSecurity.requireActiveUnlocked(locked);
+            if (locked.getTokenVersion() != proofEpoch) {
+                throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
+            }
+            byte[] bytes = new byte[32];
+            secureRandom.nextBytes(bytes);
+            String rawCode = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            oauthLoginCodeRepository.save(new com.quizopia.backend.identity.domain.model.OauthLoginCode(
+                    UUID.randomUUID(), locked, sha256Hasher.hash(rawCode),
+                    Instant.now(clock).plus(EXCHANGE_CODE_TTL)));
+            return rawCode;
+        });
     }
 
     /**
@@ -301,20 +302,23 @@ public class OauthIdentityService {
         if (rawCode == null || rawCode.isBlank()) {
             throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
         }
-        Instant now = Instant.now(clock);
+        String codeHash = sha256Hasher.hash(rawCode.trim());
         User consumed = tx.execute(status -> {
-            com.quizopia.backend.identity.domain.model.OauthLoginCode code = oauthLoginCodeRepository
-                    .findForUpdateByCodeHash(sha256Hasher.hash(rawCode.trim()))
+            Long userId = oauthLoginCodeRepository.findUserIdByCodeHash(codeHash)
                     .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID));
-            if (code.isConsumed() || code.isExpired(now)) {
+            User user = credentialSecurity.lockUser(userId);
+            com.quizopia.backend.identity.domain.model.OauthLoginCode code = oauthLoginCodeRepository
+                    .findForUpdateByCodeHash(codeHash)
+                    .orElseThrow(() -> new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID));
+            Instant now = Instant.now(clock);
+            if (code.isConsumed() || code.isExpired(now) || code.getCredentialEpoch() != user.getTokenVersion()) {
                 throw new AuthenticationException(AuthErrorCode.AUTH_OAUTH_CODE_INVALID);
             }
             // Clamp past created_at: the row's creation timestamp may be a few
             // microseconds AFTER the captured instant (generated at insert), and
             // chk_oauth_login_codes_consumed requires consumed_at >= created_at.
             code.markConsumed(laterOf(now, code.getCreatedAt()));
-            User user = code.getUser();
-            assertLoginAllowed(user);
+            credentialSecurity.requireActiveUnlocked(user);
             return user;
         });
         return consumed;
@@ -343,6 +347,7 @@ public class OauthIdentityService {
                 identity.email(),
                 passwordHasher.hash(Base64.getEncoder().encodeToString(randomPassword)),
                 username);
+        user.setLocalCredentialState(com.quizopia.backend.identity.domain.model.LocalCredentialState.DISABLED);
         user.setEmailVerifiedAt(now);
         // Google asserts email_verified; the account's own login gate follows
         // the provider, not an OTP.

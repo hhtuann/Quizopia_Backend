@@ -159,10 +159,13 @@ public class AuthenticationController {
             throw new com.quizopia.backend.authentication.exception.AuthenticationException(
                     com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_OAUTH_DISABLED);
         }
-        com.quizopia.backend.identity.domain.model.User user = userRepository.findById(Long.valueOf(jwt.getSubject()))
-                .orElseThrow(() -> new com.quizopia.backend.authentication.exception.AuthenticationException(
-                        com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_ACCESS_TOKEN_INVALID));
-        String authorizationUrl = googleLinkService.startLink(user, request.password());
+        Object epoch = jwt.getClaim("token_version");
+        if (!(epoch instanceof Number number)) {
+            throw new com.quizopia.backend.authentication.exception.AuthenticationException(
+                    com.quizopia.backend.authentication.exception.AuthErrorCode.AUTH_ACCESS_TOKEN_INVALID);
+        }
+        String authorizationUrl = googleLinkService.startLink(
+                Long.valueOf(jwt.getSubject()), number.intValue(), request.password());
         return ResponseEntity.ok(Map.of("authorizationUrl", authorizationUrl));
     }
 

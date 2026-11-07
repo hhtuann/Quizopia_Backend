@@ -284,6 +284,7 @@ public class DemoDataSeeder implements ApplicationRunner {
         User user = userRepository.findByUsernameIgnoreCase(username).orElseGet(() -> {
             String hash = passwordHasher.hash(DEMO_PASSWORD);
             User u = new User(username, username + "@demo.quizopia.local", hash, displayName);
+            u.setLocalCredentialState(com.quizopia.backend.identity.domain.model.LocalCredentialState.ENABLED);
             // Operator-seeded demo accounts are trusted: verified by seeding.
             u.setEmailVerifiedAt(java.time.Instant.now());
             // Demo accounts are operator-seeded and password-authenticated:

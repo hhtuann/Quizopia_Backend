@@ -45,7 +45,8 @@ import org.springframework.web.filter.CorsFilter;
  * <p>Authorization rules (API chain):
  * <ul>
  *   <li>public: POST {@code /api/auth/{register,login,refresh,logout,
- *       verify-email,verify-email/resend,oauth/exchange}}, GET
+ *       verify-email,verify-email/resend,oauth/exchange,password/forgot,
+ *       password/reset}}, GET
  *       {@code /api/auth/providers} and {@code /actuator/health/**},</li>
  *   <li>authenticated: {@code GET /api/auth/me},</li>
  *   <li>everything else is denied by default until its module is opened.</li>
@@ -123,7 +124,12 @@ public class SecurityFilterChainConfig {
                                 "/api/auth/logout",
                                 "/api/auth/verify-email",
                                 "/api/auth/verify-email/resend",
-                                "/api/auth/oauth/exchange").permitAll()
+                                "/api/auth/oauth/exchange",
+                                // Identity M5: public password recovery. Exact paths only —
+                                // eligibility, abuse admission and token consumption are
+                                // enforced in the service layer, not by URL patterns.
+                                "/api/auth/password/forgot",
+                                "/api/auth/password/reset").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 "/api/auth/providers",
                                 "/api/auth/oauth/google/link/callback",
@@ -134,6 +140,9 @@ public class SecurityFilterChainConfig {
                         // Origin is enforced by WebSocketConfig.setAllowedOrigins (never a wildcard).
                         .requestMatchers("/ws").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/api/account/profile").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/account/security").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/account/security/change-password").authenticated()
                         // Identity-M2: teacher self-upgrade — authenticated only;
                         // ACTIVE + verified-email + TEACHER-only grant enforced in
                         // the service (deny-by-default otherwise).

@@ -60,7 +60,10 @@ class RefreshIntegrationTests extends AbstractAuthenticationIntegrationTests {
         assertThat(newest.getParentSession().getId()).isEqualTo(oldId);
         assertThat(newest.getFamilyId()).isEqualTo(familyId);
         // Family lifetime is not extended: the new session keeps the old expiry.
-        assertThat(newest.getExpiresAt()).isEqualTo(familyExpiry);
+        // Postgres timestamptz keeps microseconds and rounds half-up from the
+        // nanosecond Instant Hibernate bound; allow that rounding.
+        assertThat(newest.getExpiresAt())
+                .isCloseTo(truncatedToDb(familyExpiry), org.assertj.core.api.Assertions.within(java.time.Duration.ofMillis(1)));
         assertThat(newest.getTokenHash()).matches("^[0-9a-f]{64}$");
         assertThat(newest.getTokenHash()).isNotEqualTo(oldAfter.getTokenHash());
     }
@@ -159,6 +162,10 @@ class RefreshIntegrationTests extends AbstractAuthenticationIntegrationTests {
         return base + UUID.randomUUID().toString().substring(0, 8);
     }
 
+
+    private static java.time.Instant truncatedToDb(java.time.Instant instant) {
+        return instant.truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    }
     private static String emailFor(String username) {
         return username + "@example.com";
     }

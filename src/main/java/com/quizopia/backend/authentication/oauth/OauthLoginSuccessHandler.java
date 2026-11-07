@@ -50,20 +50,24 @@ public class OauthLoginSuccessHandler implements AuthenticationSuccessHandler {
             ValidatedOidcIdentity identity = tokenValidator.validate(
                     oidcUser.getIdToken().getTokenValue(), null);
             User user = identityService.resolveGoogleUser(identity);
+            Long proofUserId = user.getId();
+            int proofEpoch = user.getTokenVersion();
             // Identity-M3: Google asserted email_verified — reconcile pending
             // roster entries AFTER the login transaction (non-fatal).
             try {
-                rosterReconciliation.reconcile(user.getId(), user.getEmail());
+                if (user.getEmailVerifiedAt() != null) {
+                    rosterReconciliation.reconcile(user.getId(), user.getEmail());
+                }
             } catch (RuntimeException ex) {
-                log.error("Roster reconciliation failed for Google user {} (non-fatal)",
-                        user.getId(), ex);
+                log.error("Roster reconciliation failed for Google user {} ({})",
+                        user.getId(), ex.getClass().getSimpleName());
             }
-            String code = identityService.mintExchangeCode(user);
+            String code = identityService.mintExchangeCode(proofUserId, proofEpoch);
             log.info("Google login succeeded for user {}", user.getId());
             response.sendRedirect(appendParam(properties.getFrontendRedirectUrl(), "code", code));
         } catch (Exception ex) {
             // Fail closed: never redirect with tokens on a partial failure.
-            log.warn("Google login failed at success handling: {}", ex.toString());
+            log.warn("Google login failed at success handling: {}", ex.getClass().getSimpleName());
             response.sendRedirect(appendParam(properties.getFrontendRedirectUrl(),
                     "error", "AUTH_OAUTH_FAILED"));
         }

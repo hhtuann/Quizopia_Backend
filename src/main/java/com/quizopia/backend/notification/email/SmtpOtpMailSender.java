@@ -46,8 +46,8 @@ public class SmtpOtpMailSender implements OtpMailSender {
             mailSender.send(message);
             return true;
         } catch (Exception ex) {
-            // Recipient address and exception class only — never the OTP.
-            log.warn("OTP mail delivery failed for {}: {}", toEmail, ex.toString());
+            // Transport exception messages can contain recipients and message contents.
+            log.warn("OTP mail delivery failed: {}", ex.getClass().getName());
             return false;
         }
     }

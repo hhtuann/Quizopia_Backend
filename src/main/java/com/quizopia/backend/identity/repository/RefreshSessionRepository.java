@@ -25,6 +25,9 @@ import java.util.UUID;
  */
 public interface RefreshSessionRepository extends JpaRepository<RefreshSession, UUID> {
 
+    @Query("select rs.user.id from RefreshSession rs where rs.tokenHash = :tokenHash")
+    Optional<Long> findUserIdByTokenHash(@Param("tokenHash") String tokenHash);
+
     /**
      * Finds a refresh session by its token hash, eagerly fetching the owning
      * user.
@@ -129,4 +132,8 @@ public interface RefreshSessionRepository extends JpaRepository<RefreshSession, 
             @Param("revokedAt") Instant revokedAt,
             @Param("reason") String reason
     );
+
+    /** Latest still-unrevoked session creation: bulk revoked_at must be >= EVERY touched row's created_at. */
+    @Query(value = "SELECT MAX(created_at) FROM refresh_sessions WHERE user_id = :userId AND revoked_at IS NULL", nativeQuery = true)
+    java.sql.Timestamp findLatestUnrevokedCreatedAt(@Param("userId") Long userId);
 }

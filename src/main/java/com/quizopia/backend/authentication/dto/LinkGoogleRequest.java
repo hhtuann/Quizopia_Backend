@@ -1,5 +1,6 @@
 package com.quizopia.backend.authentication.dto;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -12,4 +13,9 @@ import jakarta.validation.constraints.Size;
 public record LinkGoogleRequest(
         @NotBlank @Size(min = 8, max = 128) String password
 ) {
+    /** ADR-004: mutation DTOs reject unknown fields instead of silently ignoring them. */
+    @JsonAnySetter
+    public void rejectUnsupportedField(String name, Object value) {
+        throw new IllegalArgumentException("Unsupported field");
+    }
 }

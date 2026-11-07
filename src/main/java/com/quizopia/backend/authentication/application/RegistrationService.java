@@ -154,6 +154,7 @@ public class RegistrationService {
     private User persistStudentAccount(String username, String email, String displayName,
             String phone, String passwordHash, String phoneEncrypted) {
         User user = new User(username, email, passwordHash, displayName);
+        user.setLocalCredentialState(com.quizopia.backend.identity.domain.model.LocalCredentialState.ENABLED);
         user.setPhoneEncrypted(phoneEncrypted);
         user = userRepository.saveAndFlush(user);
 

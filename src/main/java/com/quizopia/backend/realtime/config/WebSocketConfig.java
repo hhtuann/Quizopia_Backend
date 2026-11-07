@@ -3,6 +3,7 @@ package com.quizopia.backend.realtime.config;
 import com.quizopia.backend.realtime.authorization.StompSendGuardInterceptor;
 import com.quizopia.backend.realtime.authorization.StompSubscribeInterceptor;
 import com.quizopia.backend.realtime.security.StompConnectInterceptor;
+import com.quizopia.backend.realtime.security.StompSessionGuardInterceptor;
 import com.quizopia.backend.security.config.SecurityProperties;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
@@ -38,20 +39,28 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final StompConnectInterceptor connectInterceptor;
     private final StompSubscribeInterceptor subscribeInterceptor;
     private final StompSendGuardInterceptor sendGuardInterceptor;
+    private final StompSessionGuardInterceptor sessionGuardInterceptor;
 
     public WebSocketConfig(SecurityProperties properties, StompConnectInterceptor connectInterceptor,
                            StompSubscribeInterceptor subscribeInterceptor,
-                           StompSendGuardInterceptor sendGuardInterceptor) {
+                           StompSendGuardInterceptor sendGuardInterceptor,
+                           StompSessionGuardInterceptor sessionGuardInterceptor) {
         this.properties = properties;
         this.connectInterceptor = connectInterceptor;
         this.subscribeInterceptor = subscribeInterceptor;
         this.sendGuardInterceptor = sendGuardInterceptor;
+        this.sessionGuardInterceptor = sessionGuardInterceptor;
     }
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        // Authentication → authorization → spoof guard.
-        registration.interceptors(connectInterceptor, subscribeInterceptor, sendGuardInterceptor);
+        // Authentication → current session → resource authorization → spoof guard.
+        registration.interceptors(connectInterceptor, sessionGuardInterceptor, subscribeInterceptor, sendGuardInterceptor);
+    }
+
+    @Override
+    public void configureClientOutboundChannel(ChannelRegistration registration) {
+        registration.interceptors(sessionGuardInterceptor);
     }
 
     @Override

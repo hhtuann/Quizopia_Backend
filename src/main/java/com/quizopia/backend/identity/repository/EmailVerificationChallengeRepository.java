@@ -42,6 +42,14 @@ public interface EmailVerificationChallengeRepository extends JpaRepository<Emai
     Optional<EmailVerificationChallenge> findFirstByUserIdAndPurposeOrderByCreatedAtDesc(
             Long userId, EmailChallengePurpose purpose);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<EmailVerificationChallenge> findFirstForUpdateByUserIdAndPurposeOrderByCreatedAtDesc(
+            Long userId, EmailChallengePurpose purpose);
+
+    @Modifying
+    @Query("delete from EmailVerificationChallenge c where c.user.id = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
+
     /** Challenges issued for one email within the window (rate limiting). */
     @Query("""
             select count(c) from EmailVerificationChallenge c
