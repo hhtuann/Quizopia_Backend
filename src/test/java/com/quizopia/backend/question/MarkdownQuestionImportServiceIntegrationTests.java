@@ -1,10 +1,8 @@
 package com.quizopia.backend.question;
 
 import com.quizopia.backend.academic.domain.model.GradeLevel;
-import com.quizopia.backend.academic.domain.model.School;
 import com.quizopia.backend.academic.domain.model.Subject;
 import com.quizopia.backend.academic.repository.GradeLevelRepository;
-import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.SubjectRepository;
 import com.quizopia.backend.exam.application.ExamService;
 import com.quizopia.backend.exam.dto.PublishedExamSummary;
@@ -27,7 +25,6 @@ import com.quizopia.backend.question.dto.UpdateQuestionRequest;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
 import com.quizopia.backend.question.exception.QuestionException;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,8 +48,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Service-level integration tests for the Teacher-only Quiz Markdown
  * Question Bank import (P2-C, issues #18 + #10): persistence shape, the
  * bank-contract preflight (#10: MULTIPLE_CHOICE {@code >=2}, canonical
- * numeric token), atomic all-or-nothing semantics, limits, workspace
- * authorization (personal bank without TeacherProfile, revoked membership)
+ * numeric token), atomic all-or-nothing semantics, limits, user-ownership
+ * authorization (own bank, unrelated teacher denied)
  * and the Markdown → import → edit → publish round trip.
  */
 @SpringBootTest
@@ -110,13 +107,9 @@ class MarkdownQuestionImportServiceIntegrationTests {
     @Autowired
     private UserRepository userRepo;
     @Autowired
-    private SchoolRepository schoolRepo;
-    @Autowired
     private GradeLevelRepository glRepo;
     @Autowired
     private SubjectRepository subjectRepo;
-    @Autowired
-    private WorkspaceProvisioningService workspaceProvisioningService;
     @Autowired
     private JdbcTemplate jdbc;
     @jakarta.persistence.PersistenceContext
@@ -136,18 +129,9 @@ class MarkdownQuestionImportServiceIntegrationTests {
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherUserId);
 
-        School school = schoolRepo.saveAndFlush(new School("MD-IMP-SCH", "MD Import School"));
-        schoolId = school.getId();
-        GradeLevel gl = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL-MDI", "Grade"));
-        Subject subject = subjectRepo.saveAndFlush(new Subject(schoolId, gl.getId(), "SUB-MDI", "Subject"));
+        GradeLevel gl = glRepo.saveAndFlush(new GradeLevel("GL-MDI", "Grade"));
+        Subject subject = subjectRepo.saveAndFlush(new Subject(gl.getId(), "SUB-MDI", "Subject"));
         subjectId = subject.getId();
-
-        // TeacherProfile keeps this teacher on the legacy academic path (org
-        // workspace resolved + EDITOR membership backfilled on first use);
-        // the no-profile self-upgrade path gets its own test user below.
-        jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + teacherUserId + "," + schoolId + ",'TC-MDI')");
-        em.clear();
     }
 
     @AfterEach
@@ -169,31 +153,24 @@ class MarkdownQuestionImportServiceIntegrationTests {
         jdbc.update("DELETE FROM question_versions");
         jdbc.update("DELETE FROM questions");
         jdbc.update("DELETE FROM question_banks WHERE code LIKE 'MD-%'");
-        jdbc.update("DELETE FROM teacher_profiles WHERE teacher_code = 'TC-MDI'");
         jdbc.update("DELETE FROM subjects WHERE code = 'SUB-MDI'");
         jdbc.update("DELETE FROM grade_levels WHERE code = 'GL-MDI'");
-        jdbc.update("DELETE FROM schools WHERE code = 'MD-IMP-SCH'");
         jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other'))");
         jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other'))");
-        // Personal workspaces provisioned by the no-profile test own FK rows
-        // referencing the test user — remove them first.
-        jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other')))");
-        jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other')))");
-        jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other'))");
+        jdbc.update("DELETE FROM question_banks WHERE created_by_user_id IN (SELECT id FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other'))");
         jdbc.update("DELETE FROM users WHERE username IN ('md-import-teacher','md-no-profile','md-other')");
     }
 
-    private Long createOrgBank() {
-        // Org-workspace bank via the real creation service (subject required,
-        // membership provisioned by the workspace resolver).
+    private Long createSubjectBank() {
+        // Bank via the real creation service, with global-catalog subject metadata.
         return bankService.createBank(teacherUserId,
-                        new CreateQuestionBankRequest(null, "MD-ORG-BANK", "MD Org Bank", null, subjectId))
+                        new CreateQuestionBankRequest("MD-ORG-BANK", "MD Org Bank", null, subjectId))
                 .id();
     }
 
-    private Long createPersonalBank(Long userId) {
+    private Long createSubjectlessBank(Long userId) {
         return bankService.createBank(userId,
-                        new CreateQuestionBankRequest(null, "MD-PERSONAL-BANK", "MD Personal Bank", null, null))
+                        new CreateQuestionBankRequest("MD-PERSONAL-BANK", "MD Personal Bank", null, null))
                 .id();
     }
 
@@ -214,7 +191,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void importFourTypes_persistsWithBankConventions() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
 
         ImportResponse response = importDoc(teacherUserId, bankId, FOUR_TYPES_DOC);
 
@@ -263,7 +240,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void oneCorrectMultiple_rejectedAtomicallyWithActionableDiagnostic() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         String doc = """
                 Câu 1 [SINGLE_CHOICE]: valid?
                 *A. yes
@@ -294,7 +271,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void leadingDotNumeric_rejectedWithCanonicalSuggestion_neverRewritten() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         String doc = """
                 Câu 1 [NUMERIC_FILL]: Giá trị khác?
                 Đáp án: -.50
@@ -312,7 +289,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void canonicalNumerics_persistVerbatim() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         String doc = """
                 Câu 1 [NUMERIC_FILL]: a?
                 Đáp án: -3.5
@@ -334,7 +311,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void commaDecimal_rejectedByGrammar_notImported() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         String doc = """
                 Câu 1 [NUMERIC_FILL]: comma decimal?
                 Đáp án: 2,50
@@ -351,7 +328,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void parseError_returnsParserDiagnostics_nothingPersisted() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         String doc = """
                 Câu 2 [SINGLE_CHOICE]: numbering must start at one.
                 *A. a
@@ -375,7 +352,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void moreThanMaxQuestions_rejected() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         StringBuilder doc = new StringBuilder();
         for (int i = 1; i <= MarkdownQuestionImportService.MAX_MARKDOWN_QUESTIONS + 1; i++) {
             doc.append("Câu ").append(i).append(" [NUMERIC_FILL]: q").append(i).append("?\n");
@@ -393,46 +370,28 @@ class MarkdownQuestionImportServiceIntegrationTests {
     }
 
     // ============================================================
-    // Authorization (workspace boundary, issue #18 audit)
+    // Authorization (user ownership, issue #18 audit)
     // ============================================================
 
     @Test
-    void selfUpgradedTeacherWithoutProfile_importsIntoPersonalBank() {
-        User noProfile = userRepo.saveAndFlush(
-                new User("md-no-profile", "mdnp@test.com", "hash", "No Profile Teacher"));
+    void teacherImportsIntoOwnSubjectlessBank() {
+        User teacher = userRepo.saveAndFlush(
+                new User("md-no-profile", "mdnp@test.com", "hash", "Own Bank Teacher"));
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", noProfile.getId());
+                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacher.getId());
         em.clear();
 
-        Long personalBankId = createPersonalBank(noProfile.getId());
+        Long ownBankId = createSubjectlessBank(teacher.getId());
 
-        ImportResponse response = importDoc(noProfile.getId(), personalBankId, FOUR_TYPES_DOC);
+        ImportResponse response = importDoc(teacher.getId(), ownBankId, FOUR_TYPES_DOC);
 
         assertThat(response.importedRows()).isEqualTo(4);
-        assertThat(questionCount(personalBankId)).isEqualTo(4);
-    }
-
-    @Test
-    void revokedOrgMembership_deniedEvenForBankCreator() {
-        Long bankId = createOrgBank();
-        jdbc.update("""
-                UPDATE workspace_memberships SET status = 'REMOVED'
-                WHERE user_id = ? AND workspace_id = (
-                    SELECT workspace_id FROM question_banks WHERE id = ?
-                )
-                """, teacherUserId, bankId);
-        em.clear();
-
-        assertThatThrownBy(() -> importDoc(teacherUserId, bankId, FOUR_TYPES_DOC))
-                .isInstanceOfSatisfying(QuestionException.class,
-                        ex -> assertThat(ex.getErrorCode())
-                                .isEqualTo(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED));
-        assertThat(questionCount(bankId)).isZero();
+        assertThat(questionCount(ownBankId)).isEqualTo(4);
     }
 
     @Test
     void unrelatedTeacher_denied_crossBankIsolation() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         User other = userRepo.saveAndFlush(
                 new User("md-other", "mdother@test.com", "hash", "Other Teacher"));
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
@@ -448,7 +407,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void archivedBank_denied() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         jdbc.update("UPDATE question_banks SET status = 'ARCHIVED' WHERE id = ?", bankId);
         em.clear();
 
@@ -464,7 +423,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
     @Test
     void roundTrip_importEditPublishGrade() {
-        Long bankId = createOrgBank();
+        Long bankId = createSubjectBank();
         ImportResponse imported = importDoc(teacherUserId, bankId, FOUR_TYPES_DOC);
         assertThat(imported.importedRows()).isEqualTo(4);
 
@@ -488,7 +447,7 @@ class MarkdownQuestionImportServiceIntegrationTests {
 
         // Publish an exam pinning the imported versions (publication contract).
         Long examId = examService.createExam(teacherUserId,
-                        new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null,
+                        new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null,
                                 "MD-EX-1", "MD Round Trip", null))
                 .id();
         List<CompositionQuestionRequest> questions = new ArrayList<>();

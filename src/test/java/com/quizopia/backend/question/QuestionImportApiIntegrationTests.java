@@ -10,8 +10,6 @@ import com.quizopia.backend.question.domain.model.QuestionBank;
 import com.quizopia.backend.question.domain.model.QuestionBankStatus;
 import com.quizopia.backend.question.importer.ExcelQuestionParser;
 import com.quizopia.backend.question.repository.QuestionBankRepository;
-import com.quizopia.backend.question.repository.QuestionRepository;
-import com.quizopia.backend.question.repository.QuestionVersionRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -72,10 +70,6 @@ class QuestionImportApiIntegrationTests {
         private com.quizopia.backend.question.application.QuestionBankService bankService;
         @Autowired
         private QuestionBankRepository bankRepo;
-        @Autowired
-        private QuestionRepository questionRepo;
-        @Autowired
-        private QuestionVersionRepository versionRepo;
         @Autowired
         private JdbcTemplate jdbc;
 
@@ -270,39 +264,6 @@ class QuestionImportApiIntegrationTests {
                 Integer qCount = jdbc.queryForObject(
                                 "SELECT COUNT(*) FROM questions WHERE question_bank_id = ?", Integer.class, bankId);
                 assertThat(qCount).isZero();
-        }
-
-        @org.junit.jupiter.api.Disabled("question codes are auto-generated; import code-collision detection removed")
-        @Test
-        void importExistingDuplicate_returns200WithError() throws Exception {
-                // Pre-insert a question with code "DUP-API-1".
-                var q = questionRepo.saveAndFlush(
-                                new com.quizopia.backend.question.domain.model.Question(bankId, "DUP-API-1",
-                                                teacherUserId));
-                versionRepo.saveAndFlush(new com.quizopia.backend.question.domain.model.QuestionVersion(
-                                q.getId(), 1, com.quizopia.backend.question.domain.model.QuestionType.SINGLE_CHOICE,
-                                "existing", teacherUserId, java.math.BigDecimal.ONE));
-
-                byte[] xlsx = workbookBytes(row -> {
-                        set(row, C_CODE, "dup-api-1"); // same code, different case
-                        set(row, C_TYPE, "SINGLE_CHOICE");
-                        set(row, C_CONTENT, "new");
-                        set(row, C_POINTS, "1");
-                        set(row, C_DIFFICULTY, "EASY");
-                        set(row, C_OPT_A, "a");
-                        set(row, C_OPT_B, "b");
-                        set(row, C_OPT_C, "c");
-                        set(row, C_OPT_D, "d");
-                        set(row, C_CORRECT, "A");
-                });
-
-                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
-                                .file(xlsxPart(xlsx))
-                                .with(jwtFor(teacherUserId)))
-                                .andExpect(status().isOk())
-                                .andExpect(jsonPath("$.importedRows").value(0))
-                                .andExpect(jsonPath("$.errors[0].code")
-                                                .value("QUESTION_IMPORT_DUPLICATE_CODE"));
         }
 
         // ============================================================
