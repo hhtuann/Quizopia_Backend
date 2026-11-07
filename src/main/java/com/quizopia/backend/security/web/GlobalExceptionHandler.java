@@ -20,6 +20,7 @@ import org.slf4j.MDC;
 
 import java.time.Instant;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -97,6 +98,20 @@ public class GlobalExceptionHandler {
         ApiError body = new ApiError(
                 Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
         return ResponseEntity.status(code.statusCode()).body(body);
+    }
+
+    @ExceptionHandler(com.quizopia.backend.community.exception.CommunityException.class)
+    public ResponseEntity<ApiError> handleCommunityException(
+            com.quizopia.backend.community.exception.CommunityException ex, HttpServletRequest request) {
+        com.quizopia.backend.community.exception.CommunityErrorCode code = ex.getErrorCode();
+        String path = request != null ? request.getRequestURI() : null;
+        ApiError body = new ApiError(
+                Instant.now(), code.statusCode(), code.code(), code.defaultMessage(), path, MDC.get("traceId"));
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(code.statusCode());
+        if (ex.getRetryAfterSeconds() > 0) {
+            response = response.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        return response.body(body);
     }
 
     @ExceptionHandler({

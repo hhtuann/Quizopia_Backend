@@ -175,6 +175,12 @@ public class SecurityFilterChainConfig {
                         // /api/users management APIs were decommissioned with the
                         // organization architecture.
                         .requestMatchers("/api/students/search").authenticated()
+                        // Community owner API (issue #40, ADR-006 §7): authenticated only.
+                        // Role/permission gates (COMMUNITY_PUBLISH etc.), owner checks and
+                        // anti-enumeration 404s are enforced in CommunityService
+                        // (deny-by-default). The anonymous /api/public/community/** GET
+                        // routes arrive with issue #41.
+                        .requestMatchers("/api/community/**").authenticated()
                         .anyRequest().denyAll());
         return http.build();
     }
