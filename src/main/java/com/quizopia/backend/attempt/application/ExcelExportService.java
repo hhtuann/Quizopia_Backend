@@ -69,9 +69,9 @@ public class ExcelExportService {
      * Generates the XLSX bytes. Authorization must be checked by the caller before
      * invoking.
      */
-    public byte[] export(Long userId, String primaryRole, Long sessionId) {
-        List<SessionResultItem> results = sessionResultService.getAllBestResults(userId, primaryRole, sessionId);
-        SessionStatisticsResponse stats = statisticsService.getStatistics(userId, primaryRole, sessionId);
+    public byte[] export(Long userId, Long sessionId) {
+        List<SessionResultItem> results = sessionResultService.getAllBestResults(userId, sessionId);
+        SessionStatisticsResponse stats = statisticsService.getStatistics(userId, sessionId);
         SXSSFWorkbook wb = createWorkbook();
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();

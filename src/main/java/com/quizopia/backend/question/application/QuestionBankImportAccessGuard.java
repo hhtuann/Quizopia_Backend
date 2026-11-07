@@ -7,8 +7,6 @@ import com.quizopia.backend.question.domain.model.QuestionBankStatus;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
 import com.quizopia.backend.question.exception.QuestionException;
 import com.quizopia.backend.question.repository.QuestionBankRepository;
-import com.quizopia.backend.workspace.application.WorkspaceAccessService;
-import com.quizopia.backend.workspace.exception.WorkspaceException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -46,18 +44,15 @@ public class QuestionBankImportAccessGuard {
     private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
     private final QuestionBankRepository questionBankRepository;
-    private final WorkspaceAccessService workspaceAccessService;
     private final Clock clock;
 
     public QuestionBankImportAccessGuard(UserRoleRepository userRoleRepository,
             RolePermissionRepository rolePermissionRepository,
             QuestionBankRepository questionBankRepository,
-            WorkspaceAccessService workspaceAccessService,
             Clock clock) {
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
         this.questionBankRepository = questionBankRepository;
-        this.workspaceAccessService = workspaceAccessService;
         this.clock = clock;
     }
 
@@ -77,17 +72,9 @@ public class QuestionBankImportAccessGuard {
         QuestionBank bank = questionBankRepository.findById(bankId)
                 .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
 
-        // Null-safe: deny when creator provenance is absent (e.g. a
-        // legacy-ctor entity cached in-session before the ownership trigger
-        // is visible) rather than NPE.
+        // Null-safe: deny when creator provenance is absent rather than NPE.
         if (bank.getCreatedByUserUserId() == null
                 || !bank.getCreatedByUserUserId().equals(userId)) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        try {
-            workspaceAccessService.requireResourceManage(
-                    userId, bank.getWorkspaceId(), bank.getCreatedByUserUserId());
-        } catch (WorkspaceException ex) {
             throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
         }
         if (bank.getStatus() != QuestionBankStatus.ACTIVE) {

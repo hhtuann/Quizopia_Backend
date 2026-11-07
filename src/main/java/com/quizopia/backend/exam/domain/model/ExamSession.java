@@ -32,13 +32,6 @@ public class ExamSession {
     @Column(name = "exam_id", nullable = false)
     private Long examId;
 
-    /** Legacy provenance; null for sessions of personal-workspace exams. */
-    @Column(name = "school_id")
-    private Long schoolId;
-
-    /** Legacy provenance; null for sessions created without a teacher profile. */
-    @Column(name = "owner_teacher_id")
-    private Long ownerTeacherId;
 
     @Column(name = "code", nullable = false, length = 30)
     private String code;
@@ -91,12 +84,10 @@ public class ExamSession {
     protected ExamSession() {
     }
 
-    public ExamSession(Long examId, Long schoolId, Long ownerTeacherId,
+    public ExamSession(Long examId,
                        String code, String title, Instant startsAt, Instant endsAt,
                        Integer maxAttempts, Integer durationMinutes, Long createdBy) {
         this.examId = ExamPurpose.requireNonNullId(examId, "examId");
-        this.schoolId = schoolId;
-        this.ownerTeacherId = ownerTeacherId;
         this.code = ExamPurpose.requireNonBlank("code", code);
         this.title = ExamPurpose.requireNonBlank("title", title);
         this.startsAt = Objects.requireNonNull(startsAt, "startsAt must not be null");
@@ -120,13 +111,6 @@ public class ExamSession {
         return examId;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
-
-    public Long getOwnerTeacherId() {
-        return ownerTeacherId;
-    }
 
     public String getCode() {
         return code;
@@ -285,9 +269,8 @@ public class ExamSession {
     public String toString() {
         return "ExamSession{" +
                 "id=" + id +
-                ", schoolId=" + schoolId +
                 ", examId=" + examId +
-                ", ownerTeacherId=" + ownerTeacherId +
+
                 ", code='" + code + '\'' +
                 ", status=" + status +
                 ", startsAt=" + startsAt +

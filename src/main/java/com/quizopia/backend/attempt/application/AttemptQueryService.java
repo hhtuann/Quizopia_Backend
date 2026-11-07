@@ -1,6 +1,6 @@
 package com.quizopia.backend.attempt.application;
 
-import com.quizopia.backend.academic.domain.model.StudentProfile;
+
 import com.quizopia.backend.attempt.domain.model.Attempt;
 import com.quizopia.backend.attempt.dto.AttemptDetailResponse;
 import com.quizopia.backend.attempt.dto.AttemptDetailResponse.OptionView;

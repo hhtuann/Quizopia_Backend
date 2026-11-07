@@ -1,7 +1,6 @@
 package com.quizopia.backend.exam.application;
 
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
+
 import com.quizopia.backend.classroom.domain.model.Classroom;
 import com.quizopia.backend.classroom.repository.ClassroomRepository;
 import com.quizopia.backend.common.BusinessCodes;
@@ -24,8 +23,7 @@ import com.quizopia.backend.exam.repository.ExamSessionRepository;
 import com.quizopia.backend.question.dto.PageResponse;
 import com.quizopia.backend.realtime.event.RealtimeEventType;
 import com.quizopia.backend.realtime.event.SessionRealtimeEvent;
-import com.quizopia.backend.workspace.application.WorkspaceAccessService;
-import com.quizopia.backend.workspace.domain.model.WorkspaceRole;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -57,15 +55,14 @@ public class ExamSessionService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status");
-    private static final String SESSION_CODE_CONFLICT = "uk_exam_sessions_owner_code_ci";
+    private static final String SESSION_CODE_CONFLICT = "uk_exam_sessions_creator_code_ci";
 
     private final ExamAuthorizationService auth;
     private final ExamRepository examRepository;
     private final ExamSessionRepository sessionRepository;
     private final ExamSessionParticipantRepository participantRepository;
     private final ClassroomRepository classroomRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final WorkspaceAccessService workspaceAccessService;
+
     private final NamedParameterJdbcTemplate jdbc;
     private final ApplicationEventPublisher eventPublisher;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
@@ -75,8 +72,7 @@ public class ExamSessionService {
             ExamSessionRepository sessionRepository,
             ExamSessionParticipantRepository participantRepository,
             ClassroomRepository classroomRepository,
-            TeacherProfileRepository teacherProfileRepository,
-            WorkspaceAccessService workspaceAccessService,
+
             NamedParameterJdbcTemplate jdbc,
             ApplicationEventPublisher eventPublisher,
             com.quizopia.backend.notification.application.NotificationService notificationService) {
@@ -85,8 +81,7 @@ public class ExamSessionService {
         this.sessionRepository = sessionRepository;
         this.participantRepository = participantRepository;
         this.classroomRepository = classroomRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.workspaceAccessService = workspaceAccessService;
+
         this.jdbc = jdbc;
         this.eventPublisher = eventPublisher;
         this.notificationService = notificationService;
@@ -125,14 +120,11 @@ public class ExamSessionService {
                 ? request.durationMinutes()
                 : (exam.getDurationMinutes() != null ? exam.getDurationMinutes() : 60);
 
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
-
         String code = (request.code() == null || request.code().isBlank())
                 ? BusinessCodes.readableCode("ES", 8,
                         c -> sessionRepository.existsByCreatedByAndCodeIgnoreCase(userId, c))
                 : request.code().trim();
-        ExamSession session = new ExamSession(exam.getId(), exam.getSchoolId(),
-                profile != null ? profile.getId() : null,
+        ExamSession session = new ExamSession(exam.getId(),
                 code, request.title(), request.startsAt(), request.endsAt(),
                 request.maxAttempts(), duration, userId);
         SessionVisibility visibility = request.visibility() != null
@@ -149,11 +141,11 @@ public class ExamSessionService {
             throw ex;
         }
 
-        // Assign classes (only meaningful for CLASS_RESTRICTED; org sessions only).
+        // Assign classes (only meaningful for CLASS_RESTRICTED).
         if (visibility == SessionVisibility.CLASS_RESTRICTED
                 && request.classroomIds() != null && !request.classroomIds().isEmpty()) {
             List<Classroom> classrooms = validateClassroomsForOwner(userId, request.classroomIds());
-            replaceSessionClasses(session.getSchoolId(), session.getId(), classrooms);
+            replaceSessionClasses(session.getId(), classrooms);
         }
 
         return buildDetailResponse(session, 0L);
@@ -178,15 +170,8 @@ public class ExamSessionService {
         Instant now = Instant.now();
         sessionRepository.refreshLifecycleForCreator(userId, now);
 
-        // P0-2 (issue #4): only sessions in workspaces the user may still
-        // access (personal + ACTIVE-membership organizations) are listed.
-        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
-        if (accessibleWorkspaceIds.isEmpty()) {
-            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
-        }
-
         Page<ExamSession> sessions = sessionRepository.findCreatedByUser(
-                userId, trimmedSearch, statusFilter, examId, accessibleWorkspaceIds, pageable);
+                userId, trimmedSearch, statusFilter, examId, pageable);
 
         return sessionListResponse(sessions, pageable);
     }
@@ -198,9 +183,7 @@ public class ExamSessionService {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
         Exam parent = examRepository.findById(examId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        try {
-            workspaceAccessService.requireResourceRead(userId, parent.getWorkspaceId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+        if (!parent.getCreatedByUserUserId().equals(userId)) {
             throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
         }
         ExamSessionStatus statusFilter = parseSessionStatusFilter(statusStr);
@@ -383,14 +366,11 @@ public class ExamSessionService {
 
     /**
      * Loads a session, verifies the optional path examId matches, and enforces
-     * ownership: the session creator or a workspace OWNER/ADMIN of the exam's
-     * workspace. P0-2 (issue #4): the creator of an ORGANIZATION-workspace
-     * session must still hold an ACTIVE membership; only the authenticated
-     * owner of a PERSONAL workspace bypasses membership. When
+     * ownership: the session creator must be the authenticated user. When
      * {@code forUpdate} the row is pessimistically locked.
      *
      * <p>Package-private: shared by the participant-management service so all
-     * session-scoped endpoints enforce ONE policy (issue #4 P0-R6).
+     * session-scoped endpoints enforce ONE policy.
      */
     ExamSession resolveOwnedSession(Long userId, Long pathExamId, Long sessionId, boolean forUpdate) {
         ExamSession session = forUpdate
@@ -402,52 +382,19 @@ public class ExamSessionService {
             // Cross-exam nested access: 404 (anti-enumeration).
             throw new ExamException(ExamErrorCode.EXAM_SESSION_EXAM_MISMATCH);
         }
-        if (session.getCreatedBy().equals(userId)) {
-            requireCreatorWorkspaceAccess(userId, session);
-            return session;
-        }
-        Exam exam = examRepository.findById(session.getExamId()).orElse(null);
-        if (exam != null) {
-            try {
-                workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
-                        exam.getCreatedByUserUserId());
-                return session;
-            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-                // fall through to deny
-            }
-        }
-        throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-    }
-
-    /** P0-2: creator access requires an ACTIVE org membership (personal owners pass). */
-    private void requireCreatorWorkspaceAccess(Long userId, ExamSession session) {
-        Exam exam = examRepository.findById(session.getExamId()).orElse(null);
-        if (exam == null) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_NOT_FOUND);
-        }
-        try {
-            workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+        if (!session.getCreatedBy().equals(userId)) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }
+        return session;
     }
 
+    /** Session creation requires ownership of the PUBLISHED exam. */
     private void requireSessionManageable(Long userId, Exam exam) {
-        if (exam.getCreatedByUserUserId().equals(userId)) {
-            try {
-                workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
-            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-                throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
-            }
-            return;
-        }
-        try {
-            workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
-                    exam.getCreatedByUserUserId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+        if (!exam.getCreatedByUserUserId().equals(userId)) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }
     }
+
 
     private ExamSessionDetailResponse buildDetailResponse(ExamSession session, long participantCount) {
         String examCode = examRepository.findById(session.getExamId())
@@ -479,7 +426,7 @@ public class ExamSessionService {
         List<Classroom> classrooms = (classroomIds == null || classroomIds.isEmpty())
                 ? List.of()
                 : validateClassroomsForOwner(userId, classroomIds);
-        replaceSessionClasses(session.getSchoolId(), sessionId, classrooms);
+        replaceSessionClasses(sessionId, classrooms);
         return listClasses(userId, pathExamId, sessionId);
     }
 
@@ -541,13 +488,10 @@ public class ExamSessionService {
 
     /**
      * Validates that every classroomId resolves to an ACTIVE classroom owned
-     * by the caller (via their teacher profile). Returns resolved classrooms.
+     * by the calling user. Returns resolved classrooms.
      */
     @SuppressWarnings("null")
     private List<Classroom> validateClassroomsForOwner(Long userId, List<Long> classroomIds) {
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED,
-                        "Class assignment requires a teacher profile"));
         List<Long> distinct = new ArrayList<>(new LinkedHashSet<>(classroomIds));
         Map<Long, Classroom> byId = classroomRepository.findAllById(distinct).stream()
                 .collect(Collectors.toMap(Classroom::getId, c -> c));
@@ -555,7 +499,7 @@ public class ExamSessionService {
         for (Long id : distinct) {
             Classroom c = byId.get(id);
             if (c == null
-                    || !c.getOwnerTeacherId().equals(profile.getId())
+                    || !c.getOwnerUserId().equals(userId)
                     || c.getStatus() != com.quizopia.backend.classroom.domain.model.ClassroomStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
             }
@@ -566,26 +510,17 @@ public class ExamSessionService {
 
     /**
      * Replace the session's assigned classes (delete old + insert new) in one tx.
-     * The junction requires a non-null school (org sessions only).
      */
-    private void replaceSessionClasses(Long schoolId, Long sessionId, List<Classroom> classrooms) {
+    private void replaceSessionClasses(Long sessionId, List<Classroom> classrooms) {
         jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid",
                 new MapSqlParameterSource("sid", sessionId));
-        if (classrooms.isEmpty()) {
-            return;
-        }
-        if (schoolId == null) {
-            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
-                    "Classes can only be assigned to school (organization) sessions");
-        }
         for (Classroom c : classrooms) {
             jdbc.update(
-                    "INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
-                            + "VALUES (:sid, :cid, :school)",
+                    "INSERT INTO exam_session_classes (exam_session_id, classroom_id) "
+                            + "VALUES (:sid, :cid)",
                     new MapSqlParameterSource()
                             .addValue("sid", sessionId)
-                            .addValue("cid", c.getId())
-                            .addValue("school", schoolId));
+                            .addValue("cid", c.getId()));
         }
     }
 

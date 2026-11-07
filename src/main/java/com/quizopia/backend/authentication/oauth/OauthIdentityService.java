@@ -12,7 +12,7 @@ import com.quizopia.backend.identity.repository.RoleRepository;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.security.password.PasswordHasher;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -67,7 +67,7 @@ public class OauthIdentityService {
     private final RoleRepository roleRepository;
     private final PasswordHasher passwordHasher;
     private final com.quizopia.backend.security.token.RefreshTokenHasher sha256Hasher;
-    private final WorkspaceProvisioningService workspaceProvisioningService;
+
     private final Clock clock;
     private final TransactionTemplate tx;
     private final SecureRandom secureRandom = new SecureRandom();
@@ -80,7 +80,7 @@ public class OauthIdentityService {
             RoleRepository roleRepository,
             PasswordHasher passwordHasher,
             com.quizopia.backend.security.token.RefreshTokenHasher sha256Hasher,
-            WorkspaceProvisioningService workspaceProvisioningService,
+
             Clock clock,
             TransactionTemplate tx,
             com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurity) {
@@ -91,7 +91,7 @@ public class OauthIdentityService {
         this.roleRepository = roleRepository;
         this.passwordHasher = passwordHasher;
         this.sha256Hasher = sha256Hasher;
-        this.workspaceProvisioningService = workspaceProvisioningService;
+
         this.clock = clock;
         this.tx = tx;
         this.credentialSecurity = credentialSecurity;
@@ -359,7 +359,7 @@ public class OauthIdentityService {
                 .orElseThrow(() -> new IllegalStateException(
                         "Required role '" + STUDENT_ROLE_CODE + "' is not seeded; check Flyway V3"));
         userRoleRepository.insertAssignmentIfAbsent(user.getId(), student.getId());
-        workspaceProvisioningService.ensurePersonalWorkspace(user);
+
         return user;
     }
 

@@ -6,7 +6,7 @@ import com.quizopia.backend.attempt.application.SessionResultService;
 import com.quizopia.backend.attempt.application.SessionStatisticsService;
 import com.quizopia.backend.attempt.dto.AttemptResultResponse;
 import com.quizopia.backend.attempt.dto.SessionStatisticsResponse;
-import com.quizopia.backend.security.authentication.EffectiveRoleResolver;
+
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -20,12 +20,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 
 /**
- * Day 8 result endpoints. Role is derived from effective Authentication
- * authorities (loaded by
- * {@link com.quizopia.backend.security.authentication.QuizopiaJwtAuthenticationConverter}
- * from the DB),
- * NOT from the JWT {@code roles} claim. Unsupported roles are denied
- * (fail-closed) at the service layer.
+ * Result endpoints. Authorization is resource-based (own attempt / session
+ * ownership) and enforced at the service layer — deny-by-default.
  */
 @RestController
 public class ResultController {
@@ -79,8 +75,7 @@ public class ResultController {
             @RequestParam(required = false) BigDecimal minPercentage,
             @RequestParam(required = false) BigDecimal maxPercentage) {
         return sessionResultService.getSessionResults(
-                Long.valueOf(jwt.getSubject()),
-                EffectiveRoleResolver.resolve(authentication.getAuthorities()), sessionId,
+                Long.valueOf(jwt.getSubject()), sessionId,
                 page, size, sort, direction, search, minPercentage, maxPercentage);
     }
 
@@ -89,8 +84,7 @@ public class ResultController {
     public SessionStatisticsResponse getStatistics(@AuthenticationPrincipal Jwt jwt,
             Authentication authentication,
             @PathVariable Long sessionId) {
-        return statisticsService.getStatistics(Long.valueOf(jwt.getSubject()),
-                EffectiveRoleResolver.resolve(authentication.getAuthorities()), sessionId);
+        return statisticsService.getStatistics(Long.valueOf(jwt.getSubject()), sessionId);
     }
 
     /**
@@ -101,8 +95,7 @@ public class ResultController {
             Authentication authentication,
             @PathVariable Long sessionId) {
         Long userId = Long.valueOf(jwt.getSubject());
-        String role = EffectiveRoleResolver.resolve(authentication.getAuthorities());
-        byte[] bytes = exportService.export(userId, role, sessionId);
+        byte[] bytes = exportService.export(userId, sessionId);
         String filename = ExcelExportService.filename(sessionId);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, ExcelExportService.contentType())

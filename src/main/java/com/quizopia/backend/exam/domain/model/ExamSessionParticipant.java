@@ -8,12 +8,10 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping the {@code exam_session_participants} table. The
- * participant identity is USER-based (V17, issue #4 P0-R8): {@code userId}
- * is the primary identity and the authoritative BLOCKED key — an organizer
- * can block any known participant, including PUBLIC profile-less learners.
- * {@code studentProfileId}/{@code schoolId} remain as optional legacy
- * provenance for school-era rows. The {@code version} column is a JPA
- * optimistic-lock version.
+ * participant identity is USER-based (V17): {@code userId} is the primary
+ * identity and the authoritative BLOCKED key — an organizer can block any
+ * known participant, including PUBLIC learners. The {@code version}
+ * column is a JPA optimistic-lock version.
  *
  * <p>Status: {@code ELIGIBLE} (default, may start attempts) or {@code BLOCKED}
  * (denied new starts/discovery for both visibilities). The DB CHECK
@@ -32,16 +30,12 @@ public class ExamSessionParticipant {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    /** Legacy provenance; null for participants added user-based / personal sessions. */
-    @Column(name = "school_id")
-    private Long schoolId;
+
 
     @Column(name = "exam_session_id", nullable = false)
     private Long examSessionId;
 
-    /** Legacy provenance; null for public profile-less participants. */
-    @Column(name = "student_profile_id")
-    private Long studentProfileId;
+
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
@@ -64,23 +58,12 @@ public class ExamSessionParticipant {
     protected ExamSessionParticipant() {
     }
 
-    /** User-based factory (V17): profile/school provenance optional. */
-    public ExamSessionParticipant(Long userId, Long examSessionId, Long studentProfileId,
-                                   Long schoolId, Long addedBy) {
+    public ExamSessionParticipant(Long userId, Long examSessionId, Long addedBy) {
         this.userId = ExamPurpose.requireNonNullId(userId, "userId");
         this.examSessionId = ExamPurpose.requireNonNullId(examSessionId, "examSessionId");
-        this.studentProfileId = studentProfileId;
-        this.schoolId = schoolId;
         this.addedBy = ExamPurpose.requireNonNullId(addedBy, "addedBy");
     }
 
-    /** Legacy factory (profile-based): user is resolved by the transitional insert trigger. */
-    public ExamSessionParticipant(Long schoolId, Long examSessionId, Long studentProfileId, Long addedBy) {
-        this.schoolId = schoolId;
-        this.examSessionId = ExamPurpose.requireNonNullId(examSessionId, "examSessionId");
-        this.studentProfileId = ExamPurpose.requireNonNullId(studentProfileId, "studentProfileId");
-        this.addedBy = ExamPurpose.requireNonNullId(addedBy, "addedBy");
-    }
 
     public Long getId() {
         return id;
@@ -90,17 +73,13 @@ public class ExamSessionParticipant {
         return userId;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
+
 
     public Long getExamSessionId() {
         return examSessionId;
     }
 
-    public Long getStudentProfileId() {
-        return studentProfileId;
-    }
+
 
     public ExamSessionParticipantStatus getStatus() {
         return status;
@@ -163,7 +142,7 @@ public class ExamSessionParticipant {
                 "id=" + id +
                 ", userId=" + userId +
                 ", examSessionId=" + examSessionId +
-                ", studentProfileId=" + studentProfileId +
+
                 ", status=" + status +
                 ", addedBy=" + addedBy +
                 ", addedAt=" + addedAt +

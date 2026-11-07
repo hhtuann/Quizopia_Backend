@@ -4,10 +4,7 @@ import java.time.Instant;
 
 /**
  * Classroom list/create/update response (no member roster — use the detail
- * endpoint for members).
- *
- * <p>Identity-M3: {@code ownerUserId} is the user-based owner; null
- * {@code ownerTeacherId} marks an independent classroom.
+ * endpoint for members). The classroom belongs directly to its owner user.
  */
 public record ClassroomResponse(
         Long id,
@@ -16,7 +13,6 @@ public record ClassroomResponse(
         String description,
         String status,
         long memberCount,
-        Long ownerTeacherId,
         Long ownerUserId,
         Instant createdAt
 ) {

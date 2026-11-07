@@ -7,18 +7,15 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Derives the highest-privilege supported role from the effective
- * {@link GrantedAuthority} collection loaded
- * by {@link QuizopiaJwtAuthenticationConverter} (which queries the DB for
- * currently-active roles). This is
- * the ONLY correct source of role truth for authorization — the JWT
- * {@code roles} claim is stale and
- * cannot be trusted (a role may have been revoked or expired since the token
- * was issued).
+ * Derives the effective role from the {@link GrantedAuthority} collection
+ * loaded by {@link QuizopiaJwtAuthenticationConverter} (which queries the DB
+ * for currently-active roles). This is the ONLY correct source of role truth
+ * for authorization — the JWT {@code roles} claim is stale and cannot be
+ * trusted (a role may have been revoked or expired since the token was
+ * issued).
  *
- * <p>
- * Precedence: SYSTEM_ADMIN > ACADEMIC_ADMIN > TEACHER > STUDENT. If no
- * supported active role is found,
+ * <p>Precedence: TEACHER &gt; STUDENT (the user-centric role model — users
+ * hold STUDENT, TEACHER, or both). If no supported active role is found,
  * returns {@code null} — the caller MUST deny (fail-closed).
  */
 public final class EffectiveRoleResolver {
@@ -41,10 +38,6 @@ public final class EffectiveRoleResolver {
                 .filter(a -> a != null && a.startsWith(ROLE_PREFIX))
                 .map(a -> a.substring(ROLE_PREFIX.length()))
                 .collect(Collectors.toSet());
-        if (roles.contains("SYSTEM_ADMIN"))
-            return "SYSTEM_ADMIN";
-        if (roles.contains("ACADEMIC_ADMIN"))
-            return "ACADEMIC_ADMIN";
         if (roles.contains("TEACHER"))
             return "TEACHER";
         if (roles.contains("STUDENT"))

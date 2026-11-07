@@ -15,21 +15,15 @@ import java.util.Optional;
 
 public interface ExamRepository extends JpaRepository<Exam, Long> {
 
-    Optional<Exam> findByIdAndOwnerTeacherId(Long id, Long ownerTeacherId);
+    boolean existsByCreatedByUserUserIdAndCodeIgnoreCase(Long createdByUserUserId, String code);
 
-    boolean existsByOwnerTeacherIdAndCodeIgnoreCase(Long ownerTeacherId, String code);
-
-    boolean existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(
-            Long workspaceId, Long createdByUserUserId, String code);
-
-    List<Exam> findAllByOwnerTeacherId(Long ownerTeacherId);
+    List<Exam> findAllByCreatedByUserUserId(Long createdByUserUserId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM Exam e WHERE e.id = :id")
     Optional<Exam> findByIdForUpdate(@Param("id") Long id);
 
     @Query("SELECT e FROM Exam e WHERE e.createdByUserUserId = :userId "
-            + "AND e.workspaceId IN :workspaceIds "
             + "AND (COALESCE(:search, '') = '' "
             + "  OR LOWER(e.code) LIKE LOWER(CONCAT('%', :search, '%')) "
             + "  OR LOWER(e.title) LIKE LOWER(CONCAT('%', :search, '%'))) "
@@ -40,6 +34,5 @@ public interface ExamRepository extends JpaRepository<Exam, Long> {
             @Param("search") String search,
             @Param("subjectId") Long subjectId,
             @Param("status") ExamStatus status,
-            @Param("workspaceIds") List<Long> workspaceIds,
             Pageable pageable);
 }

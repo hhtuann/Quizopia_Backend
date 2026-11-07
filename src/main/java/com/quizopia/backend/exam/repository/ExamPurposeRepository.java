@@ -7,7 +7,5 @@ import java.util.List;
 
 public interface ExamPurposeRepository extends JpaRepository<ExamPurpose, Long> {
 
-    List<ExamPurpose> findAllBySchoolIdOrderByPositionAsc(Long schoolId);
-
-    boolean existsBySchoolIdAndCodeIgnoreCase(Long schoolId, String code);
+    List<ExamPurpose> findAllByOrderByPositionAsc();
 }

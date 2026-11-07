@@ -208,7 +208,7 @@ public class ClassroomRosterService {
             String className = classroomRepository.findById(classroomId)
                     .map(Classroom::getName).orElse("your class");
             notificationService.create(userId,
-                    com.quizopia.backend.notification.domain.model.NotificationType.USER_STATUS_CHANGED,
+                    com.quizopia.backend.notification.domain.model.NotificationType.REMOVED_FROM_CLASS,
                     "Removed from class",
                     "You were removed from " + className,
                     "/my-classes");

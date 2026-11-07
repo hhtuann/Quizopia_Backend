@@ -7,9 +7,10 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.time.Instant;
 
 /**
- * JPA entity mapping the {@code subjects} table. A subject belongs to a school
- * and a grade level in the SAME school (enforced at DB level by the composite
- * foreign key to {@code grade_levels (school_id, id)}).
+ * JPA entity mapping the {@code subjects} table. Since the user-centric
+ * refactor (V24) subjects form a GLOBAL catalog keyed by
+ * {@code (grade_level_id, code)} — shared by every user, referenced
+ * optionally by question banks and exams.
  */
 @Entity
 @Table(name = "subjects")
@@ -18,9 +19,6 @@ public class Subject {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
-    @Column(name = "school_id", nullable = false)
-    private Long schoolId;
 
     @Column(name = "grade_level_id", nullable = false)
     private Long gradeLevelId;
@@ -49,15 +47,25 @@ public class Subject {
     protected Subject() {
     }
 
-    public Subject(Long schoolId, Long gradeLevelId, String code, String name) {
-        School.requireNonNull(schoolId, "schoolId");
-        School.requireNonNull(gradeLevelId, "gradeLevelId");
-        School.requireNonBlank("code", code);
-        School.requireNonBlank("name", name);
-        this.schoolId = schoolId;
+    public Subject(Long gradeLevelId, String code, String name) {
+        requireNonNull(gradeLevelId, "gradeLevelId");
+        requireNonBlank("code", code);
+        requireNonBlank("name", name);
         this.gradeLevelId = gradeLevelId;
         this.code = code;
         this.name = name;
+    }
+
+    static void requireNonNull(Object value, String field) {
+        if (value == null) {
+            throw new IllegalArgumentException(field + " must not be null");
+        }
+    }
+
+    static void requireNonBlank(String field, String value) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(field + " must not be blank");
+        }
     }
 
     public Long getId() {
@@ -66,14 +74,6 @@ public class Subject {
 
     public void setId(Long id) {
         this.id = id;
-    }
-
-    public Long getSchoolId() {
-        return schoolId;
-    }
-
-    public void setSchoolId(Long schoolId) {
-        this.schoolId = schoolId;
     }
 
     public Long getGradeLevelId() {
@@ -152,12 +152,9 @@ public class Subject {
     public String toString() {
         return "Subject{" +
                 "id=" + id +
-                ", schoolId=" + schoolId +
                 ", gradeLevelId=" + gradeLevelId +
                 ", code='" + code + '\'' +
                 ", status=" + status +
-                ", createdAt=" + createdAt +
-                ", updatedAt=" + updatedAt +
                 '}';
     }
 }

@@ -2,12 +2,9 @@ package com.quizopia.backend.question.application;
 
 import com.quizopia.backend.academic.domain.model.AcademicStatus;
 import com.quizopia.backend.academic.domain.model.Subject;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.repository.SubjectRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.common.BusinessCodes;
 import com.quizopia.backend.identity.repository.RolePermissionRepository;
-import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.question.domain.model.QuestionBank;
 import com.quizopia.backend.question.dto.CreateQuestionBankRequest;
 import com.quizopia.backend.question.dto.PageResponse;
@@ -18,15 +15,6 @@ import com.quizopia.backend.question.dto.SubjectSummary;
 import com.quizopia.backend.question.exception.QuestionErrorCode;
 import com.quizopia.backend.question.exception.QuestionException;
 import com.quizopia.backend.question.repository.QuestionBankRepository;
-import com.quizopia.backend.workspace.application.WorkspaceAccessService;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
-import com.quizopia.backend.workspace.domain.model.Organization;
-import com.quizopia.backend.workspace.domain.model.Workspace;
-import com.quizopia.backend.workspace.domain.model.WorkspaceType;
-import com.quizopia.backend.workspace.exception.WorkspaceErrorCode;
-import com.quizopia.backend.workspace.exception.WorkspaceException;
-import com.quizopia.backend.workspace.repository.OrganizationRepository;
-import com.quizopia.backend.workspace.repository.WorkspaceRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -45,15 +33,12 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Application service for the Question Bank API (Batch B1). Enforces
- * workspace ownership and state checks at the service layer (deny by
- * default). All list queries avoid N+1 via batch counts or native joins.
+ * Application service for the Question Bank API. Enforces user ownership
+ * and state checks at the service layer (deny by default). All list
+ * queries avoid N+1 via batch counts or native joins.
  *
- * <p>Public platform foundation (issue #1 A3): banks are owned by
- * (workspace, creating user). A newly registered user without a school or
- * teacher profile can create banks in their personal workspace. Legacy
- * school/subject/owner columns are retained as provenance for organization
- * workspaces.
+ * <p>User-centric model: a bank belongs directly to its creating user.
+ * The optional {@code subjectId} references the global academic catalog.
  */
 @Service
 public class QuestionBankService {
@@ -61,44 +46,20 @@ public class QuestionBankService {
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "code");
 
-    private final TeacherProfileRepository teacherProfileRepository;
     private final SubjectRepository subjectRepository;
     private final QuestionBankRepository questionBankRepository;
-    private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
-    private final com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
-    private final OrganizationRepository organizationRepository;
-    private final WorkspaceRepository workspaceRepository;
-    private final WorkspaceAccessService workspaceAccessService;
-    private final WorkspaceProvisioningService workspaceProvisioningService;
-    private final com.quizopia.backend.identity.repository.UserRepository userRepository;
     private final NamedParameterJdbcTemplate jdbc;
     private final Clock clock;
 
-    public QuestionBankService(TeacherProfileRepository teacherProfileRepository,
-            SubjectRepository subjectRepository,
+    public QuestionBankService(SubjectRepository subjectRepository,
             QuestionBankRepository questionBankRepository,
-            UserRoleRepository userRoleRepository,
             RolePermissionRepository rolePermissionRepository,
-            com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver,
-            OrganizationRepository organizationRepository,
-            WorkspaceRepository workspaceRepository,
-            WorkspaceAccessService workspaceAccessService,
-            WorkspaceProvisioningService workspaceProvisioningService,
-            com.quizopia.backend.identity.repository.UserRepository userRepository,
             NamedParameterJdbcTemplate jdbc,
             Clock clock) {
-        this.teacherProfileRepository = teacherProfileRepository;
         this.subjectRepository = subjectRepository;
         this.questionBankRepository = questionBankRepository;
-        this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
-        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
-        this.organizationRepository = organizationRepository;
-        this.workspaceRepository = workspaceRepository;
-        this.workspaceAccessService = workspaceAccessService;
-        this.workspaceProvisioningService = workspaceProvisioningService;
-        this.userRepository = userRepository;
         this.jdbc = jdbc;
         this.clock = clock;
     }
@@ -111,44 +72,24 @@ public class QuestionBankService {
     public QuestionBankResponse createBank(Long userId, CreateQuestionBankRequest request) {
         requirePermission(userId, "QUESTION_BANK_CREATE");
 
-        Workspace workspace = resolveAuthoringWorkspace(userId, request.workspaceId());
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
-
         Subject subject = null;
-        if (workspace.getWorkspaceType() == WorkspaceType.ORGANIZATION) {
-            // Legacy academic rule: organization banks require an ACTIVE subject
-            // of the organization's school.
-            if (request.subjectId() == null) {
-                throw new QuestionException(QuestionErrorCode.QUESTION_VALIDATION_ERROR,
-                        "subjectId is required for organization workspace question banks");
-            }
-            Long schoolId = requireOrganizationSchoolId(workspace);
+        if (request.subjectId() != null) {
+            // Optional global-catalog metadata; ACTIVE subjects only.
             subject = subjectRepository.findById(request.subjectId())
                     .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_SUBJECT_NOT_FOUND));
-            if (!schoolId.equals(subject.getSchoolId())) {
-                throw new QuestionException(QuestionErrorCode.QUESTION_SUBJECT_SCHOOL_MISMATCH);
-            }
             if (subject.getStatus() != AcademicStatus.ACTIVE) {
                 throw new QuestionException(QuestionErrorCode.QUESTION_SUBJECT_NOT_FOUND);
             }
-        } else if (request.subjectId() != null) {
-            // Personal workspace authoring is school-free in Phase 1 (ADR-001 §2.2).
-            throw new QuestionException(QuestionErrorCode.QUESTION_VALIDATION_ERROR,
-                    "subjectId is not supported for personal workspace question banks");
         }
 
-        Long workspaceId = workspace.getId();
         String code = (request.code() == null || request.code().isBlank())
                 ? BusinessCodes.readableCode("QB", 8,
                         c -> questionBankRepository
-                                .existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(workspaceId, userId, c))
+                                .existsByCreatedByUserUserIdAndCodeIgnoreCase(userId, c))
                 : request.code().trim();
         QuestionBank bank = new QuestionBank(
-                workspaceId,
                 userId,
-                subject != null ? subject.getSchoolId() : null,
                 subject != null ? subject.getId() : null,
-                profile != null ? profile.getId() : null,
                 code,
                 request.name());
         bank.setDescription(request.description());
@@ -185,18 +126,10 @@ public class QuestionBankService {
         requirePermission(userId, "QUESTION_BANK_READ");
         Pageable pageable = safePageable(page, size, sort);
 
-        // P0-2 (issue #4): only resources in workspaces the user may still
-        // access (personal + ACTIVE-membership organizations) are listed.
-        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
-        if (accessibleWorkspaceIds.isEmpty()) {
-            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
-        }
-
         Page<QuestionBank> banks = questionBankRepository.findCreatedByUser(
                 userId,
                 (search == null || search.isBlank()) ? null : search,
                 subjectId,
-                accessibleWorkspaceIds,
                 pageable);
 
         // Batch question counts + subject summaries (no N+1)
@@ -232,23 +165,7 @@ public class QuestionBankService {
 
         requirePermission(userId, "QUESTION_READ");
 
-        QuestionBank bank = questionBankRepository.findById(bankId)
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
-
-        // P0-2 (issue #4): creator status is not enough in ORGANIZATION
-        // workspaces — an ACTIVE membership is required (revoked creators
-        // are denied); personal-workspace owners keep access.
-        try {
-            workspaceAccessService.requireResourceRead(userId, bank.getWorkspaceId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        if (!bank.getCreatedByUserUserId().equals(userId)) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
-        if (bank.getStatus() != com.quizopia.backend.question.domain.model.QuestionBankStatus.ACTIVE) {
-            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
-        }
+        QuestionBank bank = requireOwnedBank(userId, bankId);
 
         int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
@@ -313,41 +230,17 @@ public class QuestionBankService {
     // ============================================================
 
     /**
-     * Resolves the authoring workspace for a create request (issue #1 A3):
-     * explicit {@code workspaceId} (validated for content-editor rights) or,
-     * by default, the caller's organization workspace when they hold a teacher
-     * profile, else their personal workspace (provisioned on demand).
+     * Loads the bank (404 when absent — anti-enumeration) and requires the
+     * caller to be its owner (403 otherwise). Owned banks must be ACTIVE
+     * for question access.
      */
-    private Workspace resolveAuthoringWorkspace(Long userId, Long requestedWorkspaceId) {
-        if (requestedWorkspaceId != null) {
-            workspaceAccessService.requireContentEditor(userId, requestedWorkspaceId);
-            return workspaceRepository.findById(requestedWorkspaceId)
-                    .orElseThrow(() -> new WorkspaceException(WorkspaceErrorCode.WORKSPACE_NOT_FOUND));
+    QuestionBank requireOwnedBank(Long userId, Long bankId) {
+        QuestionBank bank = questionBankRepository.findById(bankId)
+                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_NOT_FOUND));
+        if (!bank.getCreatedByUserUserId().equals(userId)) {
+            throw new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED);
         }
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
-        if (profile != null) {
-            Long workspaceId = organizationWorkspaceResolver
-                    .requireOrganizationWorkspaceId(profile.getSchoolId());
-            // P0-2 (issue #4): defaulting into the org workspace still requires
-            // an ACTIVE membership (revoked members cannot fall back here).
-            workspaceAccessService.requireContentEditor(userId, workspaceId);
-            return workspaceRepository.findById(workspaceId)
-                    .orElseThrow(() -> new WorkspaceException(WorkspaceErrorCode.WORKSPACE_NOT_FOUND));
-        }
-        return workspaceProvisioningService
-                .ensurePersonalWorkspace(requireUser(userId));
-    }
-
-    private Long requireOrganizationSchoolId(Workspace workspace) {
-        return organizationRepository.findById(workspace.getOrganizationId())
-                .map(Organization::getLegacySchoolId)
-                .orElseThrow(() -> new WorkspaceException(WorkspaceErrorCode.WORKSPACE_NOT_FOUND,
-                        "Organization workspace has no organization"));
-    }
-
-    private com.quizopia.backend.identity.domain.model.User requireUser(Long userId) {
-        return userRepository.findById(userId)
-                .orElseThrow(() -> new QuestionException(QuestionErrorCode.QUESTION_BANK_ACCESS_DENIED));
+        return bank;
     }
 
     private Pageable safePageable(int page, int size, String sort) {
@@ -408,8 +301,7 @@ public class QuestionBankService {
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
                 String name = cve.getConstraintName();
-                if (name != null && (name.contains("uk_question_banks_owner_code_ci")
-                        || name.contains("uk_question_banks_workspace_creator_code_ci"))) {
+                if (name != null && name.contains("uk_question_banks_creator_code_ci")) {
                     return true;
                 }
             }

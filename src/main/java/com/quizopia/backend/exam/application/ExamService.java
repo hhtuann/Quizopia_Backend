@@ -2,16 +2,13 @@ package com.quizopia.backend.exam.application;
 
 import com.quizopia.backend.academic.domain.model.AcademicStatus;
 import com.quizopia.backend.academic.domain.model.Subject;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.repository.SubjectRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.common.BusinessCodes;
 import com.quizopia.backend.exam.domain.model.*;
 import com.quizopia.backend.exam.dto.*;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
 import com.quizopia.backend.exam.repository.*;
-import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.question.domain.model.Question;
 import com.quizopia.backend.question.domain.model.QuestionBank;
 import com.quizopia.backend.question.domain.model.QuestionBankStatus;
@@ -26,14 +23,6 @@ import com.quizopia.backend.question.repository.QuestionBankRepository;
 import com.quizopia.backend.question.repository.QuestionOptionRepository;
 import com.quizopia.backend.question.repository.QuestionRepository;
 import com.quizopia.backend.question.repository.QuestionVersionRepository;
-import com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver;
-import com.quizopia.backend.workspace.application.WorkspaceAccessService;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
-import com.quizopia.backend.workspace.domain.model.Workspace;
-import com.quizopia.backend.workspace.domain.model.WorkspaceRole;
-import com.quizopia.backend.workspace.domain.model.WorkspaceType;
-import com.quizopia.backend.workspace.repository.OrganizationRepository;
-import com.quizopia.backend.workspace.repository.WorkspaceRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -51,7 +40,7 @@ import java.util.stream.Collectors;
  * Application service for the Exam API — one Exam = one immutable published
  * content set (Task B redesign, issue #2 / ADR-001 §2.4):
  * <ul>
- * <li>POST /api/exams — create DRAFT exam (personal or organization workspace)</li>
+ * <li>POST /api/exams — create DRAFT exam owned by the calling user</li>
  * <li>GET /api/exams/my — creator-scoped list</li>
  * <li>GET /api/exams/{examId} — management view (composition + metadata)</li>
  * <li>PUT /api/exams/{examId}/composition — DRAFT-only composition replace</li>
@@ -60,16 +49,15 @@ import java.util.stream.Collectors;
  * <li>POST /api/exams/{examId}/archive — PUBLISHED → ARCHIVED (session guard)</li>
  * </ul>
  *
- * <p>Authorization (deny by default): effective permission (DB) + workspace
- * membership + creator-or-workspace-admin ownership. No JWT-claim authority,
- * no role hierarchy.
+ * <p>Authorization (deny by default): effective permission (DB) + user
+ * ownership. No JWT-claim authority, no role hierarchy.
  */
 @Service
 public class ExamService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("createdAt", "title", "code", "status");
-    private static final String CODE_CONFLICT_CONSTRAINT = "uk_exams_workspace_creator_code_ci";
+    private static final String CODE_CONFLICT_CONSTRAINT = "uk_exams_creator_code_ci";
 
     private final ExamAuthorizationService auth;
     private final SubjectRepository subjectRepository;
@@ -83,13 +71,6 @@ public class ExamService {
     private final QuestionBankRepository sourceBankRepository;
     private final QuestionVersionRepository sourceVersionRepository;
     private final QuestionOptionRepository sourceOptionRepository;
-    private final TeacherProfileRepository teacherProfileRepository;
-    private final OrganizationRepository organizationRepository;
-    private final WorkspaceRepository workspaceRepository;
-    private final OrganizationWorkspaceResolver organizationWorkspaceResolver;
-    private final WorkspaceAccessService workspaceAccessService;
-    private final WorkspaceProvisioningService workspaceProvisioningService;
-    private final UserRepository userRepository;
 
     public ExamService(ExamAuthorizationService auth,
             SubjectRepository subjectRepository,
@@ -102,14 +83,7 @@ public class ExamService {
             QuestionRepository sourceQuestionRepository,
             QuestionBankRepository sourceBankRepository,
             QuestionVersionRepository sourceVersionRepository,
-            QuestionOptionRepository sourceOptionRepository,
-            TeacherProfileRepository teacherProfileRepository,
-            OrganizationRepository organizationRepository,
-            WorkspaceRepository workspaceRepository,
-            OrganizationWorkspaceResolver organizationWorkspaceResolver,
-            WorkspaceAccessService workspaceAccessService,
-            WorkspaceProvisioningService workspaceProvisioningService,
-            UserRepository userRepository) {
+            QuestionOptionRepository sourceOptionRepository) {
         this.auth = auth;
         this.subjectRepository = subjectRepository;
         this.purposeRepository = purposeRepository;
@@ -122,13 +96,6 @@ public class ExamService {
         this.sourceBankRepository = sourceBankRepository;
         this.sourceVersionRepository = sourceVersionRepository;
         this.sourceOptionRepository = sourceOptionRepository;
-        this.teacherProfileRepository = teacherProfileRepository;
-        this.organizationRepository = organizationRepository;
-        this.workspaceRepository = workspaceRepository;
-        this.organizationWorkspaceResolver = organizationWorkspaceResolver;
-        this.workspaceAccessService = workspaceAccessService;
-        this.workspaceProvisioningService = workspaceProvisioningService;
-        this.userRepository = userRepository;
     }
 
     // ============================================================
@@ -137,8 +104,8 @@ public class ExamService {
 
     @Transactional(readOnly = true)
     public List<ExamPurposeResponse> listPurposes(Long userId) {
-        TeacherProfile profile = auth.requireTeacherWithPermission(userId, "EXAM_PURPOSE_READ");
-        return purposeRepository.findAllBySchoolIdOrderByPositionAsc(profile.getSchoolId()).stream()
+        auth.requireTeacherWithPermission(userId, "EXAM_PURPOSE_READ");
+        return purposeRepository.findAllByOrderByPositionAsc().stream()
                 .map(p -> new ExamPurposeResponse(p.getId(), p.getCode(), p.getTitle(), p.getPosition()))
                 .toList();
     }
@@ -151,54 +118,28 @@ public class ExamService {
     public ExamListItem createExam(Long userId, CreateExamRequest request) {
         auth.requireUserWithPermission(userId, "EXAM_CREATE");
 
-        Workspace workspace = resolveAuthoringWorkspace(userId, request.workspaceId());
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
-
+        // Optional global-catalog metadata; ACTIVE entries only.
         Subject subject = null;
-        if (workspace.getWorkspaceType() == WorkspaceType.ORGANIZATION) {
-            if (request.subjectId() == null) {
-                throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
-                        "subjectId is required for organization workspace exams");
-            }
-            Long schoolId = requireOrganizationSchoolId(workspace);
+        if (request.subjectId() != null) {
             subject = subjectRepository.findById(request.subjectId())
                     .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SUBJECT_NOT_FOUND));
-            if (!schoolId.equals(subject.getSchoolId())) {
-                throw new ExamException(ExamErrorCode.EXAM_SUBJECT_SCHOOL_MISMATCH);
-            }
             if (subject.getStatus() != AcademicStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_SUBJECT_NOT_FOUND);
             }
-        } else if (request.subjectId() != null) {
-            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
-                    "subjectId is not supported for personal workspace exams");
         }
 
-        // Purpose (nullable) — org workspaces only; must belong to the org school.
         ExamPurpose purpose = null;
         if (request.purposeId() != null) {
-            if (workspace.getWorkspaceType() != WorkspaceType.ORGANIZATION) {
-                throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR,
-                        "purposeId is not supported for personal workspace exams");
-            }
-            Long schoolId = requireOrganizationSchoolId(workspace);
             purpose = purposeRepository.findById(request.purposeId())
                     .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_PURPOSE_NOT_FOUND));
-            if (!schoolId.equals(purpose.getSchoolId())) {
-                throw new ExamException(ExamErrorCode.EXAM_PURPOSE_SCHOOL_MISMATCH);
-            }
         }
 
-        Long workspaceId = workspace.getId();
         String code = (request.code() == null || request.code().isBlank())
                 ? BusinessCodes.readableCode("EX", 8,
-                        c -> examRepository.existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(
-                                workspaceId, userId, c))
+                        c -> examRepository.existsByCreatedByUserUserIdAndCodeIgnoreCase(userId, c))
                 : request.code().trim();
-        Exam exam = new Exam(workspaceId, userId,
-                subject != null ? subject.getSchoolId() : null,
+        Exam exam = new Exam(userId,
                 subject != null ? subject.getId() : null,
-                profile != null ? profile.getId() : null,
                 code, request.title());
         exam.setDescription(request.description());
         if (purpose != null) {
@@ -238,16 +179,8 @@ public class ExamService {
 
         String trimmedSearch = (search == null || search.isBlank()) ? null : search.trim();
 
-        // P0-2 (issue #4): only exams in workspaces the user may still access
-        // (personal + ACTIVE-membership organizations) are listed — revoked
-        // creators' org exams disappear from their list.
-        List<Long> accessibleWorkspaceIds = workspaceAccessService.accessibleWorkspaceIds(userId);
-        if (accessibleWorkspaceIds.isEmpty()) {
-            return new PageResponse<>(List.of(), 0, Math.max(size, 1), 0, 0, pageable.getSort().toString());
-        }
-
         Page<Exam> exams = examRepository.findCreatedByUser(userId, trimmedSearch, subjectId, statusFilter,
-                accessibleWorkspaceIds, pageable);
+                pageable);
 
         Map<Long, SubjectSummary> subjectMap = batchSubjects(exams.getContent());
         Map<Long, ExamPurposeSummary> purposeMap = batchPurposes(exams.getContent());
@@ -323,7 +256,7 @@ public class ExamService {
 
         validateCompositionStructure(request);
 
-        List<StagedSection> staged = resolveAndStageSources(request, exam);
+        List<StagedSection> staged = resolveAndStageSources(request, exam, userId);
 
         replaceComposition(exam.getId(), staged);
 
@@ -405,8 +338,9 @@ public class ExamService {
             if (bank == null || bank.getStatus() != QuestionBankStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR);
             }
-            if (!bank.getWorkspaceId().equals(exam.getWorkspaceId())
-                    || !Objects.equals(bank.getSubjectId(), exam.getSubjectId())) {
+            // Source questions must come from the exam owner's own banks
+            // (user-centric ownership; no cross-user composition).
+            if (!bank.getCreatedByUserUserId().equals(exam.getCreatedByUserUserId())) {
                 throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
             }
             eq.setDifficulty(pv.getDifficulty());
@@ -466,10 +400,8 @@ public class ExamService {
         requireManageableExam(userId, source);
 
         String code = BusinessCodes.readableCode("EX", 8,
-                c -> examRepository.existsByWorkspaceIdAndCreatedByUserUserIdAndCodeIgnoreCase(
-                        source.getWorkspaceId(), userId, c));
-        Exam copy = new Exam(source.getWorkspaceId(), userId, source.getSchoolId(), source.getSubjectId(),
-                source.getOwnerTeacherId(), code, source.getTitle());
+                c -> examRepository.existsByCreatedByUserUserIdAndCodeIgnoreCase(userId, c));
+        Exam copy = new Exam(userId, source.getSubjectId(), code, source.getTitle());
         copy.setDescription(source.getDescription());
         copy.setPurposeId(source.getPurposeId());
         copy.updateDraftSettings(source.getDurationMinutes(), source.getInstructions());
@@ -585,7 +517,7 @@ public class ExamService {
      * QuestionVersion, and stages the new composition graph in memory.
      */
     @SuppressWarnings("null")
-    private List<StagedSection> resolveAndStageSources(UpdateDraftCompositionRequest request, Exam exam) {
+    private List<StagedSection> resolveAndStageSources(UpdateDraftCompositionRequest request, Exam exam, Long userId) {
         List<Long> sourceQuestionIds = request.sections().stream()
                 .flatMap(s -> s.questions().stream())
                 .map(rq -> rq.sourceQuestionId())
@@ -621,9 +553,9 @@ public class ExamService {
             if (bank == null || bank.getStatus() != QuestionBankStatus.ACTIVE) {
                 throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR);
             }
-            // STRICT source ownership: same workspace + same subject scope.
-            if (!bank.getWorkspaceId().equals(exam.getWorkspaceId())
-                    || !Objects.equals(bank.getSubjectId(), exam.getSubjectId())) {
+            // STRICT source ownership: the caller may only stage questions
+            // from their own banks.
+            if (!bank.getCreatedByUserUserId().equals(userId)) {
                 throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
             }
         }
@@ -819,88 +751,28 @@ public class ExamService {
     // ============================================================
 
     /**
-     * Reads allow the creator or any ACTIVE member of the exam's workspace
-     * (404 anti-enumeration for outsiders). P0-2 (issue #4): in ORGANIZATION
-     * workspaces the creator is additionally gated on an ACTIVE membership —
-     * a revoked creator is denied.
+     * Reads allow only the owning user (404 anti-enumeration for
+     * everyone else — resource existence is never disclosed).
      */
     private Exam requireViewableExam(Long userId, Long examId) {
         Exam exam = examRepository.findById(examId)
                 .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        if (exam.getCreatedByUserUserId().equals(userId)) {
-            requireWorkspaceAccess(userId, exam);
-            return exam;
+        if (!exam.getCreatedByUserUserId().equals(userId)) {
+            throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
         }
-        if (workspaceAccessService.isActiveMember(userId, exam.getWorkspaceId())) {
-            return exam;
-        }
-        throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
+        return exam;
     }
 
     /**
-     * Mutations require the creator or a workspace OWNER/ADMIN (workspace
-     * privilege escalation via manipulated ids is rejected). P0-2 (issue #4):
-     * the creator of an ORGANIZATION-workspace exam must still hold an ACTIVE
-     * membership; only the authenticated owner of a PERSONAL workspace
-     * bypasses membership.
+     * Mutations require the owning user; anything else is a 403 (id
+     * manipulation never escalates privileges).
      */
     private void requireManageableExam(Long userId, Exam exam) {
-        if (exam.getCreatedByUserUserId().equals(userId)) {
-            try {
-                workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
-            } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-                throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
-            }
-            return;
-        }
-        try {
-            workspaceAccessService.requireResourceManage(userId, exam.getWorkspaceId(),
-                    exam.getCreatedByUserUserId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
+        if (!exam.getCreatedByUserUserId().equals(userId)) {
             throw new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED);
         }
     }
 
-    /**
-     * Creator access is only honored while the workspace grants it: PERSONAL
-     * workspaces — the authenticated owner always qualifies; ORGANIZATION
-     * workspaces — an ACTIVE membership is required (issue #4 P0-2).
-     * Used by the read path (404 anti-enumeration for revoked creators).
-     */
-    private void requireWorkspaceAccess(Long userId, Exam exam) {
-        try {
-            workspaceAccessService.requireResourceRead(userId, exam.getWorkspaceId());
-        } catch (com.quizopia.backend.workspace.exception.WorkspaceException ex) {
-            throw new ExamException(ExamErrorCode.EXAM_NOT_FOUND);
-        }
-    }
-
-    /**
-     * Resolves the authoring workspace (issue #1 A3): explicit validated
-     * workspaceId, else teacher-profile org workspace, else personal.
-     */
-    private Workspace resolveAuthoringWorkspace(Long userId, Long requestedWorkspaceId) {
-        if (requestedWorkspaceId != null) {
-            workspaceAccessService.requireContentEditor(userId, requestedWorkspaceId);
-            return workspaceRepository.findById(requestedWorkspaceId)
-                    .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        }
-        TeacherProfile profile = teacherProfileRepository.findByUserId(userId).orElse(null);
-        if (profile != null) {
-            Long workspaceId = organizationWorkspaceResolver.requireOrganizationWorkspaceId(profile.getSchoolId());
-            return workspaceRepository.findById(workspaceId)
-                    .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_NOT_FOUND));
-        }
-        return workspaceProvisioningService.ensurePersonalWorkspace(
-                userRepository.findById(userId)
-                        .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_ACCESS_DENIED)));
-    }
-
-    private Long requireOrganizationSchoolId(Workspace workspace) {
-        return organizationRepository.findById(workspace.getOrganizationId())
-                .map(org -> org.getLegacySchoolId())
-                .orElseThrow(() -> new ExamException(ExamErrorCode.EXAM_SCHOOL_WORKSPACE_NOT_FOUND));
-    }
 
     // ============================================================
     // Publish validation

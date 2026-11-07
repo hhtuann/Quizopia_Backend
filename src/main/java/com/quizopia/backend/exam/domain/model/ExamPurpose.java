@@ -9,8 +9,9 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping the {@code exam_purposes} table. An exam purpose is a
- * school-scoped catalog entry (e.g. MIDTERM, FINAL). TEACHER has read-only
- * access; purposes are seeded by the V8 migration and DemoDataSeeder.
+ * GLOBAL catalog entry (e.g. MIDTERM, FINAL) since the user-centric
+ * refactor (V24); read access is open to permission holders, and the
+ * catalog is seed-managed.
  */
 @Entity
 @Table(name = "exam_purposes")
@@ -20,8 +21,6 @@ public class ExamPurpose {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "school_id", nullable = false)
-    private Long schoolId;
 
     @Column(name = "code", nullable = false, length = 50)
     private String code;
@@ -43,8 +42,7 @@ public class ExamPurpose {
     protected ExamPurpose() {
     }
 
-    public ExamPurpose(Long schoolId, String code, String title) {
-        this.schoolId = requireNonNullId(schoolId, "schoolId");
+    public ExamPurpose(String code, String title) {
         this.code = requireNonBlank("code", code);
         this.title = requireNonBlank("title", title);
     }
@@ -53,9 +51,6 @@ public class ExamPurpose {
         return id;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
 
     public String getCode() {
         return code;
@@ -101,7 +96,7 @@ public class ExamPurpose {
     public String toString() {
         return "ExamPurpose{" +
                 "id=" + id +
-                ", schoolId=" + schoolId +
+
                 ", code='" + code + '\'' +
                 ", position=" + position +
                 ", createdAt=" + createdAt +

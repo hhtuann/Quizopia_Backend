@@ -22,9 +22,8 @@ import java.util.Objects;
  * {@code version} column is a JPA optimistic-lock version (NOT content
  * versioning) and doubles as the editor concurrency token.
  *
- * <p>Ownership: {@code workspaceId} + {@code createdByUserUserId}. Legacy
- * {@code schoolId}/{@code subjectId}/{@code ownerTeacherId} remain as nullable
- * provenance.
+ * <p>Ownership: {@code createdByUserUserId} — the exam belongs directly
+ * to its creating user (user-centric model, V24/V25).
  */
 @Entity
 @Table(name = "exams")
@@ -34,25 +33,14 @@ public class Exam {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** Owning workspace (NOT NULL). */
-    @Column(name = "workspace_id", nullable = false)
-    private Long workspaceId;
-
     /** Creating/owning user (NOT NULL). */
     @Column(name = "created_by_user_id", nullable = false)
     private Long createdByUserUserId;
 
-    /** Legacy provenance; null for exams created outside a school context. */
-    @Column(name = "school_id")
-    private Long schoolId;
-
-    /** Legacy/academic provenance; optional for personal-workspace exams. */
+    /** Optional global-catalog subject metadata. */
     @Column(name = "subject_id")
     private Long subjectId;
 
-    /** Legacy provenance (teacher_profiles.id); null for personal exams. */
-    @Column(name = "owner_teacher_id")
-    private Long ownerTeacherId;
 
     @Column(name = "purpose_id")
     private Long purposeId;
@@ -121,54 +109,31 @@ public class Exam {
     protected Exam() {
     }
 
-    public Exam(Long workspaceId, Long createdByUserUserId, Long schoolId, Long subjectId,
-                Long ownerTeacherId, String code, String title) {
-        this.workspaceId = ExamPurpose.requireNonNullId(workspaceId, "workspaceId");
+    public Exam(Long createdByUserUserId, Long subjectId, String code, String title) {
         this.createdByUserUserId = ExamPurpose.requireNonNullId(createdByUserUserId, "createdByUserUserId");
-        this.schoolId = schoolId;
         this.subjectId = subjectId;
-        this.ownerTeacherId = ownerTeacherId;
         this.code = ExamPurpose.requireNonBlank("code", code);
         this.title = ExamPurpose.requireNonBlank("title", title);
     }
 
-    /**
-     * Legacy-shape constructor (transitional, ADR-001 §2.2): workspace and
-     * creator are resolved by the V11 BEFORE INSERT trigger from the school /
-     * owner-teacher provenance. Intended for legacy fixtures and transitional
-     * writers; application services must use the explicit constructor.
-     */
-    public Exam(Long schoolId, Long subjectId, Long ownerTeacherId, String code, String title) {
-        this.schoolId = schoolId;
-        this.subjectId = subjectId;
-        this.ownerTeacherId = ownerTeacherId;
-        this.code = ExamPurpose.requireNonBlank("code", code);
-        this.title = ExamPurpose.requireNonBlank("title", title);
-    }
 
     public Long getId() {
         return id;
     }
 
-    public Long getWorkspaceId() {
-        return workspaceId;
-    }
+
 
     public Long getCreatedByUserUserId() {
         return createdByUserUserId;
     }
 
-    public Long getSchoolId() {
-        return schoolId;
-    }
+
 
     public Long getSubjectId() {
         return subjectId;
     }
 
-    public Long getOwnerTeacherId() {
-        return ownerTeacherId;
-    }
+
 
     public Long getPurposeId() {
         return purposeId;
@@ -340,9 +305,8 @@ public class Exam {
     public String toString() {
         return "Exam{" +
                 "id=" + id +
-                ", workspaceId=" + workspaceId +
                 ", createdByUserUserId=" + createdByUserUserId +
-                ", schoolId=" + schoolId +
+                ", subjectId=" + subjectId +
                 ", code='" + code + '\'' +
                 ", status=" + status +
                 ", totalPoints=" + totalPoints +

@@ -1,11 +1,10 @@
 package com.quizopia.backend.exam.api;
 
 import com.quizopia.backend.exam.application.ExamSessionParticipantService;
-import com.quizopia.backend.exam.dto.AddParticipantsRequest;
-import com.quizopia.backend.exam.dto.AddParticipantsResponse;
+
 import com.quizopia.backend.exam.dto.ExamSessionParticipantResponse;
 import com.quizopia.backend.question.dto.PageResponse;
-import jakarta.validation.Valid;
+
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -20,14 +19,6 @@ public class ExamSessionParticipantController {
         this.participantService = participantService;
     }
 
-    @PostMapping
-    public AddParticipantsResponse addParticipants(
-            @PathVariable Long sessionId,
-            @Valid @RequestBody AddParticipantsRequest request,
-            @AuthenticationPrincipal Jwt jwt) {
-        Long userId = Long.valueOf(jwt.getSubject());
-        return participantService.addParticipants(userId, sessionId, request);
-    }
 
     @GetMapping
     public PageResponse<ExamSessionParticipantResponse> listParticipants(

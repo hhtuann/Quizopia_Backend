@@ -1,6 +1,6 @@
 package com.quizopia.backend.attempt.application;
 
-import com.quizopia.backend.academic.domain.model.StudentProfile;
+
 import com.quizopia.backend.attempt.domain.model.Attempt;
 import com.quizopia.backend.attempt.domain.model.AttemptStatus;
 import com.quizopia.backend.attempt.domain.model.IdempotencyOperation;
@@ -68,14 +68,13 @@ public class AttemptSubmitService {
     private final ApplicationEventPublisher eventPublisher;
     private final com.quizopia.backend.grading.AttemptGradingService gradingService;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
-    private final com.quizopia.backend.academic.repository.StudentProfileRepository studentProfileRepo;
+
 
     public AttemptSubmitService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                 IdempotencyRecordRepository idempotencyRepo, ObjectMapper objectMapper,
                                 Clock clock, ApplicationEventPublisher eventPublisher,
                                 com.quizopia.backend.grading.AttemptGradingService gradingService,
-                                com.quizopia.backend.notification.application.NotificationService notificationService,
-                                com.quizopia.backend.academic.repository.StudentProfileRepository studentProfileRepo) {
+                                com.quizopia.backend.notification.application.NotificationService notificationService) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.idempotencyRepo = idempotencyRepo;
@@ -84,7 +83,7 @@ public class AttemptSubmitService {
         this.eventPublisher = eventPublisher;
         this.gradingService = gradingService;
         this.notificationService = notificationService;
-        this.studentProfileRepo = studentProfileRepo;
+
     }
 
     @Transactional
@@ -175,7 +174,7 @@ public class AttemptSubmitService {
         // duplicate/spurious event and the immutable cached response is untouched.
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
-                userId, attempt.getStudentProfileId(), now));
+                userId, null, now));
         // Notify the student that their result is graded.
         notificationService.create(userId,
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
@@ -235,7 +234,7 @@ public class AttemptSubmitService {
         // Realtime + notification mirror the manual submit path (user-based).
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
-                attempt.getUserId(), attempt.getStudentProfileId(), deadline));
+                attempt.getUserId(), null, deadline));
         notificationService.create(attempt.getUserId(),
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
                 "Result available",
