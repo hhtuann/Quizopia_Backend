@@ -46,6 +46,9 @@ class OauthIdentityIntegrationTests {
     private UserRoleRepository userRoleRepository;
 
     @Autowired
+    private SessionIssuanceService sessionIssuanceService;
+
+    @Autowired
     private jakarta.persistence.EntityManager entityManager;
 
     @Test

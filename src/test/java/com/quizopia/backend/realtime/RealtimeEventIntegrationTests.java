@@ -63,7 +63,7 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
             String joined = String.join("", holder.payloads);
             assertThat(joined).contains("ATTEMPT_STARTED").contains("ACTIVE_COUNT_CHANGED")
                     .contains("\"attemptId\":" + attemptId)
-                    .contains("\"userId\":" + studentId).contains("\"studentProfileId\"")
+                    .contains("\"userId\":" + studentId).doesNotContain("studentProfileId")
                     .contains("\"sessionId\":" + sessionId).contains("\"activeCount\":1");
             assertNoLeak(joined);
         }

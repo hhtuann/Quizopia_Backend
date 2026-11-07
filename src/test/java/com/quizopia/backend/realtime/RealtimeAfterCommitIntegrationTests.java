@@ -109,7 +109,7 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
             RealtimeEventEnvelope startedEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ATTEMPT_STARTED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(startedEv.attemptId()).isNotNull();
             assertThat(startedEv.userId()).as("user-based attempt identity (issue #4 P0-1)").isEqualTo(studentId);
-            assertThat(startedEv.studentProfileId()).as("legacy profile provenance still carried").isNotNull();
+            assertThat(startedEv.studentProfileId()).as("user-centric model: no profile provenance").isNull();
             RealtimeEventEnvelope countEv = java.util.Arrays.stream(ev).filter(e -> RealtimeEventType.ACTIVE_COUNT_CHANGED.name().equals(e.eventType())).findFirst().orElseThrow();
             assertThat(countEv.attemptId()).isNull();
             assertThat(attemptCount()).isEqualTo(attemptsBefore + 1);

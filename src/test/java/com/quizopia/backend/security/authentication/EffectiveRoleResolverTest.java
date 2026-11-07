@@ -11,18 +11,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EffectiveRoleResolverTest {
 
     @Test
-    void systemAdminHasHighestPrecedence() {
+    void teacherHasHighestPrecedence() {
         assertThat(EffectiveRoleResolver.resolve(List.of(
                 new SimpleGrantedAuthority("ROLE_STUDENT"),
-                new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN"),
-                new SimpleGrantedAuthority("ATTEMPT_READ")))).isEqualTo("SYSTEM_ADMIN");
+                new SimpleGrantedAuthority("ROLE_TEACHER"),
+                new SimpleGrantedAuthority("ATTEMPT_READ")))).isEqualTo("TEACHER");
     }
 
     @Test
-    void academicAdminPrecedenceOverTeacher() {
+    void unsupportedLegacyRolesAreIgnored() {
         assertThat(EffectiveRoleResolver.resolve(List.of(
                 new SimpleGrantedAuthority("ROLE_TEACHER"),
-                new SimpleGrantedAuthority("ROLE_ACADEMIC_ADMIN")))).isEqualTo("ACADEMIC_ADMIN");
+                new SimpleGrantedAuthority("ROLE_SYSTEM_ADMIN"),
+                new SimpleGrantedAuthority("ROLE_ACADEMIC_ADMIN")))).isEqualTo("TEACHER");
     }
 
     @Test

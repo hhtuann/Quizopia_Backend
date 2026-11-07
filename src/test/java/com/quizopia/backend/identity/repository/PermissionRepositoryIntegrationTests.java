@@ -34,11 +34,11 @@ class PermissionRepositoryIntegrationTests {
 
     @Test
     void findByCodeReturnsFlywaySeededPermission() {
-        Optional<Permission> maybeUserRead = permissionRepository.findByCode("USER_READ");
+        Optional<Permission> maybeAttemptStart = permissionRepository.findByCode("ATTEMPT_START");
 
-        assertThat(maybeUserRead).isPresent();
-        assertThat(maybeUserRead.get().getId()).isNotNull();
-        assertThat(maybeUserRead.get().getCode()).isEqualTo("USER_READ");
+        assertThat(maybeAttemptStart).isPresent();
+        assertThat(maybeAttemptStart.get().getId()).isNotNull();
+        assertThat(maybeAttemptStart.get().getCode()).isEqualTo("ATTEMPT_START");
     }
 
     @Test
