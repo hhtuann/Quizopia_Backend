@@ -44,10 +44,9 @@ public class ExamSessionParticipantService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final Set<String> SORT_ALLOWLIST = Set.of("addedAt", "status");
-    // Both uniqueness keys classify as duplicates: legacy (session, profile)
-    // and V17 (session, user) — see P0-R9.
+    // (session, user) uniqueness — see P0-R9. (unused since the profile-based
+    // bulk add was decommissioned; kept for block-row materialization races.)
     private static final Set<String> DUPLICATE_CONSTRAINTS = Set.of(
-            "uk_exam_session_participants_session_student",
             "uk_exam_session_participants_session_user");
 
     private final ExamAuthorizationService auth;

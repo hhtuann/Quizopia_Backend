@@ -644,11 +644,11 @@ public class AttemptService {
             "uk_attempt_answers_attempt_question",
             "chk_attempts_status", "chk_attempts_number", "chk_attempts_deadline",
             "chk_attempts_submission_invariant",
-            "fk_attempts_session_school", "fk_attempts_student_school", "fk_attempts_version");
+            "fk_attempts_session", "fk_attempts_user");
 
     private static final java.util.Set<String> DUPLICATE_CONSTRAINTS = java.util.Set.of(
-            "uk_attempts_one_active_per_session_student",
-            "uk_attempts_session_student_number");
+            "uk_attempts_one_active_per_session_user",
+            "uk_attempts_session_user_number");
 
     /**
      * Unified constraint classifier. Used by BOTH DataIntegrityViolationException
