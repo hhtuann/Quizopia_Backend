@@ -11,8 +11,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MvcResult;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 /**
  * AuthN-layer outcomes for the community owner routes (ADR-006 §7 auth
@@ -63,6 +65,26 @@ class CommunityAuthNIntegrationTests extends AbstractAuthenticationIntegrationTe
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andReturn().getResponse().getStatus();
         assertThat(afterDisable).isEqualTo(401);
+        afterDisable = mockMvc.perform(get("/api/community/me/bookmarks")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andReturn().getResponse().getStatus();
+        assertThat(afterDisable)
+                .as("bookmark shelf list is unreachable for a disabled account (#45)")
+                .isEqualTo(401);
+
+        afterDisable = mockMvc.perform(put("/api/community/publications/1/bookmark")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andReturn().getResponse().getStatus();
+        assertThat(afterDisable)
+                .as("bookmark save is unreachable for a disabled account (#45)")
+                .isEqualTo(401);
+
+        afterDisable = mockMvc.perform(delete("/api/community/publications/1/bookmark")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andReturn().getResponse().getStatus();
+        assertThat(afterDisable)
+                .as("bookmark delete is unreachable for a disabled account (#45)")
+                .isEqualTo(401);
 
         afterDisable = mockMvc.perform(post("/api/community/publications")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)

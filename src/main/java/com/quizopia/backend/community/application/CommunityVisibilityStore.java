@@ -1,5 +1,6 @@
 package com.quizopia.backend.community.application;
 
+import com.quizopia.backend.community.dto.PublicBookmarkEntry;
 import com.quizopia.backend.community.dto.PublicPublicationCard;
 import com.quizopia.backend.community.dto.PublicPublicationDetail;
 import com.quizopia.backend.community.dto.PublicTagUsage;
@@ -80,12 +81,54 @@ public class CommunityVisibilityStore {
             LEFT JOIN community_tags t ON t.id = pt.tag_id
             """;
 
+    /** The visible card projection as a derived table (#45 bookmark page). */
+    private static final String VISIBLE_CARD_SUBQUERY =
+            CARD_SELECT + CARD_FROM + " WHERE " + VISIBILITY_PREDICATE + "\nGROUP BY p.id, c.id";
+
+    /**
+     * ONE statement for the paged bookmark shelf (#45): the user's
+     * bookmarks LEFT JOINed to the §4-projected cards — a NULL
+     * projection is exactly "the predicate now fails", never a missing
+     * publication row (the FK guarantees the row exists).
+     */
+    private static final String BOOKMARKED_PAGE_SELECT = """
+            SELECT b.publication_id,
+                   b.created_at AS saved_at,
+                   vp.publication_id AS visible_id,
+                   vp.title,
+                   vp.summary,
+                   vp.author_alias,
+                   vp.category_code,
+                   vp.category_title,
+                   vp.question_count,
+                   vp.section_count,
+                   vp.duration_minutes,
+                   vp.published_at,
+                   vp.allow_fork,
+                   vp.tag_labels
+            FROM community_bookmarks b
+            LEFT JOIN (
+                %s
+            ) vp ON vp.publication_id = b.publication_id
+            WHERE b.user_id = ?
+            ORDER BY b.created_at DESC, b.id DESC
+            LIMIT ? OFFSET ?
+            """.formatted(VISIBLE_CARD_SUBQUERY);
+
     /** Catalog filter inputs (already normalized/clamped by the caller). */
     public record CatalogFilter(String q, Long categoryId, List<String> tags) {
     }
 
     /** Page slice of the visible set: items plus the pre-LIMIT total. */
     public record CatalogPage(List<PublicPublicationCard> items, long totalElements) {
+    }
+
+    /**
+     * Page slice of a user's bookmark shelf (#45): entries (available
+     * cards or unavailable placeholders) plus the pre-LIMIT bookmark
+     * total — availability never affects counts or ordering.
+     */
+    public record BookmarkedPage(List<PublicBookmarkEntry> entries, long totalElements) {
     }
 
     /** Card columns + updated_at (detail = card + updatedAt). */
@@ -178,6 +221,51 @@ public class CommunityVisibilityStore {
                         """.formatted(PREDICATE_JOINS, VISIBILITY_PREDICATE),
                 (rs, rowNum) -> new PublicTagUsage(rs.getString("label"), rs.getLong("usage_count")),
                 limit);
+    }
+
+    /**
+     * Paged bookmark shelf for {@code GET /api/community/me/bookmarks}
+     * (#45): exactly two statements — the page query (bookmarks LEFT
+     * JOINed to the §4-projected cards, deterministic
+     * {@code created_at DESC, id DESC}) plus the bookmark total. A NULL
+     * projection yields the three-field
+     * {@link PublicBookmarkEntry.Unavailable} placeholder; availability
+     * never changes counts, ordering or pagination.
+     *
+     * @param page 0-based, already clamped {@code >= 0} by the caller
+     * @param size already clamped to 1..50 by the caller
+     */
+    public BookmarkedPage findBookmarkedPage(long userId, int page, int size) {
+        Long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM community_bookmarks WHERE user_id = ?", Long.class, userId);
+
+        List<PublicBookmarkEntry> entries = jdbc.query(BOOKMARKED_PAGE_SELECT, (rs, rowNum) -> {
+            long publicationId = rs.getLong("publication_id");
+            Instant savedAt = rs.getTimestamp("saved_at").toInstant();
+            rs.getLong("visible_id");
+            if (rs.wasNull()) {
+                return (PublicBookmarkEntry) new PublicBookmarkEntry.Unavailable(
+                        publicationId, savedAt, true);
+            }
+            return new PublicBookmarkEntry.Available(
+                    publicationId,
+                    rs.getString("title"),
+                    rs.getString("summary"),
+                    rs.getString("author_alias"),
+                    rs.getString("category_code"),
+                    rs.getString("category_title"),
+                    mapLabels(rs.getArray("tag_labels")),
+                    rs.getInt("question_count"),
+                    rs.getInt("section_count"),
+                    rs.getInt("duration_minutes"),
+                    rs.getTimestamp("published_at") == null
+                            ? null : rs.getTimestamp("published_at").toInstant(),
+                    rs.getBoolean("allow_fork"),
+                    savedAt,
+                    false);
+        }, userId, size, page * size);
+
+        return new BookmarkedPage(entries, total == null ? 0L : total);
     }
 
     // ============================================================
