@@ -12,6 +12,8 @@ import com.quizopia.backend.question.repository.QuestionOptionRepository;
 import com.quizopia.backend.question.repository.QuestionRepository;
 import com.quizopia.backend.question.repository.QuestionVersionRepository;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -48,6 +50,7 @@ public class QuestionCommunityPortImpl implements QuestionCommunityPort {
     }
 
     @Override
+    @Transactional(propagation = Propagation.MANDATORY)
     public QuestionCloneResult cloneForFork(ExamCommunityPort.PublishedCompositionSnapshot snapshot,
             Long ownerUserId) {
         Objects.requireNonNull(ownerUserId, "ownerUserId must not be null");

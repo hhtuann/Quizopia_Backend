@@ -58,7 +58,7 @@ All ids BIGINT IDENTITY; timestamps TIMESTAMPTZ; enum state CHECK-constrained. *
 
 **V28 `community_bookmarks`**: `id`, `user_id` FK→users RESTRICT, `publication_id` FK CASCADE, `created_at`, `UNIQUE(user_id, publication_id)`, index `(user_id, created_at DESC, id DESC)`.
 
-**V29 `community_fork_records`**: `id`, `actor_user_id` FK RESTRICT, `idempotency_key_hash VARCHAR(64)` CHECK 64-hex (server-keyed HMAC of `community-fork:<actor_user_id>:<key>`, §9 key posture), `source_publication_id` FK RESTRICT, `source_exam_id` FK RESTRICT, `target_exam_id BIGINT NOT NULL UNIQUE` FK→exams RESTRICT, `source_title_snapshot VARCHAR(255)`, `source_alias_snapshot VARCHAR(80)`, `created_at`; `UNIQUE(actor_user_id, idempotency_key_hash)`.
+**V29 `community_fork_records`**: `id`, `actor_user_id` FK RESTRICT, `idempotency_key_hash VARCHAR(64)` CHECK 64-hex (server-keyed HMAC of `community-fork:<actor_user_id>:<key>` under key-derivation domain `quizopia.community.fork.hmac.v1`, §9 key posture), `source_publication_id` FK RESTRICT, `source_exam_id` FK RESTRICT, `target_exam_id BIGINT NOT NULL UNIQUE` FK→exams RESTRICT, `source_title_snapshot VARCHAR(255)`, `source_alias_snapshot VARCHAR(80)`, `created_at`; `UNIQUE(actor_user_id, idempotency_key_hash)`.
 
 Migration-matrix tests (fresh V1→head and staged V25→head with legacy data, following `V24UserCentricMigrationMatrixTest`) accompany every migration.
 

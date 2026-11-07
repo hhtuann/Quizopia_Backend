@@ -1,6 +1,8 @@
 package com.quizopia.backend.community;
 
 import com.quizopia.backend.community.application.CommunityForkService;
+import com.quizopia.backend.exam.application.ExamCommunityPort;
+import com.quizopia.backend.exam.application.ExamCommunityPortImpl;
 import com.quizopia.backend.question.application.QuestionCommunityPort;
 import com.quizopia.backend.question.application.QuestionCommunityPortImpl;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
@@ -15,35 +17,78 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Injected-failure rollback for the #47 fork (ADR-006 §8): a stub
- * {@link QuestionCommunityPort} performs the REAL clone and then throws
- * between the clone and the DRAFT creation steps — the single fork
- * transaction must roll back EVERYTHING (bank, questions, versions,
- * options, exam, sections, composition, options, ledger row), leaving
- * zero orphan rows. Deliberately NOT {@code @Transactional} so the
- * service transaction really commits/rolls back; a dedicated context
- * ({@code @DirtiesContext}) isolates the @Primary stub.
+ * Injected-failure rollback for the #47 fork (ADR-006 §8):
+ * decorators around {@link QuestionCommunityPort} and
+ * {@link ExamCommunityPort} perform the REAL work and then throw at
+ * either seam — between clone and DRAFT creation (clone side), or
+ * between DRAFT creation and the ledger insert (draft side) — proving
+ * the single fork transaction rolls back EVERYTHING (bank, questions,
+ * versions, options, exam, sections, composition, options, ledger
+ * row), leaving zero orphan rows. Deliberately NOT {@code
+ * @Transactional} so the service transaction really commits/rolls
+ * back; a dedicated context ({@code @DirtiesContext}) isolates the
+ * @Primary decorators.
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class,
-        CommunityForkFailureRollbackIntegrationTests.ThrowAfterCloneConfig.class})
+        CommunityForkFailureRollbackIntegrationTests.InjectedFailureConfig.class})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class CommunityForkFailureRollbackIntegrationTests {
 
+    /** Armed per test: which injected seam fires after the real work. */
+    private static final AtomicBoolean FAIL_AFTER_CLONE = new AtomicBoolean();
+    private static final AtomicBoolean FAIL_AFTER_DRAFT = new AtomicBoolean();
+
     @TestConfiguration
-    static class ThrowAfterCloneConfig {
-        /** Real clone, then a failure exactly BETWEEN clone and draft creation (§8 steps 6/7). */
+    static class InjectedFailureConfig {
+
+        /** Real clone; optionally throws exactly BETWEEN clone and draft creation (§8 steps 6/7). */
         @org.springframework.context.annotation.Bean
         @Primary
-        QuestionCommunityPort throwAfterClone(QuestionCommunityPortImpl real) {
+        QuestionCommunityPort questionCommunityPort(QuestionCommunityPortImpl real) {
             return (snapshot, ownerUserId) -> {
-                real.cloneForFork(snapshot, ownerUserId);
-                throw new IllegalStateException("injected failure between clone and draft");
+                QuestionCommunityPort.QuestionCloneResult clone =
+                        real.cloneForFork(snapshot, ownerUserId);
+                if (FAIL_AFTER_CLONE.get()) {
+                    throw new IllegalStateException("injected failure between clone and draft");
+                }
+                return clone;
+            };
+        }
+
+        /** Real draft creation; optionally throws exactly BETWEEN draft creation and the ledger insert (§8 steps 7/8). */
+        @org.springframework.context.annotation.Bean
+        @Primary
+        ExamCommunityPort examCommunityPort(ExamCommunityPortImpl real) {
+            return new ExamCommunityPort() {
+                @Override
+                public Optional<ExamCommunityPort.PublicationEligibility> checkPublicationEligibility(
+                        Long examId, Long userId) {
+                    return real.checkPublicationEligibility(examId, userId);
+                }
+
+                @Override
+                public Optional<ExamCommunityPort.PublishedCompositionSnapshot> loadPublishedSnapshot(
+                        Long examId) {
+                    return real.loadPublishedSnapshot(examId);
+                }
+
+                @Override
+                public Long createForkDraft(ExamCommunityPort.ForkDraftSpec spec) {
+                    Long targetExamId = real.createForkDraft(spec);
+                    if (FAIL_AFTER_DRAFT.get()) {
+                        throw new IllegalStateException("injected failure between draft and ledger");
+                    }
+                    return targetExamId;
+                }
             };
         }
     }
@@ -108,15 +153,35 @@ class CommunityForkFailureRollbackIntegrationTests {
                 VALUES (%d, %d, 'Rollback publication', 'Frb-Alias', 'PUBLISHED', 'VISIBLE',
                         'ALLOW_FORK', now())
                 """.formatted(sourceExamId, publisherId));
+
+        FAIL_AFTER_CLONE.set(false);
+        FAIL_AFTER_DRAFT.set(false);
     }
 
     @Test
     void injectedFailureBetweenCloneAndDraftLeavesZeroOrphanRows() {
+        FAIL_AFTER_CLONE.set(true);
+
         assertThatThrownBy(() -> forkService.fork(forkerId, publicationId, "rollback-key-01"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("injected failure");
 
-        // Zero orphan rows across EVERY table the fork touches.
+        assertZeroOrphanRows();
+    }
+
+    @Test
+    void injectedFailureBetweenDraftAndLedgerLeavesZeroOrphanRows() {
+        FAIL_AFTER_DRAFT.set(true);
+
+        assertThatThrownBy(() -> forkService.fork(forkerId, publicationId, "rollback-key-02"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("injected failure");
+
+        assertZeroOrphanRows();
+    }
+
+    /** Zero orphan rows across EVERY table the fork touches; the source fixture stays intact. */
+    private void assertZeroOrphanRows() {
         assertThat(count("SELECT count(*) FROM question_banks WHERE created_by_user_id = ?",
                 "question_banks (forker's cloned bank)")).isZero();
         assertThat(count("""

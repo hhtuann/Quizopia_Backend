@@ -97,6 +97,24 @@ public interface ExamCommunityPort {
             String title,
             String description,
             List<SnapshotSection> sections) {
+
+        /**
+         * Mirrors the {@code ExamQuestion}/{@code ExamQuestionOption}
+         * convention: never renders answer material. Safe to nest —
+         * every {@code SnapshotQuestion}/{@code SnapshotOption} below
+         * redacts its answer fields.
+         */
+        @Override
+        public String toString() {
+            return "PublishedCompositionSnapshot[tfMatrixScoring=" + tfMatrixScoring
+                    + ", instructions=" + instructions
+                    + ", durationMinutes=" + durationMinutes
+                    + ", subjectId=" + subjectId
+                    + ", purposeId=" + purposeId
+                    + ", title=" + title
+                    + ", description=" + description
+                    + ", sections=" + sections + "]";
+        }
     }
 
     /** Section slice of the snapshot. */
@@ -121,6 +139,26 @@ public interface ExamCommunityPort {
             Long sourceQuestionId,
             Long sourceQuestionVersionId,
             List<SnapshotOption> options) {
+
+        /**
+         * Mirrors {@code ExamQuestion#toString}: {@code answerKey} is
+         * rendered as {@code <redacted>} so the auto-generated record
+         * {@code toString} can never leak answers into logs.
+         */
+        @Override
+        public String toString() {
+            return "SnapshotQuestion[position=" + position
+                    + ", questionType=" + questionType
+                    + ", content=" + content
+                    + ", points=" + points
+                    + ", difficulty=" + difficulty
+                    + ", explanation=" + explanation
+                    + ", answerKey=<redacted>"
+                    + ", metadata=" + metadata
+                    + ", sourceQuestionId=" + sourceQuestionId
+                    + ", sourceQuestionVersionId=" + sourceQuestionVersionId
+                    + ", options=" + options + "]";
+        }
     }
 
     /** Option slice of the snapshot. */
@@ -129,6 +167,18 @@ public interface ExamCommunityPort {
             String content,
             boolean isCorrect,
             int position) {
+
+        /**
+         * Mirrors {@code ExamQuestionOption#toString}:
+         * {@code isCorrect} is omitted so the auto-generated record
+         * {@code toString} can never leak answers into logs.
+         */
+        @Override
+        public String toString() {
+            return "SnapshotOption[optionKey=" + optionKey
+                    + ", content=" + content
+                    + ", position=" + position + "]";
+        }
     }
 
     /**

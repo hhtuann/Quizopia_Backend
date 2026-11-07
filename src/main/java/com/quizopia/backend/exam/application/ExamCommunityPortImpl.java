@@ -16,6 +16,7 @@ import com.quizopia.backend.question.application.QuestionCommunityPort;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 
@@ -85,7 +86,7 @@ public class ExamCommunityPortImpl implements ExamCommunityPort {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Optional<PublishedCompositionSnapshot> loadPublishedSnapshot(Long examId) {
         // §8 step 3: the source exam row lock comes FIRST (before the
         // publication lock); the composition rows are then read inside
@@ -142,7 +143,7 @@ public class ExamCommunityPortImpl implements ExamCommunityPort {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public Long createForkDraft(ForkDraftSpec spec) {
         Objects.requireNonNull(spec, "spec must not be null");
         PublishedCompositionSnapshot snapshot = spec.snapshot();

@@ -159,14 +159,26 @@ public class CommunityForkService {
         Throwable cause = ex;
         while (cause != null) {
             if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
+                // Exact match on the constraint name, tolerating a
+                // schema-qualified prefix only: a DIFFERENT constraint
+                // whose name merely contains the idempotency one (e.g.
+                // "..._actor_key_old") must not be mistaken for the
+                // §8 step 9 race.
                 String name = cve.getConstraintName();
-                if (name != null && name.contains(IDEMPOTENCY_UNIQUE_CONSTRAINT)) {
+                if (name != null
+                        && IDEMPOTENCY_UNIQUE_CONSTRAINT.equals(lastIdentifierToken(name))) {
                     return true;
                 }
             }
             cause = cause.getCause();
         }
         return false;
+    }
+
+    /** {@code schema.constraint} → {@code constraint}. */
+    private static String lastIdentifierToken(String constraintName) {
+        int lastDot = constraintName.lastIndexOf('.');
+        return lastDot < 0 ? constraintName : constraintName.substring(lastDot + 1);
     }
 
     private static byte[] hmac(byte[] key, byte[] message) {

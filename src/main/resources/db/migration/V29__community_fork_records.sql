@@ -14,7 +14,7 @@
 -- idempotency_key_hash is the server-keyed HMAC-SHA-256 of
 -- `community-fork:<actor_user_id>:<key>` (ADR-006 §3/§9 key posture:
 -- derived from the configured data encryption key under the distinct
--- domain `quizopia.community.fork.v1`); the plaintext key is never
+-- domain `quizopia.community.fork.hmac.v1`); the plaintext key is never
 -- stored. The CHECK pins the storage shape: exactly 64 lowercase hex.
 -- =====================================================================
 

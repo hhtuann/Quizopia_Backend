@@ -62,7 +62,7 @@ public class CommunityForkExecutor {
      * hashed the idempotency key, and missed on the read-only pre-check.
      */
     @Transactional
-    public CommunityForkService.ForkOutcome forkWithinTransaction(
+    CommunityForkService.ForkOutcome forkWithinTransaction(
             Long actorUserId, Long publicationId, String idempotencyKeyHash) {
         // §8 step 3 / §9: admission is the first statement of the write
         // transaction (bucket lock stays leaf-most; denied requests

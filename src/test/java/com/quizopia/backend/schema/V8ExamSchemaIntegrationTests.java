@@ -181,7 +181,7 @@ class V8ExamSchemaIntegrationTests {
         assertThat(purposes).isEqualTo(4);
     }
     @Test
-    void rolesAreStudentAndTeacherOnly() {
+    void rolesAreExactlyStudentTeacherAndDormantModerator() {
         // V24 consolidated the role model to STUDENT/TEACHER; V26 adds the
         // dormant operator-provisioned COMMUNITY_MODERATOR (granted to nobody).
         assertThat(jdbc.queryForObject(

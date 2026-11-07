@@ -82,6 +82,14 @@ class CommunityModerationRateLimitIntegrationTests {
                 .as("dismiss shares the MODERATION policy bucket")
                 .isEqualTo(429);
         assertThat(reportStatus(reportId)).isEqualTo("OPEN");
+        assertThat(mockMvc.perform(post("/api/community/moderation/reports/" + reportId + "/resolve")
+                        .with(jwtSubject(moderatorId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"handled\"}"))
+                        .andReturn().getResponse().getStatus())
+                .as("resolve shares the MODERATION policy bucket")
+                .isEqualTo(429);
+        assertThat(reportStatus(reportId)).isEqualTo("OPEN");
 
         // Reads never admit — the queue stays reachable after saturation.
         mockMvc.perform(get("/api/community/moderation/reports")
