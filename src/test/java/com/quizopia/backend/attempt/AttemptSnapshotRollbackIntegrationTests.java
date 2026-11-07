@@ -49,19 +49,15 @@ class AttemptSnapshotRollbackIntegrationTests {
         studentUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('" + s + "','" + s + "@t.com','h','" + s + "')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-        long school = insert("INSERT INTO schools (code, name) VALUES ('" + s + "S','Sch')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','Math')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
-        long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
         // Two distinct source questions (uk_exam_questions_exam_source requires unique source per exam).
         long q1 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q1'," + studentUserId + ")");
         long qv1 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q1 + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
         long q2 = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q2'," + studentUserId + ")");
         long qv2 = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q2 + ",1,'SINGLE_CHOICE','Q2',1,'{}'::jsonb," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),2)");
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',2,now()," + studentUserId + ")");
+        long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),2)");
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         // First exam_question: valid (4 source options so the SINGLE_CHOICE cardinality invariant holds
         // and the snapshot reaches the 2nd attempt_questions INSERT where the test trigger fires).
@@ -71,8 +67,8 @@ class AttemptSnapshotRollbackIntegrationTests {
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
                 + "VALUES (" + eq1 + ",'A','a',false,0),(" + eq1 + ",'B','b',false,1),(" + eq1 + ",'C','c',true,2),(" + eq1 + ",'D','d',false,3),"
                 + "(" + eq2 + ",'A','a',false,0),(" + eq2 + ",'B','b',false,1),(" + eq2 + ",'C','c',true,2),(" + eq2 + ",'D','d',false,3)");
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',1," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + studentUserId + ")");
+        sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',1," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + studentUserId + "," + sessionId + "," + studentUserId + ")");
         // Install test-only trigger: fail on 2nd attempt_questions INSERT per attempt.
         jdbc.execute("CREATE OR REPLACE FUNCTION test_fail_2nd_aq() RETURNS TRIGGER AS $$ "
                 + "DECLARE cnt INTEGER; BEGIN "

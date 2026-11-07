@@ -165,15 +165,21 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void cleanDbHasSeededGlobalCatalog() {
         // V24 seeds the global academic catalog on a clean database:
-        // G10–G12 × 15 subjects and 4 exam purposes.
-        Integer gl = jdbc.queryForObject("SELECT count(*) FROM grade_levels", Integer.class);
-        Integer subjects = jdbc.queryForObject("SELECT count(*) FROM subjects", Integer.class);
-        Integer purposes = jdbc.queryForObject("SELECT count(*) FROM exam_purposes", Integer.class);
+        // G10–G12 × 15 subjects and 4 exam purposes. Other suites may add
+        // their own (unique-coded) catalog rows on the shared container, so
+        // assert the SEED rows are present rather than exact totals.
+        Integer gl = jdbc.queryForObject(
+                "SELECT count(*) FROM grade_levels WHERE code IN ('G10','G11','G12')", Integer.class);
+        Integer subjects = jdbc.queryForObject(
+                "SELECT count(*) FROM subjects WHERE grade_level_id IN "
+                        + "(SELECT id FROM grade_levels WHERE code IN ('G10','G11','G12'))", Integer.class);
+        Integer purposes = jdbc.queryForObject(
+                "SELECT count(*) FROM exam_purposes WHERE code IN ('MIDTERM','FINAL','QUIZ','PRACTICE')",
+                Integer.class);
         assertThat(gl).isEqualTo(3);
         assertThat(subjects).isEqualTo(45);
         assertThat(purposes).isEqualTo(4);
     }
-
     @Test
     void rolesAreStudentAndTeacherOnly() {
         // V24 consolidated the role model to STUDENT/TEACHER.

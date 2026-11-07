@@ -105,9 +105,12 @@ class V20IndependentClassroomsMigrationMatrixTest {
                         """);
             }
 
-            // ---- Phase 1 DB → Identity-M3 head (V18–V20) ----
+            // ---- Phase 1 DB → Identity-M3 head (V18–V20). Pinned: the
+            // workspace-era assertions below are staged-version proof; the
+            // V24/V25 user-centric cutover is proven at the end of this test.
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
+                    .target("20")
                     .load()
                     .migrate();
 
@@ -213,6 +216,45 @@ class V20IndependentClassroomsMigrationMatrixTest {
                                 'kid@example.com', 'PENDING', 'Kid After Link',
                                 (SELECT id FROM users WHERE username='m3_legacy'))
                         """)).hasMessageContaining("uk_roster_active_classroom_email");
+            }
+
+            // ---- User-centric cutover (V21–V25): classrooms keep their
+            // rows and user ownership; the school/workspace-era columns
+            // and tables are gone at the V25 end-state.
+            Flyway.configure().dataSource(url, user, pass)
+                    .locations("classpath:db/migration")
+                    .load()
+                    .migrate();
+            try (Connection c2 = java.sql.DriverManager.getConnection(url, user, pass);
+                 Statement st = c2.createStatement()) {
+                try (ResultSet rs = st.executeQuery("""
+                        SELECT c.code,
+                               (SELECT u.username FROM users u WHERE u.id = c.owner_user_id) owner
+                        FROM classrooms c ORDER BY c.code
+                        """)) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("code")).isEqualTo("IND1");
+                    assertThat(rs.getString("owner")).isEqualTo("m3_legacy");
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString("code")).isEqualTo("M3C1");
+                    assertThat(rs.getString("owner")).isEqualTo("m3_legacy");
+                    assertThat(rs.next()).as("exactly two classrooms").isFalse();
+                }
+                try (ResultSet rs = st.executeQuery("""
+                        SELECT count(*) FROM classroom_members cm
+                        JOIN classrooms c ON c.id = cm.classroom_id
+                        JOIN users u ON u.id = cm.user_id
+                        WHERE c.code = 'M3C1' AND u.username = 'm3_member'
+                        """)) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).as("legacy membership survives V25").isEqualTo(1);
+                }
+                try (ResultSet rs = st.executeQuery(
+                        "SELECT count(*) FROM information_schema.columns WHERE column_name IN "
+                                + "('school_id','workspace_id','owner_teacher_id') AND table_name = 'classrooms'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).as("classroom legacy columns gone").isZero();
+                }
             }
         } finally {
             try (Connection c = pg.createConnection(""); Statement st = c.createStatement()) {

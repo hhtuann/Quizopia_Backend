@@ -43,7 +43,7 @@ class ReviewRound2P0IntegrationTests {
         private static final Instant STARTS = Instant.now().minusSeconds(60);
         private static final Instant ENDS = Instant.now().plusSeconds(3600);
 
-        /** Registers a public user over the real HTTP endpoint; no school/profile. */
+        /** Registers a public user over the real HTTP endpoint. */
         private Long register(String username, String accountType) throws Exception {
 
                 MvcResult result = mockMvc.perform(post("/api/auth/register")
@@ -93,42 +93,29 @@ class ReviewRound2P0IntegrationTests {
         }
 
         /**
-         * Builds an ORGANIZATION-workspace exam + session owned by orgUserId.
-         * Returns sessionId. The org creator gets an ACTIVE EDITOR membership.
+         * Builds a user-owned exam + session owned by ownerId.
+         * Returns sessionId.
          */
-        private Long orgExamSession(Long orgUserId, String visibility) {
-                Long schoolId = insert("INSERT INTO schools (code, name) VALUES ('R2-SCH-" + System.nanoTime()
-                                + "','S')");
-                Long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId
-                                + ",'GL','G')");
-                Long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES ("
-                                + schoolId + "," + gl + ",'SUB','S')");
-                Long orgWs = insert("INSERT INTO organizations (legacy_school_id, code, name) VALUES ("
-                                + schoolId + ",'R2-ORG','O')");
-                Long wsId = insert("INSERT INTO workspaces (workspace_type, name, organization_id) "
-                                + "VALUES ('ORGANIZATION','O'," + orgWs + ")");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + orgUserId + ",'EDITOR','ACTIVE')");
-                Long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                                + orgUserId + "," + schoolId + ",'TC')");
-                Long bank = insert("INSERT INTO question_banks (workspace_id, created_by_user_id, school_id, "
-                                + "subject_id, owner_teacher_id, code, name) VALUES (" + wsId + "," + orgUserId
-                                + "," + schoolId + "," + subjectId + "," + tp + ",'B','B')");
+        private Long userExamSession(Long ownerId, String visibility) {
+                Long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+                Long subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ("
+                                + gl + ",'SUB','S')");
+                Long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                                + "VALUES (" + ownerId + "," + subjectId + ",'B','B')");
                 Long q = insert("INSERT INTO questions (question_bank_id, code, status, created_by) VALUES ("
-                                + bank + ",'q','ACTIVE'," + orgUserId + ")");
+                                + bank + ",'q','ACTIVE'," + ownerId + ")");
                 Long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, "
                                 + "content, difficulty, default_points, metadata, created_by) VALUES (" + q
-                                + ",1,'SINGLE_CHOICE','q?','MEDIUM',1,'{}'::jsonb," + orgUserId + ")");
+                                + ",1,'SINGLE_CHOICE','q?','MEDIUM',1,'{}'::jsonb," + ownerId + ")");
                 for (Object[] o : new Object[][] { { "A", true, 0 }, { "B", false, 1 }, { "C", false, 2 },
                                 { "D", false, 3 } }) {
                         insert("INSERT INTO question_options (question_version_id, option_key, content, "
                                         + "is_correct, position) VALUES (" + v + ",'" + o[0] + "','o'," + o[1]
                                         + "," + o[2] + ")");
                 }
-                Long examId = insert("INSERT INTO exams (workspace_id, created_by_user_id, school_id, subject_id, "
-                                + "owner_teacher_id, code, title, status, published_at, total_points, "
-                                + "instructions, duration_minutes, tf_matrix_scoring) VALUES (" + wsId + ","
-                                + orgUserId + "," + schoolId + "," + subjectId + "," + tp + ",'R2E','E',"
+                Long examId = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, "
+                                + "published_at, total_points, instructions, duration_minutes, tf_matrix_scoring) "
+                                + "VALUES (" + ownerId + "," + subjectId + ",'R2E','E',"
                                 + "'PUBLISHED',now(),1,'i',30,'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)");
                 Long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId
                                 + ",'S',0)");
@@ -142,10 +129,10 @@ class ReviewRound2P0IntegrationTests {
                                         + "is_correct, position) VALUES (" + eq + ",'" + o[0] + "','o'," + o[1]
                                         + "," + o[2] + ")");
                 }
-                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, school_id, owner_teacher_id, code, "
+                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, code, "
                                 + "title, status, starts_at, ends_at, created_by, visibility, max_attempts, "
-                                + "duration_minutes, opened_at) VALUES (" + examId + "," + schoolId + "," + tp
-                                + ",'R2SES','S','OPEN','" + STARTS + "','" + ENDS + "'," + orgUserId + ",'"
+                                + "duration_minutes, opened_at) VALUES (" + examId
+                                + ",'R2SES','S','OPEN','" + STARTS + "','" + ENDS + "'," + ownerId + ",'"
                                 + visibility + "',1,60,now())");
                 return sessionId;
         }
@@ -187,7 +174,7 @@ class ReviewRound2P0IntegrationTests {
         @Test
         void p0r1_teacherOnlyParticipantReadsOwnResultOverHttp() throws Exception {
                 Long organizer = register("r2-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "PUBLIC");
+                Long sessionId = userExamSession(organizer, "PUBLIC");
 
                 Long[] submitted = publicUserSubmits(sessionId, "r2-part-" + System.nanoTime());
                 Long participant = submitted[0];
@@ -208,93 +195,15 @@ class ReviewRound2P0IntegrationTests {
         }
 
         // =====================================================================
-        // P0-R2 â€” revoked org membership blocks CLASS_RESTRICTED even with a
-        // lingering classroom_members row (discovery AND start)
+        // P0-R2 - CLASS_RESTRICTED eligibility is classroom-membership based
         // =====================================================================
 
         @Test
-        void p0r2_removedMemberWithLingeringClassMembershipDenied() throws Exception {
+        void p0r2_nonClassroomMemberDenied() throws Exception {
                 Long organizer = register("r2c-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "CLASS_RESTRICTED");
-                Long examId = jdbc.queryForObject(
-                                "SELECT exam_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-                Long wsId = jdbc.queryForObject(
-                                "SELECT workspace_id FROM exams WHERE id = " + examId, Long.class);
-                Long schoolId = jdbc.queryForObject(
-                                "SELECT school_id FROM exams WHERE id = " + examId, Long.class);
+                Long sessionId = userExamSession(organizer, "CLASS_RESTRICTED");
 
-                // Learner with profile in the org school + class assigned to the session.
                 Long learner = register("r2c-learner-" + System.nanoTime(), "STUDENT");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + learner + "," + schoolId + ",'R2C')");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
-                Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
-                                + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + ")," + organizer + ",'R2C','C')");
-                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
-                                + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
-                                + "," + sp + ")");
-                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
-                                + "VALUES (" + sessionId + "," + classroom + "," + schoolId + ")");
-
-                // Sanity: while ACTIVE, the session is discoverable and startable.
-                mockMvc.perform(get("/api/exam-sessions/available").with(jwt(learner, "STUDENT")))
-                                .andExpect(status().isOk());
-                Integer visibleBefore = jdbc.queryForObject(
-                                "SELECT count(*) FROM exam_sessions", Integer.class);
-                assertThat(visibleBefore).isGreaterThan(0);
-                // (full available-body assertion via HTTP below after revocation)
-
-                // Revoke org membership; classroom_members row LINGERS.
-                jdbc.update("UPDATE workspace_memberships SET status = 'REMOVED' "
-                                + "WHERE workspace_id = " + wsId + " AND user_id = " + learner);
-
-                // Discovery must NOT list the class-restricted session anymore.
-                MvcResult available = mockMvc.perform(get("/api/exam-sessions/available").with(jwt(learner, "STUDENT")))
-                                .andExpect(status().isOk()).andReturn();
-                JsonNode items = mapper().readTree(available.getResponse().getContentAsString()).get("items");
-                for (JsonNode item : items) {
-                        assertThat(item.get("sessionId").asLong())
-                                        .as("revoked member must not see the class-restricted session")
-                                        .isNotEqualTo(sessionId);
-                }
-
-                // Start attempt must be denied.
-                mockMvc.perform(post("/api/exam-sessions/{id}/attempts", sessionId).with(jwt(learner, "STUDENT"))
-                                .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                                .andExpect(status().isForbidden());
-        }
-
-        @Test
-        void p0r2_suspendedMemberAlsoDenied() throws Exception {
-                Long organizer = register("r2s-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "CLASS_RESTRICTED");
-                Long examId = jdbc.queryForObject(
-                                "SELECT exam_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-                Long wsId = jdbc.queryForObject(
-                                "SELECT workspace_id FROM exams WHERE id = " + examId, Long.class);
-                Long schoolId = jdbc.queryForObject(
-                                "SELECT school_id FROM exams WHERE id = " + examId, Long.class);
-
-                Long learner = register("r2s-learner-" + System.nanoTime(), "STUDENT");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + learner + "," + schoolId + ",'R2S')");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
-                Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
-                                + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + ")," + organizer + ",'R2S','C')");
-                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
-                                + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
-                                + "," + sp + ")");
-                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
-                                + "VALUES (" + sessionId + "," + classroom + "," + schoolId + ")");
-
-                jdbc.update("UPDATE workspace_memberships SET status = 'SUSPENDED' "
-                                + "WHERE workspace_id = " + wsId + " AND user_id = " + learner);
 
                 mockMvc.perform(post("/api/exam-sessions/{id}/attempts", sessionId).with(jwt(learner, "STUDENT"))
                                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -302,30 +211,17 @@ class ReviewRound2P0IntegrationTests {
         }
 
         @Test
-        void p0r2_activeMemberStillAllowed() throws Exception {
+        void p0r2_classroomMemberStillAllowed() throws Exception {
                 Long organizer = register("r2a-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "CLASS_RESTRICTED");
-                Long examId = jdbc.queryForObject(
-                                "SELECT exam_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-                Long wsId = jdbc.queryForObject(
-                                "SELECT workspace_id FROM exams WHERE id = " + examId, Long.class);
-                Long schoolId = jdbc.queryForObject(
-                                "SELECT school_id FROM exams WHERE id = " + examId, Long.class);
+                Long sessionId = userExamSession(organizer, "CLASS_RESTRICTED");
 
                 Long learner = register("r2a-learner-" + System.nanoTime(), "STUDENT");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + learner + "," + schoolId + ",'R2A')");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + learner + ",'MEMBER','ACTIVE')");
-                Long classroom = insert("INSERT INTO classrooms (workspace_id, school_id, owner_teacher_id, "
-                                + "owner_user_id, code, name) VALUES (" + wsId + "," + schoolId
-                                + ",(SELECT id FROM teacher_profiles WHERE user_id = " + organizer
-                                + ")," + organizer + ",'R2A','C')");
-                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id, school_id, "
-                                + "student_profile_id) VALUES (" + classroom + "," + learner + "," + schoolId
-                                + "," + sp + ")");
-                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) "
-                                + "VALUES (" + sessionId + "," + classroom + "," + schoolId + ")");
+                Long classroom = insert("INSERT INTO classrooms (owner_user_id, code, name) VALUES ("
+                                + organizer + ",'R2A','C')");
+                jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) "
+                                + "VALUES (" + classroom + "," + learner + ")");
+                jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id) "
+                                + "VALUES (" + sessionId + "," + classroom + ")");
 
                 mockMvc.perform(post("/api/exam-sessions/{id}/attempts", sessionId).with(jwt(learner, "STUDENT"))
                                 .contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -333,95 +229,68 @@ class ReviewRound2P0IntegrationTests {
         }
 
         // =====================================================================
-        // P0-R3 â€” ACADEMIC_ADMIN is workspace-scoped; no cross-tenant bypass
+        // P0-R3 - session results/statistics/export are creator-only; no
+        // role-based or participation-based bypass
         // =====================================================================
 
         @Test
-        void p0r3_foreignAcademicAdminDeniedSessionResults() throws Exception {
+        void p0r3_nonOwnerTeacherDeniedSessionResults() throws Exception {
                 Long organizer = register("r2f-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "PUBLIC");
+                Long sessionId = userExamSession(organizer, "PUBLIC");
                 publicUserSubmits(sessionId, "r2f-part-" + System.nanoTime()); // result row only
 
-                // Admin of a DIFFERENT organization (own school, own workspace).
-                Long foreignAdmin = register("r2f-admin-" + System.nanoTime(), "STUDENT");
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT " + foreignAdmin
-                                + ", id FROM roles WHERE code = 'ACADEMIC_ADMIN'");
-                Long otherSchool = insert("INSERT INTO schools (code, name) VALUES ('R2F-SCH','O')");
-                Long otherOrg = insert("INSERT INTO organizations (legacy_school_id, code, name) VALUES ("
-                                + otherSchool + ",'R2F-ORG','O')");
-                Long otherWs = insert("INSERT INTO workspaces (workspace_type, name, organization_id) "
-                                + "VALUES ('ORGANIZATION','O'," + otherOrg + ")");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + otherWs + "," + foreignAdmin + ",'ADMIN','ACTIVE')");
+                // A TEACHER with no relationship to the session (not the creator).
+                Long otherTeacher = register("r2f-other-" + System.nanoTime(), "TEACHER");
 
-                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(foreignAdmin, "ACADEMIC_ADMIN")))
+                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(otherTeacher, "TEACHER")))
                                 .andExpect(status().isForbidden());
-                mockMvc.perform(get("/api/exam-sessions/{id}/statistics", sessionId).with(jwt(foreignAdmin, "ACADEMIC_ADMIN")))
+                mockMvc.perform(get("/api/exam-sessions/{id}/statistics", sessionId).with(jwt(otherTeacher, "TEACHER")))
                                 .andExpect(status().isForbidden());
-                mockMvc.perform(get("/api/exam-sessions/{id}/results/export", sessionId).with(jwt(foreignAdmin, "ACADEMIC_ADMIN")))
+                mockMvc.perform(get("/api/exam-sessions/{id}/results/export", sessionId).with(jwt(otherTeacher, "TEACHER")))
                                 .andExpect(status().isForbidden());
         }
 
         @Test
-        void p0r3_academicAdminWithoutMembershipAnywhereDenied() throws Exception {
+        void p0r3_teacherRoleAloneDenied() throws Exception {
                 Long organizer = register("r2n-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "PUBLIC");
+                Long sessionId = userExamSession(organizer, "PUBLIC");
                 publicUserSubmits(sessionId, "r2n-part-" + System.nanoTime()); // result row only
 
-                // ACADEMIC_ADMIN role with NO workspace membership at all.
-                Long admin = register("r2n-admin-" + System.nanoTime(), "STUDENT");
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT " + admin
-                                + ", id FROM roles WHERE code = 'ACADEMIC_ADMIN'");
+                // TEACHER role with NO ownership of the session.
+                Long teacher = register("r2n-other-" + System.nanoTime(), "TEACHER");
 
-                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(admin, "ACADEMIC_ADMIN")))
+                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(teacher, "TEACHER")))
                                 .andExpect(status().isForbidden());
                 // Attempt-level result of another user also denied.
                 Long attemptId = jdbc.queryForObject(
                                 "SELECT id FROM attempts WHERE exam_session_id = " + sessionId
                                                 + " LIMIT 1", Long.class);
-                mockMvc.perform(get("/api/attempts/{id}/result", attemptId).with(jwt(admin, "ACADEMIC_ADMIN")))
+                mockMvc.perform(get("/api/attempts/{id}/result", attemptId).with(jwt(teacher, "TEACHER")))
                                 .andExpect(status().isForbidden());
         }
 
         @Test
-        void p0r3_ownOrgAcademicAdminAllowed() throws Exception {
+        void p0r3_sessionOwnerAllowed() throws Exception {
                 Long organizer = register("r2o-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "PUBLIC");
+                Long sessionId = userExamSession(organizer, "PUBLIC");
                 publicUserSubmits(sessionId, "r2o-part-" + System.nanoTime()); // result row only
-                Long examId = jdbc.queryForObject(
-                                "SELECT exam_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-                Long wsId = jdbc.queryForObject(
-                                "SELECT workspace_id FROM exams WHERE id = " + examId, Long.class);
 
-                Long admin = register("r2o-admin-" + System.nanoTime(), "STUDENT");
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT " + admin
-                                + ", id FROM roles WHERE code = 'ACADEMIC_ADMIN'");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + admin + ",'ADMIN','ACTIVE')");
-
-                MvcResult debug = mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId)
-                                .with(jwt(admin, "STUDENT", "ACADEMIC_ADMIN")))
+                MvcResult ok = mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId)
+                                .with(jwt(organizer, "TEACHER")))
                                 .andExpect(status().isOk()).andReturn();
-                assertThat(debug.getResponse().getStatus()).isEqualTo(200);
+                assertThat(ok.getResponse().getStatus()).isEqualTo(200);
         }
 
         @Test
-        void p0r3_revokedAcademicAdminDenied() throws Exception {
+        void p0r3_participantDeniedSessionResults() throws Exception {
                 Long organizer = register("r2r-organizer-" + System.nanoTime(), "TEACHER");
-                Long sessionId = orgExamSession(organizer, "PUBLIC");
-                publicUserSubmits(sessionId, "r2r-part-" + System.nanoTime()); // result row only
-                Long examId = jdbc.queryForObject(
-                                "SELECT exam_id FROM exam_sessions WHERE id = " + sessionId, Long.class);
-                Long wsId = jdbc.queryForObject(
-                                "SELECT workspace_id FROM exams WHERE id = " + examId, Long.class);
+                Long sessionId = userExamSession(organizer, "PUBLIC");
+                Long[] submitted = publicUserSubmits(sessionId, "r2r-part-" + System.nanoTime());
+                Long participant = submitted[0];
 
-                Long admin = register("r2r-admin-" + System.nanoTime(), "STUDENT");
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT " + admin
-                                + ", id FROM roles WHERE code = 'ACADEMIC_ADMIN'");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + admin + ",'ADMIN','SUSPENDED')");
-
-                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(admin, "ACADEMIC_ADMIN")))
+                // Even a participant with a submitted attempt in the session is
+                // not the creator and must be denied.
+                mockMvc.perform(get("/api/exam-sessions/{id}/results", sessionId).with(jwt(participant, "TEACHER")))
                                 .andExpect(status().isForbidden());
         }
 }

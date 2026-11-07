@@ -28,8 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * (P2-D, issue #20): the server-authorized pre-flight behind a shared session
  * link. The eligibility policy must mirror discovery/start exactly — PUBLIC
  * for authenticated platform users, CLASS_RESTRICTED for assigned-classroom
- * members with an ACTIVE workspace membership, BLOCKED denied, lifecycle and
- * attempt-quota states surfaced without leaking creator-only metadata.
+ * members, BLOCKED denied, lifecycle and
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -45,8 +44,6 @@ class SessionEligibilityIntegrationTests {
     @Autowired private MutableClock clock;
 
     private long studentUserId;
-    private long schoolId;
-    private long studentProfileId;
     private long examId;
     private long publicSessionId;
     private long classRestrictedSessionId;
@@ -62,25 +59,17 @@ class SessionEligibilityIntegrationTests {
                 + "VALUES ('sel" + tag + "','sel" + tag + "@t.com','h','Student')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                 + "SELECT ?, id FROM roles WHERE code = 'STUDENT'", studentUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('SE" + tag + "','School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES ("
-                + schoolId + "," + gl + ",'M','Math')");
-        long teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + studentUserId + "," + schoolId + ",'TC" + tag + "')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
-                + "VALUES (" + studentUserId + "," + schoolId + ",'SC" + tag + "')");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + tag + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
 
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                + "VALUES (" + schoolId + "," + subj + "," + teacherProfileId + ",'B','Bank')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, "
                 + "default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-        examId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, "
-                + "published_at, total_points) VALUES (" + schoolId + "," + subj + "," + teacherProfileId
+        examId = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, "
+                + "published_at, total_points) VALUES (" + studentUserId + "," + subj
                 + ",'E','Exam','PUBLISHED',now(),1)");
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
-                + "published_at, created_by) VALUES (" + schoolId + "," + examId + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId + ",'S',0)");
         long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
                 + "source_question_version_id, question_code, question_type, content, default_points, position, metadata) "
@@ -88,19 +77,18 @@ class SessionEligibilityIntegrationTests {
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) "
                 + "VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
 
-        publicSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+        publicSessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, "
                 + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
-                + schoolId + "," + examId + "," + teacherProfileId + ",'PUB','Public Session','OPEN','"
+                + examId + ",'PUB','Public Session','OPEN','"
                 + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
                 + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','PUBLIC',60)");
-        classRestrictedSessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
+        classRestrictedSessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, "
                 + "starts_at, ends_at, max_attempts, created_by, opened_at, visibility, duration_minutes) VALUES ("
-                + schoolId + "," + examId + "," + teacherProfileId + ",'CLS','Class Session','OPEN','"
+                + examId + ",'CLS','Class Session','OPEN','"
                 + now.minusSeconds(3600) + "','" + now.plusSeconds(7200)
                 + "',2," + studentUserId + ",'" + now.minusSeconds(3600) + "','CLASS_RESTRICTED',60)");
-        classroomId = insert("INSERT INTO classrooms (school_id, owner_teacher_id, owner_user_id, code, name) "
-                + "VALUES (" + schoolId + "," + teacherProfileId
-                + ",(SELECT user_id FROM teacher_profiles WHERE id=" + teacherProfileId + "),'CLS-A','Class A')");
+        classroomId = insert("INSERT INTO classrooms (owner_user_id, code, name) "
+                + "VALUES (" + studentUserId + ",'CLS-A','Class A')");
     }
 
     // ============================================================
@@ -159,7 +147,7 @@ class SessionEligibilityIntegrationTests {
     @Test
     void classRestricted_assignedMember_canStart() throws Exception {
         assignClassToSession(classroomId, classRestrictedSessionId);
-        addMemberToClassroom(studentProfileId, classroomId);
+        addMemberToClassroom(studentUserId, classroomId);
 
         mockMvc.perform(get(ENDPOINT, classRestrictedSessionId).with(jwtFor(studentUserId)))
                 .andExpect(status().isOk())
@@ -168,12 +156,13 @@ class SessionEligibilityIntegrationTests {
     }
 
     @Test
-    void classRestricted_memberWithRevokedWorkspaceMembership_returns403() throws Exception {
+    void classRestricted_memberRemovedFromClassroom_returns403() throws Exception {
+        // User-centric model: class membership (classroom_members.user_id) is the
+        // only gatekeeper; removing the membership revokes start access.
         assignClassToSession(classroomId, classRestrictedSessionId);
-        addMemberToClassroom(studentProfileId, classroomId);
-        jdbc.update("UPDATE workspace_memberships SET status = 'REMOVED' "
-                + "WHERE user_id = " + studentUserId + " AND workspace_id = "
-                + "(SELECT workspace_id FROM exams WHERE id = " + examId + ")");
+        addMemberToClassroom(studentUserId, classroomId);
+        jdbc.update("DELETE FROM classroom_members WHERE classroom_id = " + classroomId
+                + " AND user_id = " + studentUserId);
 
         mockMvc.perform(get(ENDPOINT, classRestrictedSessionId).with(jwtFor(studentUserId)))
                 .andExpect(status().isForbidden())
@@ -182,9 +171,10 @@ class SessionEligibilityIntegrationTests {
 
     @Test
     void blockedParticipant_returns403() throws Exception {
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, user_id, status, "
-                + "added_by, added_at, blocked_at, version) VALUES (" + schoolId + "," + publicSessionId + ","
+        jdbc.update("INSERT INTO exam_session_participants (exam_session_id, user_id, status, "
+                + "added_by, added_at, blocked_at, version) VALUES (" + publicSessionId + ","
                 + studentUserId + ",'BLOCKED'," + studentUserId + ",now(),now(),0)");
+
 
         mockMvc.perform(get(ENDPOINT, publicSessionId).with(jwtFor(studentUserId)))
                 .andExpect(status().isForbidden())
@@ -205,20 +195,9 @@ class SessionEligibilityIntegrationTests {
     // Lifecycle / window / quota states (safe actionable UI)
     // ============================================================
 
-    @Test
-    void readCapabilityWithoutStart_academicAdmin_returns403() throws Exception {
-        // TL D-BE-01: ACADEMIC_ADMIN holds EXAM_SESSION_READ but NOT
-        // ATTEMPT_START — the pre-flight must deny instead of promising a
-        // CAN_START the caller cannot perform.
-        long admin = insert("INSERT INTO users (username, email, password_hash, display_name) "
-                + "VALUES ('sel-aa','sel-aa@t.com','h','Academic Admin')");
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                + "SELECT ?, id FROM roles WHERE code = 'ACADEMIC_ADMIN'", admin);
-
-        mockMvc.perform(get(ENDPOINT, publicSessionId).with(jwtFor(admin)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
-    }
+    // (The ACADEMIC_ADMIN read-without-start denial test was removed with the
+    // admin roles in the user-centric refactor — only STUDENT/TEACHER remain,
+    // and both hold ATTEMPT_START.)
 
     @Test
     void teacherRole_holdsAttemptStart_canStart() throws Exception {
@@ -233,9 +212,6 @@ class SessionEligibilityIntegrationTests {
                 .andExpect(jsonPath("$.state").value("CAN_START"))
                 .andExpect(jsonPath("$.canStartNow").value(true));
     }
-    // Lifecycle / window / quota states (safe actionable UI)
-    // ============================================================
-
 
     @Test
     void draftSession_deniedWithoutMetadata() throws Exception {
@@ -343,25 +319,21 @@ class SessionEligibilityIntegrationTests {
                 Integer.class, publicSessionId, studentUserId);
         String submittedCols = submitted ? ", submitted_at, submission_idempotency_key" : "";
         String submittedVals = submitted ? ",'" + now + "','sk" + number + "-" + studentUserId + "'" : "";
-        return insert("INSERT INTO attempts (school_id, exam_session_id, user_id, student_profile_id, "
+        return insert("INSERT INTO attempts (exam_session_id, user_id, "
                 + "attempt_number, status, started_at, deadline_at" + submittedCols + ") VALUES ("
-                + schoolId + "," + publicSessionId + "," + studentUserId + "," + studentProfileId
+                + publicSessionId + "," + studentUserId
                 + "," + number + ",'" + status + "','" + now + "','" + now.plusSeconds(3600) + "'"
                 + submittedVals + ")");
     }
 
     private void assignClassToSession(long classroomId, long sessionId) {
-        jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id, school_id) VALUES ("
-                + sessionId + "," + classroomId + "," + schoolId + ")");
+        jdbc.update("INSERT INTO exam_session_classes (exam_session_id, classroom_id) VALUES ("
+                + sessionId + "," + classroomId + ")");
     }
 
-    private void addMemberToClassroom(long studentProfileId, long classroomId) {
-        jdbc.update("INSERT INTO classroom_members (classroom_id, student_profile_id, school_id) VALUES ("
-                + classroomId + "," + studentProfileId + "," + schoolId + ")");
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "SELECT e.workspace_id, sp.user_id, 'MEMBER', 'ACTIVE' "
-                + "FROM exams e, student_profiles sp WHERE e.id=" + examId
-                + " AND sp.id=" + studentProfileId + " ON CONFLICT DO NOTHING");
+    private void addMemberToClassroom(long memberUserId, long classroomId) {
+        jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES ("
+                + classroomId + "," + memberUserId + ")");
     }
 
     private long insert(String sql) {

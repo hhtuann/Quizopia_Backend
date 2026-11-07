@@ -176,14 +176,17 @@ class V14ExamSplitMigrationStagedFlywayTest {
                 st.executeUpdate("UPDATE exam_sections SET exam_version_id=" + legacy.v3() + " WHERE exam_version_id=999999999");
             }
 
-            // Stage 2: run the redesign migrations through latest.
+            // Stage 2: run the redesign migrations through V23 (the last
+            // school/workspace-era schema; V24/V25 later decommission that
+            // era — proven by the matrix tests and V9AttemptSchemaStagedFlywayTest).
             Flyway.configure().dataSource(url, user, pass)
-                    .locations("classpath:db/migration").load().migrate();
+                    .locations("classpath:db/migration").target("23").load().migrate();
 
             try (Connection c = DriverManager.getConnection(url, user, pass); Statement st = c.createStatement()) {
                 st.execute(script("p1-b-postflight.sql"));
                 assertThat(evidence(st, "p1-b-after.sql")).containsExactlyInAnyOrderEntriesOf(before);
-                Flyway.configure().dataSource(url, user, pass).locations("classpath:db/migration").load().validate();
+                // Validate the STAGED target: V24/V25 are pending out-of-scope migrations here.
+                Flyway.configure().dataSource(url, user, pass).locations("classpath:db/migration").target("23").load().validate();
                 // Prove the evidence detects score drift even when all counts stay equal.
                 st.executeUpdate("UPDATE grades SET final_score=0 WHERE attempt_id=" + legacy.attemptV1());
                 assertThat(evidence(st, "p1-b-after.sql")).isNotEqualTo(before);

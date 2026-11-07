@@ -52,21 +52,17 @@ class AttemptSubmitHttpIntegrationTests {
         userId = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s','s@t.com','h','S')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + userId + "," + roleId + ")");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('SS','S')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
-        long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + userId + "," + school + ",'TC')");
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + userId + "," + school + ",'SC')");
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','B')");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','M')");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + userId + "," + subj + ",'B','B')");
         long q = ins("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + userId + ")");
         long qv = ins("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q',1,'{}'::jsonb," + userId + ")");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),1)");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + userId + ")");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + userId + "," + subj + ",'E','E','PUBLISHED',now(),1)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long eq = ins("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','a',false,0),(" + eq + ",'B','b',false,1),(" + eq + ",'C','c',true,2),(" + eq + ",'D','d',false,3)");
-        long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + school + "," + exam + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + userId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + userId + ")");
+        long session = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES (" + exam + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + userId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + userId + "," + session + "," + userId + ")");
         attemptId = attemptService.startAttempt(userId, session, new StartAttemptRequest(null)).attemptId();
     }
 
@@ -169,25 +165,15 @@ class AttemptSubmitHttpIntegrationTests {
         long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o','o@t.com','h','O')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) SELECT " + other + ", school_id, 'OS' FROM student_profiles WHERE user_id=" + userId);
         assertNoInternalLeak(err(rawWith(other, keyBody(KEY)), 403, "ATTEMPT_ACCESS_DENIED"));
     }
 
-    @Test void returns403CrossSchool() throws Exception {
-        long xs = ins("INSERT INTO schools (code, name) VALUES ('XS','XS')");
-        long other = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('x','x@t.com','h','X')");
-        long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + other + "," + roleId + ")");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + other + "," + xs + ",'XS')");
-        assertNoInternalLeak(err(rawWith(other, keyBody(KEY)), 403, "ATTEMPT_ACCESS_DENIED"));
-    }
-
-    @Test void returns403NoProfileForeignUser() throws Exception {
+    @Test void returns403ForeignUserWithoutOwnership() throws Exception {
         long np = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('np','np@t.com','h','NP')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + np + "," + roleId + ")");
-        // Public learner passes the permission gate but does not own the attempt →
-        // write op on a foreign attempt → 403 (issue #4 P0-1).
+        // Permission gate passes (STUDENT role) but the caller does not own the
+        // attempt → write op on a foreign attempt → 403.
         mockMvc.perform(rawWith(np, keyBody(KEY))).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ATTEMPT_ACCESS_DENIED"));
     }
 
@@ -275,8 +261,7 @@ class AttemptSubmitHttpIntegrationTests {
         assertThat(content).doesNotContain("submissionIdempotencyKey").doesNotContain("idempotencyKey")
                 .doesNotContain("responseBody").doesNotContain("answerPayload").doesNotContain("answerKey")
                 .doesNotContain("expectedAnswer").doesNotContain("isCorrect")
-                .doesNotContain("grade").doesNotContain("studentProfileId").doesNotContain("schoolId")
-                .doesNotContain("clientInstanceId");
+                .doesNotContain("grade").doesNotContain("clientInstanceId");
     }
 
     private void assertNoInternalLeak(String content) {

@@ -57,23 +57,19 @@ class AttemptConstraintTranslationIntegrationTests {
                 + "VALUES ('ct','ct@t.com','h','CT')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + studentUserId + "," + roleId + ")");
-        long school = insert("INSERT INTO schools (code, name) VALUES ('CTS','CT School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','Math')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + studentUserId + "," + school + ",'TC')");
-        long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentUserId + "," + school + ",'SC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
+        long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','Math')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + studentUserId + "," + subj + ",'B','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q'," + studentUserId + ")");
         long qv = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','Q1',1,'{}'::jsonb," + studentUserId + ")");
-        long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','Exam','PUBLISHED',now(),1)");
-        insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',1,now()," + studentUserId + ")");
+        long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + studentUserId + "," + subj + ",'E','Exam','PUBLISHED',now(),1)");
         long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, question_code, question_type, content, default_points, position, metadata) VALUES (" + exam + "," + sec + "," + q + "," + qv + ",'QC','SINGLE_CHOICE','Q1',1,0,'{}'::jsonb)");
         jdbc.update("INSERT INTO exam_question_options (exam_question_id, option_key, content, is_correct, position) VALUES (" + eq + ",'A','A',false,0),(" + eq + ",'B','B',true,1)");
         // max_attempts=5 so the service reaches the attempt INSERT (where the test trigger fires).
-        sessionId = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                + school + "," + exam + "," + tp + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
-        insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, user_id, added_by) VALUES (" + school + "," + sessionId + "," + sp + "," + studentUserId + "," + studentUserId + ")");
+        sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + exam + ",'S','Sess','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',5," + studentUserId + ",'" + now.minusSeconds(3600) + "',60)");
+        insert("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + studentUserId + "," + sessionId + "," + studentUserId + ")");
         installTestConstraintTrigger();
     }
 
@@ -122,10 +118,10 @@ class AttemptConstraintTranslationIntegrationTests {
     void psqlFallbackExtractsConstraintName() {
         // Trigger must be inert for the seed inserts below.
         armTrigger(null);
-        long attemptId = insert("INSERT INTO attempts (school_id, exam_session_id, student_profile_id, user_id, "
-                + "attempt_number, status, started_at, deadline_at) SELECT s.school_id, s.id, sp.id, sp.user_id, "
+        long attemptId = insert("INSERT INTO attempts (exam_session_id, user_id, "
+                + "attempt_number, status, started_at, deadline_at) SELECT s.id, s.created_by, "
                 + "1, 'IN_PROGRESS', '" + clock.instant() + "', '" + clock.instant().plusSeconds(3600) + "' "
-                + "FROM exam_sessions s JOIN exam_session_participants sp ON sp.exam_session_id = s.id WHERE s.id = " + sessionId);
+                + "FROM exam_sessions s WHERE s.id = " + sessionId);
         long eqId = jdbc.queryForObject("SELECT id FROM exam_questions WHERE exam_id=(SELECT exam_id FROM exam_sessions WHERE id=" + sessionId + ")", Long.class);
         jdbc.update("INSERT INTO attempt_questions (attempt_id, exam_question_id, question_type, default_points, display_order) "
                 + "VALUES (" + attemptId + "," + eqId + ",'SINGLE_CHOICE',1,0)");

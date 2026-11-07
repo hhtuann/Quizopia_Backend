@@ -62,14 +62,10 @@ class AttemptAnswerSnapshotValidationIntegrationTests {
         userId = ins("INSERT INTO users (username, email, password_hash, display_name) VALUES ('sv','sv@t.com','h','SV')");
         long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + userId + "," + roleId + ")");
-        long school = ins("INSERT INTO schools (code, name) VALUES ('SVS','Sch')");
-        long gl = ins("INSERT INTO grade_levels (school_id, code, name) VALUES (" + school + ",'GL','G')");
-        long subj = ins("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + school + "," + gl + ",'M','M')");
-        long tp = ins("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + userId + "," + school + ",'TC')");
-        long sp = ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + userId + "," + school + ",'SC')");
-        long bank = ins("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + school + "," + subj + "," + tp + ",'B','Bank')");
-        long exam = ins("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + school + "," + subj + "," + tp + ",'E','E','PUBLISHED',now(),4)");
-        ins("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + school + "," + exam + ",1,'PUBLISHED',4,now()," + userId + ")");
+        long gl = ins("INSERT INTO grade_levels (code, name) VALUES ('GL" + java.util.UUID.randomUUID().toString().substring(0, 6) + "','G')");
+        long subj = ins("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'M','M')");
+        long bank = ins("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + userId + "," + subj + ",'B','Bank')");
+        long exam = ins("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + userId + "," + subj + ",'E','E','PUBLISHED',now(),4)");
         long sec = ins("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
         long eqSingle = eq(exam, sec, bank, "SINGLE_CHOICE", 0);
         opts(eqSingle);
@@ -78,9 +74,9 @@ class AttemptAnswerSnapshotValidationIntegrationTests {
         long eqTf = eq(exam, sec, bank, "TRUE_FALSE_MATRIX", 2);
         opts(eqTf);
         long eqNumeric = eqNumeric(exam, sec, bank, 3);
-        long session = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
-                + school + "," + exam + "," + tp + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + userId + ",'" + now.minusSeconds(3600) + "',60)");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + school + "," + session + "," + sp + "," + userId + ")");
+        long session = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) VALUES ("
+                + exam + ",'S','S','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + userId + ",'" + now.minusSeconds(3600) + "',60)");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + userId + "," + session + "," + userId + ")");
         attemptId = attemptService.startAttempt(userId, session, new StartAttemptRequest(null)).attemptId();
         aqSingleId = aqOf(eqSingle);
         aqMultipleId = aqOf(eqMultiple);

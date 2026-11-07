@@ -237,28 +237,24 @@ class AttemptQuestionTypeInvariantIntegrationTests {
             long u = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('qi" + s + "','qi" + s + "@t.com','h','QI" + s + "')");
             long studentRoleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='STUDENT'", Long.class);
             jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + u + "," + studentRoleId + ")");
-            long sch = insert("INSERT INTO schools (code, name) VALUES ('QS" + s + "','Sch')");
-            long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + sch + ",'GL','G')");
-            long subj = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + sch + "," + gl + ",'SUB','S')");
-            long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u + "," + sch + ",'TC" + s + "')");
-            long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + u + "," + sch + ",'SC" + s + "')");
-            long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + sch + "," + subj + "," + tp + ",'B" + s + "','Bank')");
+            long gl = insert("INSERT INTO grade_levels (code, name) VALUES ('GL" + s + "','G')");
+            long subj = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES (" + gl + ",'SUB" + s + "','S')");
+            long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + u + "," + subj + ",'B" + s + "','Bank')");
             boolean numeric = "NUMERIC_FILL".equals(type);
             String answerKey = numeric ? NUMERIC_KEY : "NULL";
             long q = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bank + ",'Q" + s + "'," + u + ")");
             insert("INSERT INTO question_versions (question_id, version_number, question_type, content, default_points, metadata, answer_key, created_by) "
                     + "VALUES (" + q + ",1,'" + type + "','Q',1,'{}'::jsonb," + answerKey + "," + u + ")");
-            long exam = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title, status, published_at, total_points) VALUES (" + sch + "," + subj + "," + tp + ",'E" + s + "','Exam','PUBLISHED',now(),1)");
-            insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, published_at, created_by) VALUES (" + sch + "," + exam + ",1,'PUBLISHED',1,now()," + u + ")");
+            long exam = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title, status, published_at, total_points) VALUES (" + u + "," + subj + ",'E" + s + "','Exam','PUBLISHED',now(),1)");
             long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + exam + ",'S',0)");
             long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, source_question_version_id, "
                     + "question_code, question_type, content, default_points, position, metadata, answer_key) VALUES (" + exam + "," + sec + "," + q + ",(SELECT id FROM question_versions WHERE question_id=" + q + "),'QC','" + type + "','Q',1,0,'{}'::jsonb," + answerKey + ")");
             if (optionCount > 0) {
                 insertOptions(eq, optionCount);
             }
-            long session = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) "
-                    + "VALUES (" + sch + "," + exam + "," + tp + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "',60)");
-            jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES (" + sch + "," + session + "," + sp + "," + u + ")");
+            long session = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, created_by, opened_at, duration_minutes) "
+                    + "VALUES (" + exam + ",'SE" + s + "','t','OPEN','" + now.minusSeconds(3600) + "','" + now.plusSeconds(7200) + "',2," + u + ",'" + now.minusSeconds(3600) + "',60)");
+            jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES (" + u + "," + session + "," + u + ")");
             ids[0] = u;
             ids[1] = session;
             ids[2] = eq;

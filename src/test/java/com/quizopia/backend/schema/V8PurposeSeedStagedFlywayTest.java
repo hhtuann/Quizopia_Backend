@@ -54,9 +54,12 @@ class V8PurposeSeedStagedFlywayTest {
                 st.execute("INSERT INTO schools (code, name) VALUES ('SEED-SCH','Seed School')");
             }
 
-            // 3. Continue migration (V6 creates exam tables + seeds purposes for existing schools).
+            // 3. Continue migration ONLY to V8: this test proves the school-era
+            // V8 seed on the staged schema (schools still exist at V8; V24/V25
+            // later turn purposes into the global catalog and drop schools).
             Flyway.configure().dataSource(url, user, pass)
                     .locations("classpath:db/migration")
+                    .target(MigrationVersion.fromVersion("8"))
                     .load().migrate();
 
             // 4. Assert exactly 4 purposes with correct code/title/position.
@@ -111,8 +114,12 @@ class V8PurposeSeedStagedFlywayTest {
         try (PostgreSQLContainer pg = new PostgreSQLContainer(DockerImageName.parse("postgres:17"))
                 .withDatabaseName("v8_clean").withUsername("t").withPassword("t")) {
             pg.start();
+            // Migrate only to V8 (school-era schema): a clean DB gets 0 seeded
+            // purposes because no schools exist yet. (V24 later seeds the
+            // global catalog on fresh databases — see V8ExamSchemaIntegrationTests.)
             Flyway.configure().dataSource(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())
                     .locations("classpath:db/migration")
+                    .target(MigrationVersion.fromVersion("8"))
                     .load().migrate();
 
             try (Connection c = DriverManager.getConnection(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword());

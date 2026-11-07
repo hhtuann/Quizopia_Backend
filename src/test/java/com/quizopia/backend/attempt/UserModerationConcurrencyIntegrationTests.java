@@ -51,10 +51,8 @@ class UserModerationConcurrencyIntegrationTests {
                     "l" + tag, "l" + tag + "@t.local");
             jdbc.update("INSERT INTO user_roles(user_id,role_id) SELECT ?,id FROM roles WHERE code='TEACHER'", owner);
             jdbc.update("INSERT INTO user_roles(user_id,role_id) SELECT ?,id FROM roles WHERE code='TEACHER'", learner);
-            long ws = insert("INSERT INTO workspaces(workspace_type,name,owner_user_id) VALUES ('PERSONAL','P',?)", owner);
-            jdbc.update("INSERT INTO workspace_memberships(workspace_id,user_id,role,status) VALUES (?,?,'OWNER','ACTIVE')", ws, owner);
-            long exam = insert("INSERT INTO exams(workspace_id,created_by_user_id,code,title,status,total_points,published_at) "
-                    + "VALUES (?,?,'E','Exam','PUBLISHED',1,now())", ws, owner);
+            long exam = insert("INSERT INTO exams(created_by_user_id,code,title,status,total_points,published_at) "
+                    + "VALUES (?,'E','Exam','PUBLISHED',1,now())", owner);
             long session = insert("INSERT INTO exam_sessions(exam_id,code,title,status,starts_at,ends_at,created_by,visibility,max_attempts,duration_minutes,opened_at) "
                     + "VALUES (?,'S','Session','OPEN',?,?,?,'PUBLIC',5,60,now())", exam,
                     java.sql.Timestamp.from(now.minusSeconds(60)), java.sql.Timestamp.from(now.plusSeconds(3600)), owner);
@@ -110,7 +108,7 @@ class UserModerationConcurrencyIntegrationTests {
             assertThat(jdbc.queryForObject("SELECT status FROM exam_session_participants WHERE exam_session_id=? AND user_id=?",
                     String.class, f.session, f.learner)).isEqualTo(secondBlock ? "BLOCKED" : "ELIGIBLE");
             assertThat(jdbc.queryForObject("SELECT count(*) FROM exam_session_participants WHERE exam_session_id=? "
-                    + "AND student_profile_id IS NULL AND school_id IS NULL AND ((status='BLOCKED')=(blocked_at IS NOT NULL))",
+                    + "AND ((status='BLOCKED')=(blocked_at IS NOT NULL))",
                     Integer.class, f.session)).isOne();
             assertThat(jdbc.queryForObject("SELECT count(*) FROM attempts WHERE exam_session_id=? AND status='SUBMITTED'",
                     Integer.class, f.session)).isOne();

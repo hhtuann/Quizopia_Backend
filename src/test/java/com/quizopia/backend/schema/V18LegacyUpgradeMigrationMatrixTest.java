@@ -101,9 +101,18 @@ class V18LegacyUpgradeMigrationMatrixTest {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getInt(1)).isEqualTo(1);
                 }
+                // V25 (user-centric contract) drops the workspace era; the
+                // legacy workspace row is gone WITH its table, and the user
+                // keeps working under the STUDENT/TEACHER role model.
                 try (ResultSet rs = st.executeQuery(
-                        "SELECT count(*) FROM workspaces w JOIN users u ON u.id = w.owner_user_id"
-                                + " WHERE u.username = 'matrix_legacy' AND w.workspace_type = 'PERSONAL'")) {
+                        "SELECT count(*) FROM information_schema.tables WHERE table_name = 'workspaces'")) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getInt(1)).as("workspaces must be gone after V25").isZero();
+                }
+                try (ResultSet rs = st.executeQuery(
+                        "SELECT count(*) FROM users u JOIN user_roles ur ON ur.user_id = u.id"
+                                + " JOIN roles r ON r.id = ur.role_id"
+                                + " WHERE u.username = 'matrix_legacy' AND r.code IN ('STUDENT','TEACHER')")) {
                     assertThat(rs.next()).isTrue();
                     assertThat(rs.getInt(1)).isEqualTo(1);
                 }
