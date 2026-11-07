@@ -460,26 +460,24 @@ public class ExamSessionService {
         // Effective roster (issue #4 P0-R5): assigned-class members ∪ direct
         // participants ∪ DISTINCT actual attempt participants (user-based —
         // includes PUBLIC profile-less learners who already started).
-        String sql = "SELECT DISTINCT u.id AS uid, sp.id AS pid, sp.student_code AS code, u.display_name AS name "
+        String sql = "SELECT DISTINCT u.id AS uid, u.display_name AS name "
                 + "FROM ( "
                 + "  SELECT cm.user_id FROM exam_session_classes esc "
                 + "  JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
                 + "  WHERE esc.exam_session_id = :sid "
                 + "  UNION "
-                + "  SELECT sp2.user_id FROM exam_session_participants p "
-                + "  JOIN student_profiles sp2 ON sp2.id = p.student_profile_id "
+                + "  SELECT p.user_id FROM exam_session_participants p "
                 + "  WHERE p.exam_session_id = :sid "
                 + "  UNION "
                 + "  SELECT a.user_id FROM attempts a WHERE a.exam_session_id = :sid "
                 + ") AS roster "
                 + "JOIN users u ON u.id = roster.user_id "
-                + "LEFT JOIN student_profiles sp ON sp.user_id = u.id "
-                + "ORDER BY code NULLS LAST, uid";
+                + "ORDER BY uid";
         return jdbc.query(sql, new MapSqlParameterSource("sid", sessionId),
                 (rs, n) -> new SessionRosterItem(
                         rs.getLong("uid"),
-                        rs.getObject("pid") != null ? rs.getLong("pid") : null,
-                        rs.getString("code"), rs.getString("name")));
+                        null,
+                        null, rs.getString("name")));
     }
 
     // ============================================================
