@@ -17,13 +17,8 @@ import java.util.Optional;
 
 public interface ExamSessionRepository extends JpaRepository<ExamSession, Long> {
 
-    Optional<ExamSession> findByIdAndOwnerTeacherId(Long id, Long ownerTeacherId);
-
-    boolean existsByOwnerTeacherIdAndCodeIgnoreCase(Long ownerTeacherId, String code);
-
     boolean existsByCreatedByAndCodeIgnoreCase(Long createdBy, String code);
 
-    List<ExamSession> findAllByOwnerTeacherId(Long ownerTeacherId);
 
     Page<ExamSession> findAllByExamIdOrderByIdDesc(Long examId, Pageable pageable);
 

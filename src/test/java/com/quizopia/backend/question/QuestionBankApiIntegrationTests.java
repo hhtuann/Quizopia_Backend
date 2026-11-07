@@ -1,7 +1,10 @@
 package com.quizopia.backend.question;
 
-import com.quizopia.backend.academic.domain.model.*;
-import com.quizopia.backend.academic.repository.*;
+import com.quizopia.backend.academic.domain.model.AcademicStatus;
+import com.quizopia.backend.academic.domain.model.GradeLevel;
+import com.quizopia.backend.academic.domain.model.Subject;
+import com.quizopia.backend.academic.repository.GradeLevelRepository;
+import com.quizopia.backend.academic.repository.SubjectRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.question.domain.model.*;
@@ -26,11 +29,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 
 /**
  * Integration tests for the three Question Bank endpoints (Batch B1) using
- * MockMvc + Testcontainers. Authorization is tested via ownership/school-scope,
- * not just URL security.
+ * MockMvc + Testcontainers. Authorization is tested via user ownership,
+ * not just URL security (user-centric model: banks are owned by their
+ * creating user; subjects come from the global academic catalog).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -44,13 +49,9 @@ class QuestionBankApiIntegrationTests {
         @Autowired
         private UserRepository userRepo;
         @Autowired
-        private SchoolRepository schoolRepo;
-        @Autowired
         private GradeLevelRepository glRepo;
         @Autowired
         private SubjectRepository subjectRepo;
-        @Autowired
-        private TeacherProfileRepository teacherRepo;
         @Autowired
         private QuestionBankRepository bankRepo;
         @Autowired
@@ -59,27 +60,15 @@ class QuestionBankApiIntegrationTests {
         private QuestionVersionRepository versionRepo;
         @Autowired
         private org.springframework.jdbc.core.JdbcTemplate jdbc;
-        @Autowired
-        private com.quizopia.backend.workspace.application.OrganizationWorkspaceResolver organizationWorkspaceResolver;
 
         private Long teacherUserId;
-        private Long teacherProfileId;
-        private Long schoolId;
+        private Long gradeLevelId;
         private Long subjectId;
-        private Long otherSchoolId;
 
-        /**
-         * Persists a bank with explicit workspace/creator ownership resolved
-         * from the fixture school/teacher (public platform foundation, ADR-001
-         * §2.2 — no reliance on the transitional insert trigger).
-         */
-        private QuestionBank saveBank(Long sid, Long subjId, Long tpId, String code, String name) {
-                Long wsId = jdbc.queryForObject(
-                                "SELECT quizopia_org_workspace_for_school(" + sid + ")", Long.class);
-                Long ownerUser = jdbc.queryForObject(
-                                "SELECT user_id FROM teacher_profiles WHERE id = " + tpId, Long.class);
+        /** Persists a bank owned by the fixture teacher. */
+        private QuestionBank saveBank(Long subjId, String code, String name) {
                 return bankRepo.saveAndFlush(new QuestionBank(
-                                wsId, ownerUser, sid, subjId, tpId, code, name));
+                                teacherUserId, subjId, code, name));
         }
 
         @BeforeEach
@@ -92,24 +81,11 @@ class QuestionBankApiIntegrationTests {
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherUserId);
 
-                School school = schoolRepo.saveAndFlush(new School("API-SCH", "API School"));
-                schoolId = school.getId();
-                GradeLevel gl = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL", "Grade"));
+                GradeLevel gl = glRepo.saveAndFlush(new GradeLevel("GL-API", "Grade"));
+                gradeLevelId = gl.getId();
                 Subject subject = subjectRepo.saveAndFlush(
-                                new Subject(schoolId, gl.getId(), "SUB", "Subject"));
+                                new Subject(gradeLevelId, "SUB-API", "Subject"));
                 subjectId = subject.getId();
-
-                TeacherProfile tp = teacherRepo.saveAndFlush(
-                                new TeacherProfile(teacherUserId, schoolId, "TC-API"));
-                teacherProfileId = tp.getId();
-
-                // Lazily provision the org workspace via the Java resolver so
-                // the teacher gets an ACTIVE EDITOR membership (mirrors the
-                // V10 backfill; the raw SQL fixture path does not backfill).
-                organizationWorkspaceResolver.requireOrganizationWorkspaceId(schoolId);
-
-                // A different school (for cross-school tests)
-                otherSchoolId = schoolRepo.saveAndFlush(new School("API-SCH2", "API School 2")).getId();
         }
 
         // ==================== POST /api/question-banks ====================
@@ -129,17 +105,31 @@ class QuestionBankApiIntegrationTests {
         }
 
         @Test
-        void createBank_subjectFromDifferentSchool_returns403() throws Exception {
-                GradeLevel gl2 = glRepo.saveAndFlush(new GradeLevel(otherSchoolId, "GL2", "G2"));
-                Subject crossSubject = subjectRepo.saveAndFlush(
-                                new Subject(otherSchoolId, gl2.getId(), "XS", "Cross"));
+        void createBank_withoutSubject_succeedsWithNullSubject() throws Exception {
+                // subjectId is optional for every teacher (global catalog metadata).
+                mockMvc.perform(post("/api/question-banks")
+                                .with(jwtFor(teacherUserId))
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"code\":\"BANK-NOSUBJ\",\"name\":\"No Subject\"}"))
+                                .andExpect(status().isCreated())
+                                .andExpect(jsonPath("$.code").value("BANK-NOSUBJ"))
+                                .andExpect(jsonPath("$.subject").value(nullValue()));
+        }
+
+        @Test
+        void createBank_inactiveSubject_returns404() throws Exception {
+                // Global-catalog subjects are referenceable only while ACTIVE.
+                Subject inactive = subjectRepo.saveAndFlush(
+                                new Subject(gradeLevelId, "SUB-INACT", "Inactive Subject"));
+                inactive.setStatus(AcademicStatus.INACTIVE);
+                subjectRepo.saveAndFlush(inactive);
 
                 mockMvc.perform(post("/api/question-banks")
                                 .with(jwtFor(teacherUserId))
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content(bankRequestJson("BANK2", "Bank Two", crossSubject.getId())))
-                                .andExpect(status().isForbidden())
-                                .andExpect(jsonPath("$.code").value("QUESTION_SUBJECT_SCHOOL_MISMATCH"));
+                                .content(bankRequestJson("BANK-INA", "Inactive", inactive.getId())))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.code").value("QUESTION_SUBJECT_NOT_FOUND"));
         }
 
         @Test
@@ -154,7 +144,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void createBank_duplicateCodeDifferentCase_returns409() throws Exception {
-                saveBank(schoolId, subjectId, teacherProfileId, "ALREADY", "Existing");
+                saveBank(subjectId, "ALREADY", "Existing");
 
                 mockMvc.perform(post("/api/question-banks")
                                 .with(jwtFor(teacherUserId))
@@ -167,7 +157,7 @@ class QuestionBankApiIntegrationTests {
         @Test
         void createBank_noRoleOrPermission_returns403() throws Exception {
                 // User has NO role assignments at all → QUESTION_BANK_CREATE permission
-                // check fails before the teacher-profile resolution is reached.
+                // check fails before ownership resolution is reached.
                 User nonTeacher = userRepo.saveAndFlush(
                                 new User("no-profile", "np@test.com", "hash", "No Profile"));
 
@@ -177,33 +167,6 @@ class QuestionBankApiIntegrationTests {
                                 .content(bankRequestJson("BANK-X", "X", subjectId)))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
-        }
-
-        @Test
-        void createBank_teacherRoleWithoutProfile_personalWorkspace() throws Exception {
-                // Public platform foundation (issue #1 A3): a user with the TEACHER
-                // role but no TeacherProfile authors in their personal workspace —
-                // no school required. Subject is not supported there.
-                User teacherNoProfile = userRepo.saveAndFlush(
-                                new User("teacher-no-tp", "tnp@test.com", "hash", "Teacher No TP"));
-                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'",
-                                teacherNoProfile.getId());
-
-                mockMvc.perform(post("/api/question-banks")
-                                .with(jwtFor(teacherNoProfile.getId()))
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"code\":\"BANK-NTP\",\"name\":\"No TP\"}"))
-                                .andExpect(status().isCreated())
-                                .andExpect(jsonPath("$.code").value("BANK-NTP"));
-
-                // Subject references a school taxonomy → rejected for personal banks.
-                mockMvc.perform(post("/api/question-banks")
-                                .with(jwtFor(teacherNoProfile.getId()))
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content(bankRequestJson("BANK-NTP2", "No TP 2", subjectId)))
-                                .andExpect(status().isBadRequest())
-                                .andExpect(jsonPath("$.code").value("QUESTION_VALIDATION_ERROR"));
         }
 
         @Test
@@ -218,13 +181,12 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listMyBanks_returnsOnlyOwnedBanks() throws Exception {
-                saveBank(schoolId, subjectId, teacherProfileId, "MY-1", "My One");
+                saveBank(subjectId, "MY-1", "My One");
 
-                // Another teacher's bank (same school) — must NOT appear
+                // Another teacher's bank — must NOT appear
                 User other = userRepo.saveAndFlush(new User("other-t", "ot@test.com", "hash", "Other"));
-                TeacherProfile otherTp = teacherRepo.saveAndFlush(
-                                new TeacherProfile(other.getId(), schoolId, "TC-OTHER"));
-                saveBank(schoolId, subjectId, otherTp.getId(), "OTHER-1", "Other Bank");
+                bankRepo.saveAndFlush(new QuestionBank(
+                                other.getId(), subjectId, "OTHER-1", "Other Bank"));
 
                 mockMvc.perform(get("/api/question-banks/my")
                                 .with(jwtFor(teacherUserId)))
@@ -237,7 +199,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listMyBanks_searchCaseInsensitive() throws Exception {
-                saveBank(schoolId, subjectId, teacherProfileId, "ALGEBRA", "Algebra Bank");
+                saveBank(subjectId, "ALGEBRA", "Algebra Bank");
 
                 mockMvc.perform(get("/api/question-banks/my")
                                 .param("search", "algebra")
@@ -252,7 +214,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listQuestions_returnsCurrentVersionData() throws Exception {
-                QuestionBank bank = saveBank(schoolId, subjectId, teacherProfileId, "QB-LIST", "QB List");
+                QuestionBank bank = saveBank(subjectId, "QB-LIST", "QB List");
                 Question q = questionRepo.saveAndFlush(
                                 new Question(bank.getId(), "Q1", teacherUserId));
                 versionRepo.saveAndFlush(new QuestionVersion(
@@ -276,9 +238,14 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listQuestions_crossOwner_returns403() throws Exception {
-                QuestionBank bank = saveBank(schoolId, subjectId, teacherProfileId, "QB-OWN", "QB Own");
+                QuestionBank bank = saveBank(subjectId, "QB-OWN", "QB Own");
 
+                // A fully-privileged TEACHER (QUESTION_READ passes) who is NOT
+                // the bank creator → ownership check denies.
                 User other = userRepo.saveAndFlush(new User("other-q", "oq@test.com", "hash", "Other Q"));
+                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", other.getId());
+
                 mockMvc.perform(get("/api/question-banks/{bankId}/questions", bank.getId())
                                 .with(jwtFor(other.getId())))
                                 .andExpect(status().isForbidden())
@@ -323,7 +290,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listQuestions_permissionRevoked_returns403() throws Exception {
-                QuestionBank bank = saveBank(schoolId, subjectId, teacherProfileId, "PERM-Q", "PermQ");
+                QuestionBank bank = saveBank(subjectId, "PERM-Q", "PermQ");
                 revokePermission("QUESTION_READ");
                 mockMvc.perform(get("/api/question-banks/{id}/questions", bank.getId())
                                 .with(jwtFor(teacherUserId)))
@@ -335,7 +302,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listQuestions_filterByType() throws Exception {
-                QuestionBank bank = saveBank(schoolId, subjectId, teacherProfileId, "QB-TYPE", "QB Type");
+                QuestionBank bank = saveBank(subjectId, "QB-TYPE", "QB Type");
                 Question q1 = questionRepo.saveAndFlush(new Question(bank.getId(), "Q-S", teacherUserId));
                 versionRepo.saveAndFlush(new QuestionVersion(q1.getId(), 1,
                                 QuestionType.SINGLE_CHOICE, "single?", null, QuestionDifficulty.EASY,
@@ -355,7 +322,7 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listQuestions_paginationMetadata() throws Exception {
-                QuestionBank bank = saveBank(schoolId, subjectId, teacherProfileId, "QB-PAGE", "QB Page");
+                QuestionBank bank = saveBank(subjectId, "QB-PAGE", "QB Page");
                 for (int i = 1; i <= 5; i++) {
                         Question q = questionRepo.saveAndFlush(
                                         new Question(bank.getId(), "QP-" + i, teacherUserId));
@@ -377,11 +344,10 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void listMyBanks_subjectIdFilter() throws Exception {
-                GradeLevel gl = glRepo.findAll().get(0);
                 Subject subject2 = subjectRepo.saveAndFlush(
-                                new Subject(schoolId, gl.getId(), "SUB2", "Subject 2"));
-                saveBank(schoolId, subjectId, teacherProfileId, "F-S1", "Filter Subj1");
-                saveBank(schoolId, subject2.getId(), teacherProfileId, "F-S2", "Filter Subj2");
+                                new Subject(gradeLevelId, "SUB-API2", "Subject 2"));
+                saveBank(subjectId, "F-S1", "Filter Subj1");
+                saveBank(subject2.getId(), "F-S2", "Filter Subj2");
 
                 mockMvc.perform(get("/api/question-banks/my")
                                 .param("subjectId", subjectId.toString())
@@ -495,18 +461,19 @@ class QuestionBankApiIntegrationTests {
 
         @Test
         void templateEndpoint_nonTeacherWithQuestionCreate_returns403() throws Exception {
-                // Create a user with SYSTEM_ADMIN role (NOT TEACHER)
-                User admin = userRepo.saveAndFlush(
-                                new User("admin-tpl", "atpl@test.com", "hash", "Admin"));
+                // A STUDENT-role user (NOT TEACHER) granted QUESTION_CREATE:
+                // the permission alone must not unlock the Teacher-only template.
+                User student = userRepo.saveAndFlush(
+                                new User("student-tpl", "stpl@test.com", "hash", "Student"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
-                                + "SELECT ?, id FROM roles WHERE code = 'SYSTEM_ADMIN'", admin.getId());
-                // Temporarily grant QUESTION_CREATE to SYSTEM_ADMIN role
+                                + "SELECT ?, id FROM roles WHERE code = 'STUDENT'", student.getId());
+                // Temporarily grant QUESTION_CREATE to the STUDENT role
                 jdbc.update("INSERT INTO role_permissions (role_id, permission_id) "
                                 + "SELECT r.id, p.id FROM roles r, permissions p "
-                                + "WHERE r.code = 'SYSTEM_ADMIN' AND p.code = 'QUESTION_CREATE'");
+                                + "WHERE r.code = 'STUDENT' AND p.code = 'QUESTION_CREATE'");
 
                 mockMvc.perform(get("/api/questions/import-template")
-                                .with(jwtFor(admin.getId())))
+                                .with(jwtFor(student.getId())))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
         }

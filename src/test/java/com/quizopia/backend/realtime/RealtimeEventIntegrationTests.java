@@ -48,10 +48,8 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
         teacherId = teacherIdForSession(sessionId);
         teacherToken = accessToken(teacherId, "evt-tch", List.of("TEACHER"));
         studentId = insertUserWithRole("evt-stu-" + tag, "STUDENT");
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + studentId + "," + school + ",'SC" + tag + "')");
-        jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                + school + "," + sessionId + ",(SELECT id FROM student_profiles WHERE user_id=" + studentId + ")," + teacherId + ")");
+        jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                + studentId + "," + sessionId + "," + teacherId + ")");
     }
 
     @Test
@@ -108,10 +106,9 @@ class RealtimeEventIntegrationTests extends RealtimeStompTestBase {
     @Test
     void sessionOpenSendsSessionOpened() throws Exception {
         Instant realNow = Instant.now();
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
         long exam = jdbc.queryForObject("SELECT exam_id FROM exam_sessions WHERE id=" + sessionId, Long.class);
-        long schedSession = ins("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
-                + school + "," + exam + ",(SELECT owner_teacher_id FROM exam_sessions WHERE id=" + sessionId + "),'SCH','t','SCHEDULED','" + realNow.minusSeconds(3600) + "','" + realNow.plusSeconds(7200) + "',2,60," + teacherId + ")");
+        long schedSession = ins("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES ("
+                + exam + ",'SCH','t','SCHEDULED','" + realNow.minusSeconds(3600) + "','" + realNow.plusSeconds(7200) + "',2,60," + teacherId + ")");
         try (StompTestConnection conn = connect(teacherToken)) {
             CopyOnWriteArrayList<String> payloads = new CopyOnWriteArrayList<>();
             CountDownLatch eventLatch = new CountDownLatch(1);

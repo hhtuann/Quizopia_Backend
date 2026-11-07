@@ -33,16 +33,16 @@ class RoleRepositoryIntegrationTests {
 
     @Test
     void findByCodeReturnsFlywaySeededRole() {
-        Optional<Role> maybeSystemAdmin = roleRepository.findByCode("SYSTEM_ADMIN");
+        Optional<Role> maybeTeacher = roleRepository.findByCode("TEACHER");
 
-        assertThat(maybeSystemAdmin).isPresent();
-        assertThat(maybeSystemAdmin.get().getId()).isNotNull();
-        assertThat(maybeSystemAdmin.get().getCode()).isEqualTo("SYSTEM_ADMIN");
+        assertThat(maybeTeacher).isPresent();
+        assertThat(maybeTeacher.get().getId()).isNotNull();
+        assertThat(maybeTeacher.get().getCode()).isEqualTo("TEACHER");
     }
 
     @Test
     void findByCodeIsCaseSensitiveAndReturnsEmptyForUnknownCode() {
-        Optional<Role> lowerCased = roleRepository.findByCode("system_admin");
+        Optional<Role> lowerCased = roleRepository.findByCode("teacher");
         assertThat(lowerCased).isEmpty();
 
         Optional<Role> unknown = roleRepository.findByCode("DOES_NOT_EXIST");

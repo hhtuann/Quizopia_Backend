@@ -1,14 +1,15 @@
 package com.quizopia.backend.authentication;
 
 import com.quizopia.backend.academic.application.DemoDataSeeder;
-import com.quizopia.backend.academic.repository.SchoolRepository;
-import com.quizopia.backend.academic.repository.StudentProfileRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.authentication.application.RegistrationService;
 import com.quizopia.backend.authentication.dto.AccountType;
 import com.quizopia.backend.authentication.dto.RegisterRequest;
 import com.quizopia.backend.authentication.dto.RegisterResponse;
 import com.quizopia.backend.authentication.exception.AuthenticationException;
+import com.quizopia.backend.classroom.repository.ClassroomRepository;
+import com.quizopia.backend.classroom.repository.ClassroomMemberRepository;
+import com.quizopia.backend.identity.repository.UserRepository;
+import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,14 +18,16 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Verifies that registration (even with demo flag ON) does NOT auto-create
- * academic profiles (V11 Student Onboarding). Students/teachers self-register →
- * PENDING (user + role, no profile). ACADEMIC_ADMIN assigns them to a school
- * via the StudentOnboardingService.
+ * Verifies that registration (even with demo flag ON) does NOT grant anything
+ * beyond the STUDENT role, and that the demo seeder provisions the demo
+ * teacher, the three demo students, and the DEMO-CLASS classroom with its
+ * roster.
  *
  * <p>Uses a dedicated Spring context with the demo flag enabled so the
  * {@link DemoDataSeeder} runs at startup.
@@ -39,18 +42,32 @@ class RegistrationDemoModeIntegrationTests {
     private RegistrationService registrationService;
 
     @Autowired
-    private TeacherProfileRepository teacherProfileRepository;
+    private UserRepository userRepository;
 
     @Autowired
-    private StudentProfileRepository studentProfileRepository;
+    private UserRoleRepository userRoleRepository;
 
     @Autowired
-    private SchoolRepository schoolRepository;
+    private ClassroomRepository classroomRepository;
+
+    @Autowired
+    private ClassroomMemberRepository classroomMemberRepository;
 
     @Test
-    void demoSchoolSeeded() {
-        assertThat(schoolRepository.findByCodeIgnoreCase(DemoDataSeeder.DEMO_SCHOOL_CODE))
-                .isPresent();
+    void demoUsersAndClassroomSeeded() {
+        var teacher = userRepository.findByUsernameIgnoreCase("demo-teacher").orElseThrow();
+        assertThat(userRoleRepository.findActiveRoleCodesByUserId(teacher.getId(), Instant.now()))
+                .containsExactly("TEACHER");
+        var classroom = classroomRepository
+                .findByOwnerUserIdAndCodeIgnoreCase(teacher.getId(), DemoDataSeeder.DEMO_CLASSROOM_CODE)
+                .orElseThrow();
+        for (int i = 1; i <= 3; i++) {
+            var student = userRepository.findByUsernameIgnoreCase("demo-student-" + i).orElseThrow();
+            assertThat(userRoleRepository.findActiveRoleCodesByUserId(student.getId(), Instant.now()))
+                    .containsExactly("STUDENT");
+            assertThat(classroomMemberRepository.existsByClassroomIdAndUserId(
+                    classroom.getId(), student.getId())).isTrue();
+        }
     }
 
     @Test
@@ -62,12 +79,12 @@ class RegistrationDemoModeIntegrationTests {
     }
 
     @Test
-    void studentRegistrationDoesNotCreateProfile() {
+    void studentRegistrationGrantsOnlyStudentRole() {
         RegisterResponse resp = registrationService.register(request(
                 "v11-student-1", "v11s1@test.com", AccountType.STUDENT), null);
         assertThat(resp.id()).isNotNull();
-        // V11: registration creates ONLY user + role, NOT a profile.
-        assertThat(studentProfileRepository.existsByUserId(resp.id())).isFalse();
+        assertThat(userRoleRepository.findActiveRoleCodesByUserId(resp.id(), Instant.now()))
+                .containsExactly("STUDENT");
     }
 
     private static RegisterRequest request(String username, String email, AccountType type) {

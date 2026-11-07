@@ -10,7 +10,6 @@ import com.quizopia.backend.identity.repository.UserRoleRepository;
 import com.quizopia.backend.security.password.PasswordHasher;
 import com.quizopia.backend.security.token.RefreshTokenHasher;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
-import com.quizopia.backend.workspace.application.WorkspaceProvisioningService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -73,15 +72,13 @@ class TwoConnectionGoogleRaceIntegrationTests {
                 RoleRepository roleRepository,
                 PasswordHasher passwordHasher,
                 RefreshTokenHasher sha256Hasher,
-                WorkspaceProvisioningService workspaceProvisioningService,
                 java.time.Clock clock,
                 com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurityService,
                 TransactionTemplate tx,
-                org.springframework.transaction.PlatformTransactionManager txManager,
                 JdbcTemplate jdbc) {
             return new Coordinated(externalIdentityRepository, oauthLoginCodeRepository,
                     userRepository, userRoleRepository, roleRepository, passwordHasher,
-                    sha256Hasher, workspaceProvisioningService, clock, credentialSecurityService, tx, txManager, jdbc);
+                    sha256Hasher, clock, credentialSecurityService, tx, jdbc);
         }
     }
 
@@ -108,17 +105,15 @@ class TwoConnectionGoogleRaceIntegrationTests {
                 RoleRepository roleRepository,
                 PasswordHasher passwordHasher,
                 RefreshTokenHasher sha256Hasher,
-                WorkspaceProvisioningService workspaceProvisioningService,
                 java.time.Clock clock,
                 com.quizopia.backend.authentication.application.CredentialSecurityService credentialSecurityService,
                 TransactionTemplate tx,
-                org.springframework.transaction.PlatformTransactionManager txManager,
                 JdbcTemplate jdbc) {
             super(externalIdentityRepository, oauthLoginCodeRepository, userRepository,
                     userRoleRepository, roleRepository, passwordHasher, sha256Hasher,
-                    workspaceProvisioningService, clock, tx, credentialSecurityService);
+                    clock, tx, credentialSecurityService);
             this.jdbc = jdbc;
-            this.winnerTx = new TransactionTemplate(txManager);
+            this.winnerTx = new TransactionTemplate(tx.getTransactionManager());
         }
 
         @Override

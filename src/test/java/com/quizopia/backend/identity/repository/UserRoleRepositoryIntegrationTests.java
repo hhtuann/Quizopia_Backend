@@ -21,8 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link UserRoleRepository#findActiveRoleCodesByUserId(Long, Instant)}
  * running against a real PostgreSQL instance via Testcontainers
  * (see {@link PostgresTestContainerConfiguration}).
- *
- * <p>Roles used here are the four foundational roles seeded by Flyway
+ * <p>Roles used here are the two foundational roles seeded by Flyway
  * migration {@code V3__seed_roles_and_permissions.sql}; no roles are created.
  * Each test is wrapped in a transaction that is rolled back, so no assignment
  * state leaks between tests.
@@ -53,13 +52,9 @@ class UserRoleRepositoryIntegrationTests {
                 )
         );
 
-        Role systemAdmin = roleRepository.findByCode("SYSTEM_ADMIN").orElseThrow();
-        Role academicAdmin = roleRepository.findByCode("ACADEMIC_ADMIN").orElseThrow();
         Role teacher = roleRepository.findByCode("TEACHER").orElseThrow();
         Role student = roleRepository.findByCode("STUDENT").orElseThrow();
 
-        assertThat(systemAdmin).isNotNull();
-        assertThat(academicAdmin).isNotNull();
         assertThat(teacher).isNotNull();
         assertThat(student).isNotNull();
 
@@ -70,16 +65,14 @@ class UserRoleRepositoryIntegrationTests {
         Instant evaluationNow = Instant.now().plusSeconds(86400);
 
         userRoleRepository.saveAllAndFlush(List.of(
-                new UserRole(user, systemAdmin, null, null),
-                new UserRole(user, academicAdmin, null, evaluationNow.plusSeconds(3600)),
-                new UserRole(user, teacher, null, evaluationNow.minusSeconds(3600)),
-                new UserRole(user, student, null, evaluationNow)
+                new UserRole(user, teacher, null, null),
+                new UserRole(user, student, null, evaluationNow.minusSeconds(3600))
         ));
 
         List<String> activeCodes =
                 userRoleRepository.findActiveRoleCodesByUserId(user.getId(), evaluationNow);
 
-        assertThat(activeCodes).containsExactlyInAnyOrder("SYSTEM_ADMIN", "ACADEMIC_ADMIN");
+        assertThat(activeCodes).containsExactly("TEACHER");
     }
 
     @Test

@@ -2,13 +2,9 @@ package com.quizopia.backend.academic;
 
 import com.quizopia.backend.academic.domain.model.AcademicStatus;
 import com.quizopia.backend.academic.domain.model.GradeLevel;
-import com.quizopia.backend.academic.domain.model.School;
 import com.quizopia.backend.academic.domain.model.Subject;
-import com.quizopia.backend.academic.domain.model.TeacherProfile;
 import com.quizopia.backend.academic.repository.GradeLevelRepository;
-import com.quizopia.backend.academic.repository.SchoolRepository;
 import com.quizopia.backend.academic.repository.SubjectRepository;
-import com.quizopia.backend.academic.repository.TeacherProfileRepository;
 import com.quizopia.backend.identity.domain.model.User;
 import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
@@ -28,9 +24,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Integration tests for {@code GET /api/subjects} (school-scoped, SUBJECT_READ)
- * using MockMvc + Testcontainers. Mirrors
- * {@code QuestionBankApiIntegrationTests}.
+ * Integration tests for {@code GET /api/subjects} — the GLOBAL read-only
+ * subject catalog (user-centric refactor: no school scope, no schoolId
+ * parameter, no write endpoints) — using MockMvc + Testcontainers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -44,19 +40,13 @@ class SubjectApiIntegrationTests {
         @Autowired
         private UserRepository userRepo;
         @Autowired
-        private SchoolRepository schoolRepo;
-        @Autowired
         private GradeLevelRepository glRepo;
         @Autowired
         private SubjectRepository subjectRepo;
         @Autowired
-        private TeacherProfileRepository teacherRepo;
-        @Autowired
         private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
         private Long teacherUserId;
-        private Long schoolId;
-        private Long otherSchoolId;
         private Long gradeLevel1Id;
         private Long gradeLevel2Id;
 
@@ -69,55 +59,40 @@ class SubjectApiIntegrationTests {
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherUserId);
 
-                School school = schoolRepo.saveAndFlush(new School("SUBJ-SCH", "Subject School"));
-                schoolId = school.getId();
-                otherSchoolId = schoolRepo.saveAndFlush(new School("SUBJ-SCH2", "Other School")).getId();
+                // V24 seeds the global catalog on a fresh DB (45 subjects /
+                // 3 grade levels); clear it so list counts are deterministic.
+                // @Transactional rolls the delete back after each test.
+                jdbc.update("DELETE FROM subjects");
+                jdbc.update("DELETE FROM grade_levels");
 
-                GradeLevel gl1 = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL10", "Grade 10"));
-                GradeLevel gl2 = glRepo.saveAndFlush(new GradeLevel(schoolId, "GL11", "Grade 11"));
+                GradeLevel gl1 = glRepo.saveAndFlush(new GradeLevel("GL10", "Grade 10"));
+                GradeLevel gl2 = glRepo.saveAndFlush(new GradeLevel("GL11", "Grade 11"));
                 gradeLevel1Id = gl1.getId();
                 gradeLevel2Id = gl2.getId();
 
-                // Subjects in the caller's school.
-                Subject math = subjectRepo.saveAndFlush(
-                                new Subject(schoolId, gl1.getId(), "GEN-MATH", "Toán"));
-                math.getId();
-                subjectRepo.saveAndFlush(new Subject(schoolId, gl1.getId(), "GEN-PHYS", "Vật lý"));
-                subjectRepo.saveAndFlush(new Subject(schoolId, gl2.getId(), "ADV-LIT", "Ngữ văn"));
+                subjectRepo.saveAndFlush(
+                                new Subject(gl1.getId(), "GEN-MATH", "Toán"));
+                subjectRepo.saveAndFlush(new Subject(gl1.getId(), "GEN-PHYS", "Vật lý"));
+                subjectRepo.saveAndFlush(new Subject(gl2.getId(), "ADV-LIT", "Ngữ văn"));
 
-                // Archived subject in the same school — must be excluded.
-                Subject archived = new Subject(schoolId, gl1.getId(), "OLD", "Cũ");
+                // Archived subject — must be excluded from the catalog listing.
+                Subject archived = new Subject(gl1.getId(), "OLD", "Cũ");
                 archived.setStatus(AcademicStatus.ARCHIVED);
                 subjectRepo.saveAndFlush(archived);
-
-                // Subject in a DIFFERENT school — must be excluded.
-                GradeLevel otherGl = glRepo.saveAndFlush(new GradeLevel(otherSchoolId, "OGL", "Other GL"));
-                subjectRepo.saveAndFlush(new Subject(otherSchoolId, otherGl.getId(), "XS", "Cross"));
-
-                teacherRepo.saveAndFlush(new TeacherProfile(teacherUserId, schoolId, "TC-SUBJ"));
         }
 
-        // ==================== 200 + school scope ====================
+        // ==================== 200 + global catalog ====================
 
         @Test
-        void listSubjects_returnsOnlyCallerSchoolActiveSubjects() throws Exception {
+        void listSubjects_returnsAllActiveGlobalSubjects() throws Exception {
                 mockMvc.perform(get("/api/subjects").with(jwtFor(teacherUserId)))
                                 .andExpect(status().isOk())
-                                // 3 ACTIVE subjects in the caller's school (math, phys, lit) —
-                                // archived + cross-school excluded.
+                                // 3 ACTIVE subjects (math, phys, lit) — archived excluded.
                                 .andExpect(jsonPath("$.items.length()").value(3))
                                 .andExpect(jsonPath("$.items[0].id").exists())
                                 .andExpect(jsonPath("$.items[0].code").exists())
                                 .andExpect(jsonPath("$.items[0].name").exists())
                                 .andExpect(jsonPath("$.items[0].gradeLevelId").exists());
-        }
-
-        @Test
-        void listSubjects_crossSchoolSubjectExcluded() throws Exception {
-                mockMvc.perform(get("/api/subjects").with(jwtFor(teacherUserId)))
-                                .andExpect(status().isOk())
-                                // The cross-school subject code "XS" must never appear.
-                                .andExpect(jsonPath("$.items[?(@.code == 'XS')]").isEmpty());
         }
 
         @Test
@@ -220,16 +195,17 @@ class SubjectApiIntegrationTests {
         }
 
         @Test
-        void listSubjects_teacherRoleWithoutProfile_returns404() throws Exception {
-                // Has TEACHER role (so SUBJECT_READ is effective) but no TeacherProfile row.
+        void listSubjects_teacherRoleWithoutProfile_returns200() throws Exception {
+                // User-centric model: any TEACHER-role user may read the global
+                // catalog — no TeacherProfile (or any profile) is required.
                 User teacherNoProfile = userRepo.saveAndFlush(
                                 new User("subj-no-tp", "sntp@test.com", "hash", "Teacher No TP"));
                 jdbc.update("INSERT INTO user_roles (user_id, role_id) "
                                 + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", teacherNoProfile.getId());
 
                 mockMvc.perform(get("/api/subjects").with(jwtFor(teacherNoProfile.getId())))
-                                .andExpect(status().isNotFound())
-                                .andExpect(jsonPath("$.code").value("ACADEMIC_TEACHER_PROFILE_NOT_FOUND"));
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.items.length()").value(3));
         }
 
         // ==================== Helpers ====================

@@ -29,12 +29,6 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
     boolean existsByClassroomIdAndUserId(Long classroomId, Long userId);
 
     long deleteByClassroomIdAndUserId(Long classroomId, Long userId);
-
-    /** Legacy lookup kept for school-era rows and API compatibility. */
-    Optional<ClassroomMember> findByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
-
-    long deleteByClassroomIdAndStudentProfileId(Long classroomId, Long studentProfileId);
-
     long countByClassroomId(Long classroomId);
 
     /**

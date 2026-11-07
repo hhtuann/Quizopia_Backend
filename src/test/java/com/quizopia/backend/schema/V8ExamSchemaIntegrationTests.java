@@ -15,19 +15,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests verifying the V8 Exam migration and all DB-level constraints
- * (CHECK, composite FK, unique, partial unique, M1/M2 invariants) on a real
- * PostgreSQL 17 instance via Testcontainers. Mirrors the convention of
- * {@code V6V7SchemaIntegrationTests}: direct {@link JdbcTemplate} SQL, id-via-RETURNING,
+ * Integration tests verifying the exam-schema constraints (CHECK, FK, unique,
+ * partial unique, M1/M2 invariants) on a real PostgreSQL 17 instance via
+ * Testcontainers, against the CURRENT head schema (V1–V25).
+ *
+ * <p>Since the user-centric refactor (V24/V25) the schema is user-owned:
+ * no organizations / workspaces / workspace_memberships / schools /
+ * teacher_profiles / student_profiles / exam_versions /
+ * legacy_exam_content_map tables, and no school_id / workspace_id /
+ * owner_teacher_id / student_profile_id columns on content tables. This
+ * suite asserts that contract AND keeps the surviving constraint coverage:
+ * direct {@link JdbcTemplate} SQL, id-via-RETURNING,
  * {@code DataIntegrityViolationException} assertions for rejected rows.
- *
- * <p>The Spring-managed container migrates a <em>clean</em> DB to V8 at context start,
- * so the V8 purpose seed inserts 0 rows there (no schools yet). The dedicated-container
- * seed test (Group 2) proves the seed by migrating to V7 first, inserting a school, then
- * continuing to V8. Per-test fixtures insert their own purposes where needed.
- *
- * <p>This checkpoint has no exam JPA entities; Hibernate {@code ddl-auto=validate} is
- * therefore not exercised for exam tables here (entity mapping is a later checkpoint).
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -38,13 +37,10 @@ class V8ExamSchemaIntegrationTests {
     @Autowired
     private JdbcTemplate jdbc;
 
-    // School-A fixture ids (set up per test; rolled back after).
+    // Per-test fixture ids (rolled back after each test).
     private long userId;
-    private long schoolId;
     private long gradeLevelId;
     private long subjectId;
-    private long teacherProfileId;
-    private long studentProfileId;
     private long bankId;
     private long questionId;
     private long questionVersionId;
@@ -53,16 +49,11 @@ class V8ExamSchemaIntegrationTests {
     void setUp() {
         userId = insert("INSERT INTO users (username, email, password_hash, display_name) "
                 + "VALUES ('u8','u8@t.com','h','U8')");
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('TS','Test School')");
-        gradeLevelId = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL12','G12')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                + "VALUES (" + schoolId + "," + gradeLevelId + ",'MATH','Math')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + userId + "," + schoolId + ",'TC1')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
-                + "VALUES (" + userId + "," + schoolId + ",'SC1')");
-        bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'B1','Bank')");
+        gradeLevelId = insert("INSERT INTO grade_levels (code, name) VALUES ('GL12','G12')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) "
+                + "VALUES (" + gradeLevelId + ",'MATH','Math')");
+        bankId = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) "
+                + "VALUES (" + userId + "," + subjectId + ",'B1','Bank')");
         questionId = insert("INSERT INTO questions (question_bank_id, code, created_by) "
                 + "VALUES (" + bankId + ",'Q1'," + userId + ")");
         questionVersionId = insert("INSERT INTO question_versions (question_id, version_number, question_type, "
@@ -71,35 +62,87 @@ class V8ExamSchemaIntegrationTests {
     }
 
     // ============================================================
-    // GROUP 1 — Migration
+    // GROUP 1 — Migration (head = V25)
     // ============================================================
 
     @Test
-    void flywayAppliedV1ThroughV8() {
+    void flywayAppliedV1ThroughV25() {
         Integer n = jdbc.queryForObject(
                 "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN "
-                        + "('1','2','3','4','5','6','7','8')", Integer.class);
-        assertThat(n).isEqualTo(8);
-        // V1–V8 are all applied; Phase 1 Task A adds V10–V12 (workspace foundation),
-        // Task B adds V13–V15 (exam redesign: expand/backfill/contract), and issue #4
-        // P0-1 adds V16 (user-based attempts).
+                        + "('1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17',"
+                        + "'18','19','20','21','22','23','24','25')", Integer.class);
+        assertThat(n).isEqualTo(25);
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("23");
+        assertThat(current).isEqualTo("25");
+    }
+
+    @Test
+    void legacyOrganizationTablesAreGoneAfterV25() {
+        // V25 drops the entire organization/workspace/school/profile era.
+        for (String t : new String[]{"organizations", "workspaces", "workspace_memberships",
+                "schools", "teacher_profiles", "student_profiles", "exam_versions",
+                "legacy_exam_content_map"}) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
+                    .as("legacy table %s must be gone after V25", t).isZero();
+        }
+    }
+
+    @Test
+    void legacyProvenanceColumnsAreGoneAfterV25() {
+        // V25 verification contract: no workspace_id / owner_teacher_id /
+        // student_profile_id columns anywhere, and no school_id on the
+        // content/catalog tables.
+        Integer legacy = jdbc.queryForObject(
+                "SELECT count(*) FROM information_schema.columns WHERE column_name IN "
+                        + "('workspace_id','owner_teacher_id','student_profile_id')", Integer.class);
+        assertThat(legacy).as("workspace/teacher/profile columns must be gone").isZero();
+
+        Integer schoolScoped = jdbc.queryForObject(
+                "SELECT count(*) FROM information_schema.columns WHERE column_name = 'school_id' "
+                        + "AND table_name IN ('question_banks','exams','exam_sessions','attempts',"
+                        + "'exam_session_participants','classrooms','classroom_members',"
+                        + "'exam_session_classes','subjects','grade_levels','exam_purposes')", Integer.class);
+        assertThat(schoolScoped).as("school_id must be gone from content/catalog tables").isZero();
+    }
+
+    @Test
+    void creatorColumnsAndUniquesExist() {
+        // User-centric ownership columns (V11/V12/V16/V17/V24).
+        for (String[] col : new String[][]{
+                {"question_banks", "created_by_user_id"},
+                {"exams", "created_by_user_id"},
+                {"classrooms", "owner_user_id"},
+                {"exam_sessions", "created_by"},
+                {"attempts", "user_id"},
+                {"exam_session_participants", "user_id"},
+                {"classroom_members", "user_id"}}) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_name='" + col[0]
+                            + "' AND column_name='" + col[1] + "'", Integer.class))
+                    .as("column %s.%s", col[0], col[1]).isEqualTo(1);
+        }
+        // Creator-scoped code uniqueness (V24).
+        for (String idx : new String[]{"uk_question_banks_creator_code_ci",
+                "uk_exams_creator_code_ci", "uk_exam_sessions_creator_code_ci"}) {
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM pg_indexes WHERE indexname='" + idx + "'", Integer.class))
+                    .as("unique index %s", idx).isEqualTo(1);
+        }
     }
 
     @Test
     void allExamTablesExistAndNoOutOfScope() {
-        for (String t : new String[]{"exam_purposes", "exams", "exam_versions", "exam_sections",
+        for (String t : new String[]{"exam_purposes", "exams", "exam_sections",
                 "exam_questions", "exam_question_options", "exam_sessions", "exam_session_participants",
-                "organizations", "workspaces", "workspace_memberships", "legacy_exam_content_map"}) {
+                "classrooms", "classroom_members", "exam_session_classes"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
                     .as("table %s", t).isEqualTo(1);
         }
-        // No out-of-scope exam tables. NOTE: `notifications` is now V9 (consolidated);
-        // `attempts` is V7; `classrooms`/`classroom_members`/`exam_session_classes` are V8.
+        // No out-of-scope tables.
         for (String forbidden : new String[]{"proctor_assignments",
                 "session_announcements", "audit_log", "outbox_events", "import_jobs"}) {
             assertThat(jdbc.queryForObject(
@@ -109,96 +152,55 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void v1ThroughV7TablesStillPresent() {
+    void coreTablesStillPresent() {
         for (String t : new String[]{"platform_metadata", "users", "roles", "permissions", "user_roles",
-                "role_permissions", "refresh_sessions", "schools", "grade_levels", "subjects",
-                "teacher_profiles", "student_profiles", "question_banks", "questions",
-                "question_versions", "question_options"}) {
+                "role_permissions", "refresh_sessions", "grade_levels", "subjects",
+                "question_banks", "questions", "question_versions", "question_options"}) {
             assertThat(jdbc.queryForObject(
                     "SELECT count(*) FROM information_schema.tables WHERE table_name='" + t + "'", Integer.class))
-                    .as("legacy table %s", t).isEqualTo(1);
+                    .as("table %s", t).isEqualTo(1);
         }
     }
 
-    // ============================================================
-    // GROUP 2 — Purpose seed (dedicated container, staged Flyway)
-    // ============================================================
-
-    /**
-     * The Spring-managed container is a clean (Testcontainers-fresh) DB migrated to V8 at
-     * context start, when no schools existed yet, so the V8 seed inserted 0 purposes. The
-     * {@code @BeforeEach} school is created after migration and is therefore not seeded
-     * (proving the seed is migration-time only; per-school idempotent seeding for schools
-     * created later is DemoDataSeeder's responsibility). The full staged proof (migrate to
-     * V7 -> insert school -> continue to V8 -> 4 purposes) lives in the dedicated
-     * {@code V8PurposeSeedStagedFlywayTest} (own container, no shared fixture/pollution).
-     */
     @Test
-    void cleanDbMigratesV8WithZeroPurposes() {
-        Integer purposeCount = jdbc.queryForObject("SELECT count(*) FROM exam_purposes", Integer.class);
-        assertThat(purposeCount).isZero();
+    void cleanDbHasSeededGlobalCatalog() {
+        // V24 seeds the global academic catalog on a clean database:
+        // G10–G12 × 15 subjects and 4 exam purposes.
+        Integer gl = jdbc.queryForObject("SELECT count(*) FROM grade_levels", Integer.class);
+        Integer subjects = jdbc.queryForObject("SELECT count(*) FROM subjects", Integer.class);
+        Integer purposes = jdbc.queryForObject("SELECT count(*) FROM exam_purposes", Integer.class);
+        assertThat(gl).isEqualTo(3);
+        assertThat(subjects).isEqualTo(45);
+        assertThat(purposes).isEqualTo(4);
+    }
+
+    @Test
+    void rolesAreStudentAndTeacherOnly() {
+        // V24 consolidated the role model to STUDENT/TEACHER.
+        assertThat(jdbc.queryForObject(
+                "SELECT string_agg(code, ',' ORDER BY code) FROM roles", String.class))
+                .isEqualTo("STUDENT,TEACHER");
     }
 
     // ============================================================
-    // GROUP 3 — Composite school integrity (cross-school rejected)
+    // GROUP 3 — Global catalog integrity (school scoping removed)
     // ============================================================
 
-    private SchoolFixture secondSchool() {
-        long s2 = insert("INSERT INTO schools (code, name) VALUES ('B','School B')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL2','G2')");
-        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) "
-                + "VALUES (" + s2 + "," + gl2 + ",'SUB2','S2')");
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) "
-                + "VALUES ('ub','ub@t.com','h','UB')");
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + u2 + "," + s2 + ",'TC2')");
-        long sp2 = insert("INSERT INTO student_profiles (user_id, school_id, student_code) "
-                + "VALUES (" + u2 + "," + s2 + ",'SC2')");
-        return new SchoolFixture(s2, sub2, tp2, sp2);
-    }
-
-    private record SchoolFixture(long schoolId, long subjectId, long teacherProfileId, long studentProfileId) {}
-
     @Test
-    void examRejectsCrossSchoolSubject() {
-        SchoolFixture b = secondSchool();
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + b.subjectId() + "," + teacherProfileId + ",'X','t')"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void examRejectsCrossSchoolOwner() {
-        SchoolFixture b = secondSchool();
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + b.teacherProfileId() + ",'X','t')"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void examRejectsCrossSchoolPurpose() {
-        SchoolFixture b = secondSchool();
-        long purposeB = insert("INSERT INTO exam_purposes (school_id, code, title) VALUES (" + b.schoolId() + ",'PB','b')");
-        // Purpose from another school must be rejected (RESTRICT composite FK on school match).
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exams (school_id, subject_id, owner_teacher_id, purpose_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + "," + purposeB + ",'X','t')"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void examAcceptsSameSchoolPurpose() {
-        long purposeA = insert("INSERT INTO exam_purposes (school_id, code, title) VALUES (" + schoolId + ",'PA','a')");
-        long examOk = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, purpose_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + "," + purposeA + ",'OK','t')");
+    void examAcceptsGlobalSubject() {
+        // Subjects are global catalog rows; any exam may reference any subject.
+        long otherGl = insert("INSERT INTO grade_levels (code, name) VALUES ('GLX','GX')");
+        long otherSubject = insert("INSERT INTO subjects (grade_level_id, code, name) "
+                + "VALUES (" + otherGl + ",'SUBX','SX')");
+        long examOk = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title) "
+                + "VALUES (" + userId + "," + otherSubject + ",'OK','t')");
         assertThat(examOk).isPositive();
     }
 
     @Test
-    void examVersionRejectsSchoolNotMatchingExam() {
-        SchoolFixture b = secondSchool();
-        long examA = newExam("EV1");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, created_by) "
-                + "VALUES (" + b.schoolId() + "," + examA + ",1," + userId + ")"))
+    void examRejectsMissingSubject() {
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exams (created_by_user_id, subject_id, code, title) "
+                + "VALUES (" + userId + ",99999999,'X','t')"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -213,7 +215,6 @@ class V8ExamSchemaIntegrationTests {
                         + "default_points, position, metadata) VALUES (" + exam2 + "," + secA + "," + questionId + ","
                         + questionVersionId + ",'QC','SINGLE_CHOICE','c',1,0,'{}'::jsonb)"))
                 .isInstanceOf(DataIntegrityViolationException.class);
-        // (Same-exam section acceptance is exercised by many other tests that create questions.)
     }
 
     @Test
@@ -237,83 +238,40 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void sessionRejectsCrossSchoolOwner() {
-        SchoolFixture b = secondSchool();
-        long exam = newExam("SO1");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
-                        + b.teacherProfileId() + ",'X','t',now(),now()+interval '1 hour',60," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void participantRejectsCrossSchoolSession() {
-        SchoolFixture b = secondSchool();
-        long examB = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + b.schoolId() + "," + b.subjectId() + "," + b.teacherProfileId() + ",'PB','t')");
-        long sessionB = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + b.schoolId() + "," + examB + "," + b.teacherProfileId()
-                + ",'SB','t',now(),now()+interval '1 hour',60," + userId + ")");
-        // V17: the legacy same-school composite session FK was replaced by a
-        // simple session FK (user-based rows may be school-less). A row whose
-        // school contradicts the session's school is no longer DB-rejected —
-        // cross-school assignment is enforced at the service layer. The
-        // schema-level guard that REMAINS is session existence: a participant
-        // row pointing at a missing session is still rejected.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
-                        + studentProfileId + ")," + schoolId + ",99999999," + studentProfileId
-                        + "," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void participantRejectsCrossSchoolStudent() {
-        SchoolFixture b = secondSchool();
-        long exam = newExam("PS1");
-        long session = newSession(exam, "SS1");
-        // V17: student-side same-school composite FK replaced by a simple
-        // profile FK (provenance only); cross-school ADD is enforced at the
-        // service layer (addParticipants same-school validation). The
-        // schema-level guard that REMAINS is profile existence.
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, "
-                        + "student_profile_id, added_by) VALUES ((SELECT user_id FROM student_profiles WHERE id = "
-                        + b.studentProfileId() + ")," + schoolId + "," + session + ",99999999"
-                        + "," + userId + ")"))
+    void participantRejectsMissingSession() {
+        // V17+: participants are user-based rows with a plain session FK;
+        // a row pointing at a missing session is still DB-rejected.
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (user_id, "
+                        + "exam_session_id, added_by) VALUES (" + userId + ",99999999," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     // ============================================================
-    // GROUP 4 — Owner-scoped code uniqueness
+    // GROUP 4 — Creator-scoped code uniqueness (V24)
     // ============================================================
 
     @Test
-    void examCodeSameOwnerDifferentCaseRejected() {
+    void examCodeSameCreatorDifferentCaseRejected() {
         newExam("CODE-1");
         assertThatThrownBy(() -> newExam("code-1"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    void examCodeTwoOwnersSameSchoolSameCodeAccepted() {
-        SchoolFixture b = secondSchool();
-        // Insert a second teacher in school A.
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) "
+    void examCodeTwoCreatorsSameCodeAccepted() {
+        long otherUser = insert("INSERT INTO users (username, email, password_hash, display_name) "
                 + "VALUES ('u2a','u2a@t.com','h','U2A')");
-        long tp2a = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + u2 + "," + schoolId + ",'TC2A')");
-        long exam1 = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'SHARED','t')");
-        long exam2 = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) "
-                + "VALUES (" + schoolId + "," + subjectId + "," + tp2a + ",'SHARED','t')");
+        long exam1 = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title) "
+                + "VALUES (" + userId + "," + subjectId + ",'SHARED','t')");
+        long exam2 = insert("INSERT INTO exams (created_by_user_id, subject_id, code, title) "
+                + "VALUES (" + otherUser + "," + subjectId + ",'SHARED','t')");
         assertThat(exam1).isPositive();
         assertThat(exam2).isPositive();
-        // School-scoped uniqueness would have rejected the second insert; it is accepted here.
-        assertThat(b.schoolId()).isNotEqualTo(schoolId);
+        // Creator-scoped uniqueness accepts the same code across different creators.
     }
 
     @Test
-    void sessionCodeSameOwnerDifferentCaseRejected() {
+    void sessionCodeSameCreatorDifferentCaseRejected() {
         long exam = newExam("SC1");
         newSession(exam, "SESS-1");
         assertThatThrownBy(() -> newSession(exam, "sess-1"))
@@ -321,149 +279,18 @@ class V8ExamSchemaIntegrationTests {
     }
 
     @Test
-    void sessionCodeTwoOwnersSameSchoolSameCodeAccepted() {
+    void sessionCodeTwoCreatorsSameCodeAccepted() {
         long exam = newExam("SC2");
-        long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) "
+        long otherUser = insert("INSERT INTO users (username, email, password_hash, display_name) "
                 + "VALUES ('u2b','u2b@t.com','h','U2B')");
-        long tp2a = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) "
-                + "VALUES (" + u2 + "," + schoolId + ",'TC2B')");
-        long s1 = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + "," + teacherProfileId
-                + ",'SHARED','t',now(),now()+interval '1 hour',60," + userId + ")");
-        long s2 = insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + "," + tp2a
-                + ",'SHARED','t',now(),now()+interval '1 hour',60," + userId + ")");
+        long s1 = insert("INSERT INTO exam_sessions (exam_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + exam + ",'SHARED','t',"
+                + "now(),now()+interval '1 hour',60," + userId + ")");
+        long s2 = insert("INSERT INTO exam_sessions (exam_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + exam + ",'SHARED','t',"
+                + "now(),now()+interval '1 hour',60," + otherUser + ")");
         assertThat(s1).isPositive();
         assertThat(s2).isPositive();
-    }
-
-    // ============================================================
-    // GROUP 5 — Version constraints (exam_versions: retained legacy
-    // audit table after the Task B redesign; its own CHECK/unique
-    // constraints still apply to audit inserts)
-    // ============================================================
-
-    @Test
-    void onlyOneDraftPerExam() {
-        long exam = newExam("D1");
-        newDraftVersion(exam, 1);
-        assertThatThrownBy(() -> newDraftVersion(exam, 2))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void multiplePublishedVersionsAllowed() {
-        long exam = newExam("D2");
-        long p1 = newPublishedVersion(exam, 1);
-        long p2 = newPublishedVersion(exam, 2);
-        assertThat(p1).isPositive();
-        assertThat(p2).isPositive();
-    }
-
-    @Test
-    void versionNumberUniquePerExam() {
-        long exam = newExam("D3");
-        newDraftVersion(exam, 1);
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'PUBLISHED',1,now()," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void durationDefaultsTo60() {
-        long exam = newExam("D4");
-        long v = newDraftVersion(exam, 1);
-        Integer d = jdbc.queryForObject("SELECT duration_minutes FROM exam_versions WHERE id=" + v, Integer.class);
-        assertThat(d).isEqualTo(60);
-    }
-
-    @Test
-    void durationNonPositiveRejected() {
-        long exam = newExam("D5");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ",1,0," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void tfLadderExactObjectAccepted() {
-        long exam = newExam("TF1");
-        long v = newDraftVersion(exam, 1);
-        Integer stored = jdbc.queryForObject(
-                "SELECT (tf_matrix_scoring = '{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)::int "
-                        + "FROM exam_versions WHERE id=" + v, Integer.class);
-        assertThat(stored).isEqualTo(1);
-    }
-
-    @Test
-    void tfLadderWrongValueRejected() {
-        long exam = newExam("TF2");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "tf_matrix_scoring, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":99}'::jsonb," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void tfLadderExtraKeyRejected() {
-        long exam = newExam("TF3");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "tf_matrix_scoring, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100,\"5\":100}'::jsonb," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void tfLadderStringNumberRejected() {
-        long exam = newExam("TF4");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "tf_matrix_scoring, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'{\"0\":\"0\",\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void tfLadderMissingKeyRejected() {
-        long exam = newExam("TF5");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "tf_matrix_scoring, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'{\"0\":0,\"1\":10,\"2\":25,\"3\":50}'::jsonb," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void publishedInvariantDraftWithPublishedAtRejected() {
-        long exam = newExam("PI1");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "status, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,'DRAFT',now(),"
-                        + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void publishedInvariantPublishedWithNullPublishedAtRejected() {
-        long exam = newExam("PI2");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "status, total_points, created_by) VALUES (" + schoolId + "," + exam + ",1,'PUBLISHED',10,"
-                        + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void publishedInvariantPublishedZeroPointsRejected() {
-        long exam = newExam("PI3");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_versions (school_id, exam_id, version_number, "
-                        + "status, total_points, published_at, created_by) VALUES (" + schoolId + "," + exam + ",1,"
-                        + "'PUBLISHED',0,now()," + userId + ")"))
-                .isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    @Test
-    void publishedInvariantPositivePointsAccepted() {
-        long exam = newExam("PI4");
-        long v = newPublishedVersion(exam, 1);
-        assertThat(v).isPositive();
     }
 
     // ============================================================
@@ -742,12 +569,12 @@ class V8ExamSchemaIntegrationTests {
     // ============================================================
 
     private long insertSessionWith(long examId, String statusLit, String openedLit, String closedLit) {
-        // Derive a unique owner-scoped code from the status so the multi-state acceptance test
-        // (5 inserts, same owner) does not trip uk_exam_sessions_owner_code_ci.
+        // Derive a unique creator-scoped code from the status so the multi-state acceptance test
+        // (5 inserts, same creator) does not trip uk_exam_sessions_creator_code_ci.
         String code = "S-" + statusLit.replace("'", "");
-        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, status, "
-                + "starts_at, ends_at, duration_minutes, created_by, opened_at, closed_at) VALUES (" + schoolId + "," + examId + ","
-                + teacherProfileId + ",'" + code + "','t'," + statusLit + ",now(),now()+interval '1 hour',60," + userId + ","
+        return insert("INSERT INTO exam_sessions (exam_id, code, title, status, "
+                + "starts_at, ends_at, duration_minutes, created_by, opened_at, closed_at) VALUES (" + examId + ","
+                + "'" + code + "','t'," + statusLit + ",now(),now()+interval '1 hour',60," + userId + ","
                 + openedLit + "," + closedLit + ")");
     }
 
@@ -761,18 +588,18 @@ class V8ExamSchemaIntegrationTests {
     @Test
     void sessionEndsBeforeStartsRejected() {
         long exam = newExam("SS2");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
-                        + teacherProfileId + ",'S','t',now()+interval '2 hour',now(),60," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (exam_id, "
+                        + "code, title, starts_at, ends_at, duration_minutes, created_by) VALUES (" + exam + ","
+                        + "'S','t',now()+interval '2 hour',now(),60," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
     void sessionMaxAttemptsNegativeRejected() {
         long exam = newExam("SS3");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
-                        + teacherProfileId + ",'S','t',now(),now()+interval '1 hour',-1,60," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_sessions (exam_id, "
+                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + exam + ","
+                        + "'S','t',now(),now()+interval '1 hour',-1,60," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -780,9 +607,9 @@ class V8ExamSchemaIntegrationTests {
     void sessionMaxAttemptsZeroAccepted() {
         // max_attempts = 0 means unlimited (absorbed from legacy V14); the DB CHECK is >= 0.
         long exam = newExam("SS3A");
-        long sessionId = jdbc.queryForObject("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, "
-                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + schoolId + "," + exam + ","
-                        + teacherProfileId + ",'S0','t',now(),now()+interval '1 hour',0,60," + userId
+        long sessionId = jdbc.queryForObject("INSERT INTO exam_sessions (exam_id, "
+                        + "code, title, starts_at, ends_at, max_attempts, duration_minutes, created_by) VALUES (" + exam + ","
+                        + "'S0','t',now(),now()+interval '1 hour',0,60," + userId
                         + ") RETURNING id", Long.class);
         assertThat(sessionId).isPositive();
     }
@@ -866,11 +693,11 @@ class V8ExamSchemaIntegrationTests {
     // ============================================================
 
     @Test
-    void duplicateSessionStudentRejected() {
+    void duplicateSessionUserRejected() {
         long exam = newExam("P1");
         long session = newSession(exam, "P1");
-        newParticipant(session, studentProfileId);
-        assertThatThrownBy(() -> newParticipant(session, studentProfileId))
+        newParticipant(session, userId);
+        assertThatThrownBy(() -> newParticipant(session, userId))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -878,9 +705,8 @@ class V8ExamSchemaIntegrationTests {
     void participantInvalidStatusRejected() {
         long exam = newExam("P2");
         long session = newSession(exam, "P2");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, status, added_by) VALUES (" + schoolId + "," + session + ","
-                        + studentProfileId + ",'REMOVED'," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (exam_session_id, "
+                        + "user_id, status, added_by) VALUES (" + session + "," + userId + ",'REMOVED'," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -888,7 +714,7 @@ class V8ExamSchemaIntegrationTests {
     void m2EligibleWithNullBlockedAtAccepted() {
         long exam = newExam("M2A");
         long session = newSession(exam, "M2A");
-        long p = newParticipant(session, studentProfileId);
+        long p = newParticipant(session, userId);
         assertThat(p).isPositive();
     }
 
@@ -896,9 +722,9 @@ class V8ExamSchemaIntegrationTests {
     void m2EligibleWithNonNullBlockedAtRejected() {
         long exam = newExam("M2B");
         long session = newSession(exam, "M2B");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, status, added_by, blocked_at) VALUES (" + schoolId + "," + session + ","
-                        + studentProfileId + ",'ELIGIBLE'," + userId + ",now())"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (exam_session_id, "
+                        + "user_id, status, added_by, blocked_at) VALUES (" + session + "," + userId + ",'ELIGIBLE',"
+                        + userId + ",now())"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -906,9 +732,8 @@ class V8ExamSchemaIntegrationTests {
     void m2BlockedWithNonNullBlockedAtAccepted() {
         long exam = newExam("M2C");
         long session = newSession(exam, "M2C");
-        long p = insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, status, "
-                + "added_by, blocked_at) VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentProfileId + ")," + schoolId + "," + session + "," + studentProfileId + ",'BLOCKED',"
-                + userId + ",now())");
+        long p = insert("INSERT INTO exam_session_participants (user_id, exam_session_id, status, "
+                + "added_by, blocked_at) VALUES (" + userId + "," + session + ",'BLOCKED'," + userId + ",now())");
         assertThat(p).isPositive();
     }
 
@@ -916,9 +741,8 @@ class V8ExamSchemaIntegrationTests {
     void m2BlockedWithNullBlockedAtRejected() {
         long exam = newExam("M2D");
         long session = newSession(exam, "M2D");
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (school_id, exam_session_id, "
-                        + "student_profile_id, status, added_by) VALUES (" + schoolId + "," + session + ","
-                        + studentProfileId + ",'BLOCKED'," + userId + ")"))
+        assertThatThrownBy(() -> jdbc.update("INSERT INTO exam_session_participants (exam_session_id, "
+                        + "user_id, status, added_by) VALUES (" + session + "," + userId + ",'BLOCKED'," + userId + ")"))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -932,26 +756,8 @@ class V8ExamSchemaIntegrationTests {
     }
 
     private long newExam(String code) {
-        return insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'" + code + "','t')");
-    }
-
-    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
-    private long newDraftVersion(long examId, int versionNumber) {
-        return insert("INSERT INTO exam_versions (school_id, exam_id, version_number, created_by) VALUES ("
-                + schoolId + "," + examId + "," + versionNumber + "," + userId + ")");
-    }
-
-    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
-    private long newPublishedVersion(long examId, int versionNumber) {
-        return newPublishedVersionIn(schoolId, examId, versionNumber);
-    }
-
-    /** Legacy audit-table insert (exam_versions is retained for audit; no runtime dependency). */
-    private long newPublishedVersionIn(long school, long examId, int versionNumber) {
-        return insert("INSERT INTO exam_versions (school_id, exam_id, version_number, status, total_points, "
-                + "published_at, created_by) VALUES (" + school + "," + examId + "," + versionNumber + ",'PUBLISHED',10,"
-                + "now()," + userId + ")");
+        return insert("INSERT INTO exams (created_by_user_id, subject_id, code, title) VALUES ("
+                + userId + "," + subjectId + ",'" + code + "','t')");
     }
 
     private long newSection(long examId, int position) {
@@ -972,13 +778,13 @@ class V8ExamSchemaIntegrationTests {
     }
 
     private long newSession(long examId, String code) {
-        return insert("INSERT INTO exam_sessions (school_id, exam_id, owner_teacher_id, code, title, "
-                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + schoolId + "," + examId + "," + teacherProfileId
-                + ",'" + code + "','t',now(),now()+interval '1 hour',60," + userId + ")");
+        return insert("INSERT INTO exam_sessions (exam_id, code, title, "
+                + "starts_at, ends_at, duration_minutes, created_by) VALUES (" + examId + ",'" + code + "','t',"
+                + "now(),now()+interval '1 hour',60," + userId + ")");
     }
 
-    private long newParticipant(long sessionId, long studentId) {
-        return insert("INSERT INTO exam_session_participants (user_id, school_id, exam_session_id, student_profile_id, added_by) "
-                + "VALUES ((SELECT user_id FROM student_profiles WHERE id = " + studentId + ")," + schoolId + "," + sessionId + "," + studentId + "," + userId + ")");
+    private long newParticipant(long sessionId, long participantUserId) {
+        return insert("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) "
+                + "VALUES (" + participantUserId + "," + sessionId + "," + userId + ")");
     }
 }

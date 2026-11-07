@@ -329,8 +329,7 @@ class RealtimeAttemptEventConcurrencyIntegrationTests extends RealtimeStompTestB
         String tag = UUID.randomUUID().toString().substring(0, 6);
         long session = createTeacherOwnedOpenSession("fc-" + tag);
         long teacher = teacherIdForSession(session);
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + session, Long.class);
-        long student = addStudent("fs-" + tag, school, session, teacher);
+        long student = addStudent("fs-" + tag, session, teacher);
         return new FreshSession(session, teacher, accessToken(teacher, "fc-tch", List.of("TEACHER")), student);
     }
 
@@ -339,9 +338,8 @@ class RealtimeAttemptEventConcurrencyIntegrationTests extends RealtimeStompTestB
         String tag = UUID.randomUUID().toString().substring(0, 6);
         long session = createTeacherOwnedOpenSession("tc-" + tag);
         long teacher = teacherIdForSession(session);
-        long school = jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=" + session, Long.class);
-        long s1 = addStudent("t1-" + tag, school, session, teacher);
-        long s2 = addStudent("t2-" + tag, school, session, teacher);
+        long s1 = addStudent("t1-" + tag, session, teacher);
+        long s2 = addStudent("t2-" + tag, session, teacher);
         return new TwoStudentSession(session, teacher, accessToken(teacher, "tc-tch", List.of("TEACHER")), s1, s2);
     }
 
@@ -354,14 +352,11 @@ class RealtimeAttemptEventConcurrencyIntegrationTests extends RealtimeStompTestB
         return new ExistingAttempt(f.sessionId, f.teacherId, f.teacherToken, f.studentId, attemptId, aq);
     }
 
-    private long addStudent(String tag, long school, long session, long teacher) {
+    private long addStudent(String tag, long session, long teacher) {
         long uid = insertUserWithRole(tag, "STUDENT");
-        ins("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + uid + "," + school + ",'SC"
-                + tag + "')");
         jdbc.update(
-                "INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, added_by) VALUES ("
-                        + school + "," + session + ",(SELECT id FROM student_profiles WHERE user_id=" + uid + "),"
-                        + teacher + ")");
+                "INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) VALUES ("
+                        + uid + "," + session + "," + teacher + ")");
         return uid;
     }
 
