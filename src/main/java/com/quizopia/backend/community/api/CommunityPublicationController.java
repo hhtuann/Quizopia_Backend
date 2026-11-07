@@ -1,10 +1,14 @@
 package com.quizopia.backend.community.api;
 
+import com.quizopia.backend.community.application.CommunityReportService;
 import com.quizopia.backend.community.application.CommunityService;
+import com.quizopia.backend.community.dto.CommunityReportResponse;
 import com.quizopia.backend.community.dto.CreatePublicationRequest;
 import com.quizopia.backend.community.dto.OwnerPublicationResponse;
+import com.quizopia.backend.community.dto.ReportPublicationRequest;
 import com.quizopia.backend.community.dto.UpdatePublicationRequest;
 import com.quizopia.backend.question.dto.PageResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -32,9 +36,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class CommunityPublicationController {
 
     private final CommunityService communityService;
+    private final CommunityReportService communityReportService;
 
-    public CommunityPublicationController(CommunityService communityService) {
+    public CommunityPublicationController(CommunityService communityService,
+            CommunityReportService communityReportService) {
         this.communityService = communityService;
+        this.communityReportService = communityReportService;
     }
 
     @GetMapping("/me/publications")
@@ -80,6 +87,29 @@ public class CommunityPublicationController {
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
         return noStore(communityService.unpublishPublication(userId, publicationId));
+    }
+
+    /**
+     * POST /api/community/publications/{id}/reports (ADR-006 §7, #42).
+     * 201 on first submission; 200 with the existing OPEN report on
+     * dedupe; 404 when the publication is absent/invisible (§4
+     * predicate — no state-transition oracle); 429 past the §9 report
+     * buckets (5/h user, 20/h IP; remote addr only, never forwarded
+     * headers).
+     */
+    @PostMapping("/publications/{publicationId}/reports")
+    public ResponseEntity<CommunityReportResponse> report(
+            @PathVariable Long publicationId,
+            @Valid @RequestBody ReportPublicationRequest request,
+            @AuthenticationPrincipal Jwt jwt,
+            HttpServletRequest httpRequest) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        CommunityReportService.SubmittedReport submitted = communityReportService
+                .submitReport(userId, publicationId, request, httpRequest.getRemoteAddr());
+        return ResponseEntity.status(submitted.created()
+                        ? HttpStatus.CREATED : HttpStatus.OK)
+                .cacheControl(CacheControl.noStore())
+                .body(submitted.report());
     }
 
     private static <T> ResponseEntity<T> noStore(T body) {

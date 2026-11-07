@@ -138,6 +138,27 @@ public class CommunityPublication {
         this.publishedAt = null;
     }
 
+    // ---- moderation transitions (moderator calls these under the row lock, §4) ----
+
+    /**
+     * VISIBLE → HIDDEN by moderation (§4). The author cannot bypass the
+     * hide — publish from HIDDEN is 409 until a moderator restores.
+     * {@code status} is deliberately untouched (hide applies to any
+     * lifecycle state).
+     */
+    public void hideByModeration() {
+        this.moderationState = CommunityModerationState.HIDDEN;
+    }
+
+    /**
+     * HIDDEN → VISIBLE by moderation (§4). Does NOT change {@code status}:
+     * an unpublished-while-hidden publication stays UNPUBLISHED and the
+     * owner may republish (unless hidden again).
+     */
+    public void restoreByModeration() {
+        this.moderationState = CommunityModerationState.VISIBLE;
+    }
+
     // ---- PATCHable set (exactly §4: title, summary, categoryId, authorAlias, reusePolicy) ----
 
     public void rename(String title) {

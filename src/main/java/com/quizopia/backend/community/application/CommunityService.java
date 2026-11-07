@@ -4,6 +4,7 @@ import com.quizopia.backend.community.domain.model.CommunityModerationState;
 import com.quizopia.backend.community.domain.model.CommunityPublication;
 import com.quizopia.backend.community.domain.model.CommunityPublicationStatus;
 import com.quizopia.backend.community.domain.model.CommunityPublicationTag;
+import com.quizopia.backend.community.domain.model.CommunityReportStatus;
 import com.quizopia.backend.community.domain.model.CommunityReusePolicy;
 import com.quizopia.backend.community.dto.CreatePublicationRequest;
 import com.quizopia.backend.community.dto.OwnerPublicationResponse;
@@ -13,6 +14,8 @@ import com.quizopia.backend.community.exception.CommunityException;
 import com.quizopia.backend.community.repository.CommunityCategoryRepository;
 import com.quizopia.backend.community.repository.CommunityPublicationRepository;
 import com.quizopia.backend.community.repository.CommunityPublicationTagRepository;
+import com.quizopia.backend.community.repository.CommunityRateBucketRepository;
+import com.quizopia.backend.community.repository.CommunityReportRepository;
 import com.quizopia.backend.community.repository.CommunityTagRepository;
 import com.quizopia.backend.exam.application.ExamCommunityPort;
 import com.quizopia.backend.exam.domain.model.ExamStatus;
@@ -64,6 +67,7 @@ public class CommunityService {
     private final CommunityPublicationTagRepository publicationTags;
     private final CommunityTagRepository tags;
     private final CommunityCategoryRepository categories;
+    private final CommunityReportRepository reports;
     private final CommunityAuthorizationService auth;
     private final CommunityRateLimiter rateLimiter;
     private final ExamCommunityPort examCommunityPort;
@@ -73,6 +77,7 @@ public class CommunityService {
             CommunityPublicationTagRepository publicationTags,
             CommunityTagRepository tags,
             CommunityCategoryRepository categories,
+            CommunityReportRepository reports,
             CommunityAuthorizationService auth,
             CommunityRateLimiter rateLimiter,
             ExamCommunityPort examCommunityPort,
@@ -81,6 +86,7 @@ public class CommunityService {
         this.publicationTags = publicationTags;
         this.tags = tags;
         this.categories = categories;
+        this.reports = reports;
         this.auth = auth;
         this.rateLimiter = rateLimiter;
         this.examCommunityPort = examCommunityPort;
@@ -265,14 +271,35 @@ public class CommunityService {
         PageRequest pageable = safePageable(page, size, sort);
         Page<CommunityPublication> result = publications.findByPublisherUserId(userId, pageable);
 
+        List<CommunityPublication> content = result.getContent();
         Map<Long, List<String>> tagsByPublication = loadTags(
-                result.getContent().stream().map(CommunityPublication::getId).toList());
+                content.stream().map(CommunityPublication::getId).toList());
+        Map<Long, Long> openCounts = openReportCounts(
+                content.stream().map(CommunityPublication::getId).toList());
         return new PageResponse<>(
-                result.getContent().stream()
-                        .map(p -> ownerResponse(p, tagsByPublication.getOrDefault(p.getId(), List.of())))
+                content.stream()
+                        .map(p -> ownerResponse(p,
+                                tagsByPublication.getOrDefault(p.getId(), List.of()),
+                                openCounts.getOrDefault(p.getId(), 0L)))
                         .toList(),
                 result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages(),
                 pageable.getSort().toString());
+    }
+
+    /** OPEN reports for one publication (§7 owner DTO aggregate). */
+    private long openReportCount(long publicationId) {
+        return reports.countByPublicationIdAndStatus(publicationId, CommunityReportStatus.OPEN);
+    }
+
+    /** Batched OPEN report counts for the owner list (single query). */
+    private Map<Long, Long> openReportCounts(List<Long> publicationIds) {
+        if (publicationIds.isEmpty()) {
+            return Map.of();
+        }
+        return reports.countByPublicationIdsAndStatus(publicationIds, CommunityReportStatus.OPEN)
+                .stream().collect(Collectors.toMap(
+                        row -> ((Number) row[0]).longValue(),
+                        row -> ((Number) row[1]).longValue()));
     }
 
     // ============================================================
@@ -330,10 +357,12 @@ public class CommunityService {
 
     private OwnerPublicationResponse ownerResponse(CommunityPublication publication) {
         return ownerResponse(publication,
-                loadTags(List.of(publication.getId())).getOrDefault(publication.getId(), List.of()));
+                loadTags(List.of(publication.getId())).getOrDefault(publication.getId(), List.of()),
+                openReportCount(publication.getId()));
     }
 
-    private OwnerPublicationResponse ownerResponse(CommunityPublication publication, List<String> tagLabels) {
+    private OwnerPublicationResponse ownerResponse(CommunityPublication publication,
+            List<String> tagLabels, long openReportCount) {
         String categoryCode = null;
         String categoryTitle = null;
         if (publication.getCategoryId() != null) {
@@ -362,7 +391,8 @@ public class CommunityService {
                 publication.getPublishedAt(),
                 publication.getCreatedAt(),
                 publication.getUpdatedAt(),
-                publication.getVersion());
+                publication.getVersion(),
+                openReportCount);
     }
 
     private void requireExistingCategory(Long categoryId) {

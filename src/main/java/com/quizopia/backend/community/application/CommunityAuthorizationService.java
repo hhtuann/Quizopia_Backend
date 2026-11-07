@@ -68,6 +68,23 @@ public class CommunityAuthorizationService {
     }
 
     /**
+     * Moderator/reporter gate (§5/§7): ACTIVE account + effective DB
+     * permission, no role literal — the dormant COMMUNITY_MODERATOR
+     * role expresses itself only through the COMMUNITY_MODERATION
+     * permission (§5). Effective permissions re-resolve per request, so
+     * a grant deleted mid-session denies the very next call. Failure →
+     * 403 COMMUNITY_ACCESS_DENIED.
+     */
+    public void requireActiveUserWithPermission(Long userId, String permissionCode) {
+        boolean active = userRepository.findById(userId)
+                .filter(user -> user.getStatus() == UserStatus.ACTIVE)
+                .isPresent();
+        if (!active || !hasEffectivePermission(userId, permissionCode)) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_ACCESS_DENIED);
+        }
+    }
+
+    /**
      * Publish-time recheck (§4): the caller must STILL be ACTIVE +
      * verified + TEACHER + permission. Returns false instead of throwing
      * so the caller maps the failure to 409 COMMUNITY_PUBLISH_INELIGIBLE.
