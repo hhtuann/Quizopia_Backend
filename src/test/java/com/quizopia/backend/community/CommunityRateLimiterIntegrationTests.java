@@ -133,6 +133,15 @@ class CommunityRateLimiterIntegrationTests {
         assertThatThrownBy(() -> admitIpOk(CommunityRateLimiter.Policy.REPORT_IP, ip))
                 .isInstanceOf(CommunityException.class);
 
+        // Fail-closed: a blank/absent remote address must NEVER silently
+        // skip IP-bucket admission — it throws instead.
+        assertThatThrownBy(() -> rateLimiter.admitIp(CommunityRateLimiter.Policy.REPORT_IP, null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Remote address missing");
+        assertThatThrownBy(() -> rateLimiter.admitIp(CommunityRateLimiter.Policy.REPORT_IP, "  "))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Remote address missing");
+
         // Keys: 64 lowercase hex, deterministic per identity, dimension-
         // separated, and free of plaintext user ids / IP literals.
         List<String> keys = jdbc.queryForList(

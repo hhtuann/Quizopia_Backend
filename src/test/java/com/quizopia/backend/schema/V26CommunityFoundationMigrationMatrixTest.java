@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * V26 community-foundation migration matrix (ADR-006 §3, issue #40),
@@ -66,6 +67,7 @@ class V26CommunityFoundationMigrationMatrixTest {
 
                 assertTaxonomy(st);
                 assertRbacSeeds(st);
+                assertSemantics(st);
                 assertThat(rows(st, """
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
@@ -136,6 +138,7 @@ class V26CommunityFoundationMigrationMatrixTest {
 
                 assertTaxonomy(st);
                 assertRbacSeeds(st);
+                assertSemantics(st);
 
                 // Deterministic tie-break: TOAN kept the LOWEST subject id's
                 // name (a V24 catalog row), not the legacy duplicate's name.
@@ -210,6 +213,24 @@ class V26CommunityFoundationMigrationMatrixTest {
                           AND NOT EXISTS (SELECT 1 FROM role_permissions rp
                                           WHERE rp.role_id = r.id AND rp.permission_id = p.id)
                         """);
+                st.execute("""
+                        INSERT INTO role_permissions (role_id, permission_id)
+                        SELECT r.id, p.id
+                        FROM roles r
+                        JOIN permissions p ON p.code IN ('COMMUNITY_REPORT', 'COMMUNITY_BOOKMARK')
+                        WHERE r.code = 'STUDENT'
+                          AND NOT EXISTS (SELECT 1 FROM role_permissions rp
+                                          WHERE rp.role_id = r.id AND rp.permission_id = p.id)
+                        """);
+                st.execute("""
+                        INSERT INTO role_permissions (role_id, permission_id)
+                        SELECT r.id, p.id
+                        FROM roles r
+                        JOIN permissions p ON p.code = 'COMMUNITY_MODERATION'
+                        WHERE r.code = 'COMMUNITY_MODERATOR'
+                          AND NOT EXISTS (SELECT 1 FROM role_permissions rp
+                                          WHERE rp.role_id = r.id AND rp.permission_id = p.id)
+                        """);
 
                 assertThat(count(st, "SELECT count(*) FROM permissions")).isEqualTo(permissionsBefore);
                 assertThat(count(st, "SELECT count(*) FROM roles")).isEqualTo(rolesBefore);
@@ -223,6 +244,79 @@ class V26CommunityFoundationMigrationMatrixTest {
     // ==================================================================
     // shared assertions
     // ==================================================================
+
+    /**
+     * Violating-insert semantics (V27 {@code assertSemantics} pattern):
+     * the publication CHECK enums, UNIQUE(exam_id) and the ci category
+     * code index — asserted identically on both legs.
+     */
+    private static void assertSemantics(Statement st) throws SQLException {
+        long ownerId = insert(st, """
+                INSERT INTO users (username, email, password_hash, display_name, status,
+                                   email_verified_at, token_version, failed_login_attempts,
+                                   password_changed_at)
+                VALUES ('v26s%s', 'v26s%s@t.example.com', 'h', 'S', 'ACTIVE', now(), 0, 0, now())
+                """.formatted(System.nanoTime(), System.nanoTime()));
+        long examId = insert(st, """
+                INSERT INTO exams (created_by_user_id, code, title, status, published_at, total_points)
+                VALUES (%d, 'V26S%s', 'Semantics exam', 'PUBLISHED', now(), 1)
+                """.formatted(ownerId, System.nanoTime()));
+        insert(st, """
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state)
+                VALUES (%d, %d, 'Semantics publication', 'PUBLISHED', 'VISIBLE')
+                """.formatted(examId, ownerId));
+
+        // CHECK-constrained enums: status / moderation_state / reuse_policy
+        // (every OTHER not-null column is supplied so the enum CHECK is
+        // the violation, not an unrelated NOT NULL).
+        assertThatThrownBy(() -> insert(st, """
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state)
+                VALUES (%d, %d, 'Bad status', 'DRAFT', 'VISIBLE')
+                """.formatted(examId, ownerId)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("chk_community_publications_status");
+        assertThatThrownBy(() -> insert(st, """
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state)
+                VALUES (%d, %d, 'Bad state', 'UNPUBLISHED', 'MASKED')
+                """.formatted(examId, ownerId)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("chk_community_publications_moderation_state");
+        assertThatThrownBy(() -> insert(st, """
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state, reuse_policy)
+                VALUES (%d, %d, 'Bad policy', 'UNPUBLISHED', 'VISIBLE', 'MAYBE')
+                """.formatted(examId, ownerId)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("chk_community_publications_reuse_policy");
+
+        // One publication per exam: UNIQUE(exam_id).
+        assertThatThrownBy(() -> insert(st, """
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state)
+                VALUES (%d, %d, 'Duplicate exam', 'UNPUBLISHED', 'VISIBLE')
+                """.formatted(examId, ownerId)))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("uk_community_publications_exam");
+
+        // Taxonomy codes are unique case-insensitively (mixed-case 'TOAN'
+        // collides with the seeded 'toan').
+        assertThatThrownBy(() -> insert(st, """
+                INSERT INTO community_categories (code, title, position)
+                VALUES ('TOAN', 'Mathematics again', 99)
+                """))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("uk_community_categories_code_ci");
+    }
+
+    private static long insert(Statement st, String sql) throws SQLException {
+        try (ResultSet rs = st.executeQuery(sql + " RETURNING id")) {
+            assertThat(rs.next()).isTrue();
+            return rs.getLong(1);
+        }
+    }
 
     /** Leg-agnostic taxonomy assertion (ADR-006 §3): NOT a literal count. */
     private static void assertTaxonomy(Statement st) throws SQLException {

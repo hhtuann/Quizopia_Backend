@@ -67,6 +67,7 @@ public class CommunityRateLimiter {
         REPORT_IP,
         BOOKMARK,
         FORK,
+        MODERATION,
         PUBLIC_READ_IP
     }
 
@@ -95,13 +96,16 @@ public class CommunityRateLimiter {
     }
 
     /**
-     * Admits against the {@code ip:<remote-addr>} bucket; no-op when no
-     * servlet-observed remote address exists. Never trusts forwarded
-     * headers (V23 posture).
+     * Admits against the {@code ip:<remote-addr>} bucket. Never trusts
+     * forwarded headers (V23 posture). <b>Fails closed</b>: a blank or
+     * absent servlet-observed remote address is a broken request path,
+     * not an admission-free one — it throws rather than silently
+     * skipping the IP bucket (§9 fail-closed posture).
      */
     public void admitIp(Policy policy, String remoteAddr) {
         if (remoteAddr == null || remoteAddr.isBlank()) {
-            return;
+            throw new IllegalStateException(
+                    "Remote address missing for IP-bucket admission (policy " + policy + ")");
         }
         admit(bucketKey(DIMENSION_IP, policy, "ip:" + remoteAddr.trim()), maxFor(policy));
     }
@@ -154,6 +158,7 @@ public class CommunityRateLimiter {
             case REPORT_IP -> properties.getReportIpLimit();
             case BOOKMARK -> properties.getBookmarkLimit();
             case FORK -> properties.getForkLimit();
+            case MODERATION -> properties.getModerationLimit();
             case PUBLIC_READ_IP -> properties.getPublicReadIpLimit();
         };
     }

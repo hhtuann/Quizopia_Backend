@@ -6,6 +6,7 @@ import com.quizopia.backend.authentication.exception.AuthErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 
@@ -44,13 +45,17 @@ public class ApiErrorWriter {
 
     /**
      * Writes the {@link ApiError} body directly to the response. Used by filters
-     * and security handlers that bypass the DispatcherServlet.
+     * and security handlers that bypass the DispatcherServlet. Error bodies
+     * describe caller-specific state, so they always carry
+     * {@code Cache-Control: no-store} (mirrored on advice-rendered bodies by
+     * {@link GlobalExceptionHandler}'s {@code ResponseBodyAdvice}).
      */
     public void write(HttpServletResponse response, AuthErrorCode code, HttpServletRequest request) throws IOException {
         ApiError body = build(code, request);
         response.setStatus(code.statusCode());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         response.getWriter().write(objectMapper.writeValueAsString(body));
     }
 }

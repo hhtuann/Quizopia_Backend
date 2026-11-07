@@ -44,6 +44,10 @@ public class CommunityRateLimitProperties {
     @Min(1)
     private int forkLimit = 5;
 
+    /** Moderation writes per user per window (#42): hide/restore/dismiss/resolve. */
+    @Min(1)
+    private int moderationLimit = 60;
+
     /** Anonymous public reads per IP per window (#41; pools NAT cohorts). */
     @Min(1)
     private int publicReadIpLimit = 6000;
@@ -111,6 +115,14 @@ public class CommunityRateLimitProperties {
 
     public void setForkLimit(int forkLimit) {
         this.forkLimit = forkLimit;
+    }
+
+    public int getModerationLimit() {
+        return moderationLimit;
+    }
+
+    public void setModerationLimit(int moderationLimit) {
+        this.moderationLimit = moderationLimit;
     }
 
     public int getPublicReadIpLimit() {

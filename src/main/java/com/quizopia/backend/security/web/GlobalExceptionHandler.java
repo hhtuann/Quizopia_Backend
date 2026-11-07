@@ -11,22 +11,29 @@ import com.quizopia.backend.classroom.exception.ClassroomErrorCode;
 import com.quizopia.backend.classroom.exception.ClassroomException;
 import com.quizopia.backend.academic.exception.AcademicErrorCode;
 import com.quizopia.backend.academic.exception.AcademicException;
-
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-
-import java.time.Instant;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+
+import java.time.Instant;
 
 /**
  * Maps controller-layer exceptions to the unified {@link ApiError} body.
@@ -34,9 +41,15 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * rendered by the entry point and access-denied handler respectively; the
  * handlers here cover those rare cases when such exceptions surface from inside
  * a controller method as well.
+ *
+ * <p>Also stamps {@code Cache-Control: no-store} on EVERY {@link ApiError}
+ * body rendered by any controller advice (400/401/403/404/409/429/500 …):
+ * error responses describe caller-specific state and must never be cached
+ * by any intermediary (the security-filter paths set the same header via
+ * {@link ApiErrorWriter#write}).
  */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler implements ResponseBodyAdvice<Object> {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
@@ -45,6 +58,23 @@ public class GlobalExceptionHandler {
     public GlobalExceptionHandler(ApiErrorWriter apiErrorWriter) {
         this.apiErrorWriter = apiErrorWriter;
     }
+
+    @Override
+    public boolean supports(MethodParameter returnType,
+            Class<? extends HttpMessageConverter<?>> converterType) {
+        return true;
+    }
+
+    @Override
+    public Object beforeBodyWrite(Object body, MethodParameter returnType,
+            MediaType selectedContentType, Class<? extends HttpMessageConverter<?>> selectedConverterType,
+            ServerHttpRequest request, ServerHttpResponse response) {
+        if (body instanceof ApiError) {
+            response.getHeaders().setCacheControl(CacheControl.noStore());
+        }
+        return body;
+    }
+
 
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<ApiError> handleAuthenticationException(AuthenticationException ex, HttpServletRequest request) {
@@ -116,6 +146,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({
             MethodArgumentNotValidException.class,
+            MethodArgumentTypeMismatchException.class,
             ConstraintViolationException.class,
             HttpMessageNotReadableException.class
     })

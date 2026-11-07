@@ -325,6 +325,19 @@ class CommunityBookmarkIntegrationTests {
                 .andExpect(jsonPath("$.totalPages").value(2));
     }
 
+    @Test
+    void extremePageDoesNotOverflowOffsetInto500() throws Exception {
+        long saved = createPublishedPublication("Far page save");
+        mockMvc.perform(putBookmark(saved, studentId)).andExpect(status().isCreated());
+
+        // page * size as int would overflow (2147483647 * 50 → negative
+        // OFFSET → 500); the shelf must render an empty 200 page instead.
+        mockMvc.perform(getMyBookmarks(studentId, 2147483647, 50))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items").isEmpty());
+    }
+
     // ==================================================================
     // fixtures
     // ==================================================================

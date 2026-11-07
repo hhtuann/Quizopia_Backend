@@ -173,7 +173,10 @@ public class CommunityVisibilityStore {
                 "SELECT COUNT(*) " + VISIBLE_JOIN + " WHERE " + where.sql(),
                 Long.class, where.args().toArray());
 
-        int offset = page * size;
+        // Long arithmetic: page * size can exceed Integer.MAX_VALUE long
+        // before the page clamp (e.g. page=2147483647, size=50); computing
+        // it as int would overflow to a negative OFFSET and 500.
+        long offset = (long) page * size;
         List<PublicPublicationCard> items = jdbc.query(
                 CARD_SELECT + CARD_FROM + " WHERE " + where.sql() + """
                         GROUP BY p.id, c.id
@@ -263,7 +266,7 @@ public class CommunityVisibilityStore {
                     rs.getBoolean("allow_fork"),
                     savedAt,
                     false);
-        }, userId, size, page * size);
+        }, userId, size, (long) page * size);
 
         return new BookmarkedPage(entries, total == null ? 0L : total);
     }

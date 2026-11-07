@@ -48,6 +48,11 @@ import java.util.stream.Collectors;
  * dismiss/resolve take ONLY the report row lock. Idempotent repeats
  * (hide-while-HIDDEN, restore-while-VISIBLE) are 200 no-ops WITHOUT a
  * duplicate audit row. Restore never touches {@code status}.
+ *
+ * <p>Rate admission (§9): every write — hide, restore, dismiss,
+ * resolve — admits FIRST against the caller's MODERATION user bucket
+ * (60/h) before any authorization read or lock, so a compromised
+ * moderator cannot flood {@code community_moderation_actions}.
  */
 @Service
 public class CommunityModerationService {
@@ -61,6 +66,7 @@ public class CommunityModerationService {
     private final CommunityPublicationTagRepository publicationTags;
     private final CommunityCategoryRepository categories;
     private final CommunityAuthorizationService auth;
+    private final CommunityRateLimiter rateLimiter;
     private final Clock clock;
 
     public CommunityModerationService(CommunityPublicationRepository publications,
@@ -69,6 +75,7 @@ public class CommunityModerationService {
             CommunityPublicationTagRepository publicationTags,
             CommunityCategoryRepository categories,
             CommunityAuthorizationService auth,
+            CommunityRateLimiter rateLimiter,
             Clock clock) {
         this.publications = publications;
         this.reports = reports;
@@ -76,6 +83,7 @@ public class CommunityModerationService {
         this.publicationTags = publicationTags;
         this.categories = categories;
         this.auth = auth;
+        this.rateLimiter = rateLimiter;
         this.clock = clock;
     }
 
@@ -131,6 +139,7 @@ public class CommunityModerationService {
 
     @Transactional
     public ModerationPublicationSummary hide(Long userId, Long publicationId, String reason) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
         requireModerator(userId);
         CommunityPublication publication = lockPublication(publicationId);
         String auditReason = requireReason(reason);
@@ -152,6 +161,7 @@ public class CommunityModerationService {
 
     @Transactional
     public ModerationPublicationSummary restore(Long userId, Long publicationId, String reason) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
         requireModerator(userId);
         CommunityPublication publication = lockPublication(publicationId);
         String auditReason = requireReason(reason);
@@ -179,11 +189,13 @@ public class CommunityModerationService {
 
     @Transactional
     public ModerationReportEntry dismissReport(Long userId, Long reportId, String note) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
         return handleReport(userId, reportId, note, CommunityModerationActionType.REPORT_DISMISS);
     }
 
     @Transactional
     public ModerationReportEntry resolveReport(Long userId, Long reportId, String note) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
         return handleReport(userId, reportId, note, CommunityModerationActionType.REPORT_RESOLVE);
     }
 

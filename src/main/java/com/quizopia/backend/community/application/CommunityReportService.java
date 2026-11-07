@@ -31,8 +31,9 @@ import java.time.Instant;
  *       404s: no state-transition oracle for reporters);</li>
  *   <li><b>OPEN dedupe → 200</b> returning the existing report —
  *       {@code INSERT … ON CONFLICT … DO NOTHING} + re-read (partial
- *       index inference), never a caught constraint violation;</li>
- *   <li><b>201</b> for the insert that won.</li>
+ *       index inference), never a caught constraint violation; a
+ *       single retry covers a concurrent dismissal emptying the
+ *       re-read;</li>
  * </ol>
  */
 @Service
@@ -96,13 +97,23 @@ public class CommunityReportService {
 
         // (3)+(4) Dedupe insert + re-read: 1 affected row → this call
         // created the OPEN report (201); 0 → an OPEN report already
-        // existed (200 with that report, same id either way).
+        // existed (200 with that report, same id either way). A
+        // concurrent dismissal can land BETWEEN the 0-row insert and the
+        // re-read, leaving the re-read empty through no fault of this
+        // caller — retry the pair exactly once (the second insert now
+        // wins the partial index). Still empty means no OPEN report can
+        // exist for this caller: anti-enumeration 404, never a 500.
         int inserted = reports.insertIfNoOpenReport(
                 publicationId, userId, reason.name(), details, Instant.now(clock));
         CommunityReport report = reports
-                .findOpenByReporterAndPublication(userId, publicationId)
-                .orElseThrow(() -> new IllegalStateException(
-                        "OPEN report missing after dedupe insert for publication " + publicationId));
+                .findOpenByReporterAndPublication(userId, publicationId).orElse(null);
+        if (report == null) {
+            inserted = reports.insertIfNoOpenReport(
+                    publicationId, userId, reason.name(), details, Instant.now(clock));
+            report = reports
+                    .findOpenByReporterAndPublication(userId, publicationId)
+                    .orElseThrow(() -> new CommunityException(CommunityErrorCode.COMMUNITY_NOT_FOUND));
+        }
         return new SubmittedReport(toResponse(report), inserted == 1);
     }
 

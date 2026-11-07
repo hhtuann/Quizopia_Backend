@@ -268,6 +268,34 @@ class CommunityPublicCatalogIntegrationTests {
                 .andExpect(jsonPath("$.page").value(0));
     }
 
+    @Test
+    void extremePageDoesNotOverflowOffsetInto500() throws Exception {
+        // page * size as int would overflow (2147483647 * 50 → negative
+        // OFFSET → PostgreSQL error → 500); the offset must be computed
+        // as long and render as an empty 200 page.
+        mockMvc.perform(get(CATALOG).param("page", "2147483647").param("size", "50"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.page").value(2147483647))
+                .andExpect(jsonPath("$.items.length()").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
+    }
+
+    @Test
+    void malformedNumericParametersAre400Not500() throws Exception {
+        // MethodArgumentTypeMismatchException must land in the 400
+        // validation group (AUTH_VALIDATION_ERROR) — not the catch-all
+        // 500 handler — on the unauthenticated public routes.
+        mockMvc.perform(get(CATALOG + "/abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("AUTH_VALIDATION_ERROR"));
+        mockMvc.perform(get(CATALOG).param("categoryId", "not-a-number"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("AUTH_VALIDATION_ERROR"));
+        mockMvc.perform(get(CATALOG).param("page", "one"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("AUTH_VALIDATION_ERROR"));
+    }
+
     // ==================================================================
     // detail anti-enumeration (§7/§12.3)
     // ==================================================================
@@ -291,7 +319,9 @@ class CommunityPublicCatalogIntegrationTests {
         entityManager.clear();
 
         MvcResult reference = mockMvc.perform(get(CATALOG + "/999999999"))
-                .andExpect(status().isNotFound()).andReturn();
+                .andExpect(status().isNotFound())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andReturn();
         String referenceBody = reference.getResponse().getContentAsString();
         String referenceCode = objectMapper.readTree(referenceBody).get("code").asString();
 

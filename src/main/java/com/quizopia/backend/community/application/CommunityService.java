@@ -72,6 +72,7 @@ public class CommunityService {
     private final CommunityRateLimiter rateLimiter;
     private final ExamCommunityPort examCommunityPort;
     private final Clock clock;
+    private final jakarta.persistence.EntityManager entityManager;
 
     public CommunityService(CommunityPublicationRepository publications,
             CommunityPublicationTagRepository publicationTags,
@@ -81,7 +82,8 @@ public class CommunityService {
             CommunityAuthorizationService auth,
             CommunityRateLimiter rateLimiter,
             ExamCommunityPort examCommunityPort,
-            Clock clock) {
+            Clock clock,
+            jakarta.persistence.EntityManager entityManager) {
         this.publications = publications;
         this.publicationTags = publicationTags;
         this.tags = tags;
@@ -91,6 +93,7 @@ public class CommunityService {
         this.rateLimiter = rateLimiter;
         this.examCommunityPort = examCommunityPort;
         this.clock = clock;
+        this.entityManager = entityManager;
     }
 
     // ============================================================
@@ -111,18 +114,20 @@ public class CommunityService {
         CommunityReusePolicy reusePolicy = parseReusePolicy(request.reusePolicy());
         Set<String> normalizedTags = normalizeTags(request.tags());
         requireExistingCategory(request.categoryId());
-
-        if (publications.existsByExamId(request.examId())) {
-            throw new CommunityException(CommunityErrorCode.COMMUNITY_PUBLICATION_EXISTS);
-        }
-
-        // Eligibility (§4): exam exists, owned by caller, PUBLISHED. A
-        // foreign or missing exam is indistinguishable (404).
+        // Anti-enumeration ordering (§4): eligibility FIRST, then the
+        // duplicate probe. A foreign or missing exam is always 404 —
+        // indistinguishable from any other foreign id — so an outsider
+        // probing exam ids can never learn that a publication (incl.
+        // UNPUBLISHED/HIDDEN) exists for it.
         ExamCommunityPort.PublicationEligibility eligibility = examCommunityPort
                 .checkPublicationEligibility(request.examId(), userId)
                 .orElseThrow(() -> new CommunityException(CommunityErrorCode.COMMUNITY_NOT_FOUND));
         if (eligibility.examStatus() != ExamStatus.PUBLISHED) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_PUBLISH_INELIGIBLE);
+        }
+
+        if (publications.existsByExamId(request.examId())) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_PUBLICATION_EXISTS);
         }
 
         CommunityPublication publication = new CommunityPublication(
@@ -157,6 +162,33 @@ public class CommunityService {
 
         if (!publication.getVersion().equals(request.expectedVersion())) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_CONCURRENT_MODIFICATION);
+        }
+
+        // Optimistic CAS for tag-only PATCHes (§4). A PATCH that carries
+        // tags but no entity column never dirties the JPA entity, so the
+        // @Version check would never run and two concurrent tag-only
+        // PATCHes with the same expectedVersion would BOTH win,
+        // interleaving tag sets. The guarded bump is the authoritative
+        // CAS on that path: an atomic UPDATE ... WHERE version =
+        // :expected that also moves updated_at (no entity flush
+        // follows). Rowcount 0 means a concurrent writer moved the row
+        // first → 409. Column-changing PATCHes keep the JPA versioned
+        // UPDATE below as their CAS so the version advances exactly once
+        // either way (response = expected+1); a fully-empty PATCH stays
+        // the documented idempotent no-op (version unchanged).
+        boolean columnPatch = request.title() != null || request.summary() != null
+                || request.categoryId() != null || request.authorAlias() != null
+                || request.reusePolicy() != null;
+        boolean tagsOnlyPatch = request.tags() != null && !columnPatch;
+        if (tagsOnlyPatch && publications.bumpVersionGuarded(
+                publication.getId(), request.expectedVersion()) == 0) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_CONCURRENT_MODIFICATION);
+        }
+        if (tagsOnlyPatch) {
+            // Resync the managed instance with the bumped row: bulk
+            // updates bypass the persistence context, so without this
+            // refresh the response would report the stale token.
+            entityManager.refresh(publication);
         }
 
         // PATCHable set exactly {title, summary, categoryId, tags, authorAlias,

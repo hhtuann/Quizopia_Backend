@@ -82,10 +82,11 @@ class V24UserCentricMigrationMatrixTest {
             try (Connection c = java.sql.DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement()) {
 
-                // Role model: only STUDENT/TEACHER remain, correctly converted.
+                // Role model: only STUDENT/TEACHER remain, correctly converted
+                // (V26 later adds the dormant COMMUNITY_MODERATOR).
                 assertThat(rows(st, "SELECT code FROM roles ORDER BY code"))
                         .as("roles are consolidated to STUDENT/TEACHER")
-                        .containsExactly("STUDENT", "TEACHER");
+                        .containsExactly("COMMUNITY_MODERATOR", "STUDENT", "TEACHER");
                 assertThat(rows(st, """
                         SELECT u.username || '=' || string_agg(r.code, ',' ORDER BY r.code)
                         FROM users u
@@ -218,8 +219,8 @@ class V24UserCentricMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain reached V25")
-                        .containsExactly("25");
+                        .as("migration chain passed through V24/V25 (head is now V28)")
+                        .containsExactly("28");
             }
         } finally {
             dropDatabase(dbName);
@@ -361,8 +362,8 @@ class V24UserCentricMigrationMatrixTest {
             try (Connection c = java.sql.DriverManager.getConnection(url, user, pass);
                  Statement st = c.createStatement()) {
                 assertThat(rows(st, "SELECT code FROM roles ORDER BY code"))
-                        .as("fresh database ends with the two-role model")
-                        .containsExactly("STUDENT", "TEACHER");
+                        .as("fresh database ends with STUDENT/TEACHER plus the V26 dormant moderator")
+                        .containsExactly("COMMUNITY_MODERATOR", "STUDENT", "TEACHER");
                 assertThat(rows(st, "SELECT code FROM grade_levels ORDER BY code"))
                         .as("global grade levels seeded")
                         .containsExactly("G10", "G11", "G12");
@@ -383,7 +384,9 @@ class V24UserCentricMigrationMatrixTest {
                 assertThat(rows(st, """
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
-                        """)).containsExactly("25");
+                        """))
+                        .as("fresh migration reaches the current head (V28)")
+                        .containsExactly("28");
             }
         } finally {
             dropDatabase(dbName);

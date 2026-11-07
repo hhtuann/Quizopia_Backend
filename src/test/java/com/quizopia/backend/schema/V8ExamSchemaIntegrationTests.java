@@ -75,7 +75,7 @@ class V8ExamSchemaIntegrationTests {
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("25");
+        assertThat(current).isEqualTo("28");
     }
 
     @Test
@@ -182,10 +182,11 @@ class V8ExamSchemaIntegrationTests {
     }
     @Test
     void rolesAreStudentAndTeacherOnly() {
-        // V24 consolidated the role model to STUDENT/TEACHER.
+        // V24 consolidated the role model to STUDENT/TEACHER; V26 adds the
+        // dormant operator-provisioned COMMUNITY_MODERATOR (granted to nobody).
         assertThat(jdbc.queryForObject(
                 "SELECT string_agg(code, ',' ORDER BY code) FROM roles", String.class))
-                .isEqualTo("STUDENT,TEACHER");
+                .isEqualTo("COMMUNITY_MODERATOR,STUDENT,TEACHER");
     }
 
     // ============================================================

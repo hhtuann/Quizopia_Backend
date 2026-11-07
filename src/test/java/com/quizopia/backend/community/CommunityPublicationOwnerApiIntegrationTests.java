@@ -195,6 +195,26 @@ class CommunityPublicationOwnerApiIntegrationTests {
     }
 
     @Test
+    void foreignExamWithExistingPublicationIsStill404ForTheForeignCaller() throws Exception {
+        // Anti-enumeration regression: eligibility is checked BEFORE the
+        // duplicate probe, so a teacher probing a FOREIGN exam id that
+        // already carries a publication (here even UNPUBLISHED) gets the
+        // same 404 as for any other foreign id — never a 409 duplicate
+        // oracle that would leak publication existence.
+        long foreignExam = newPublishedExam(foreignTeacherId, null);
+        jdbc.update("""
+                INSERT INTO community_publications (exam_id, publisher_user_id, title,
+                                                    status, moderation_state)
+                VALUES (?, ?, 'Foreign fixture publication', 'UNPUBLISHED', 'VISIBLE')
+                """, foreignExam, foreignTeacherId);
+
+        mockMvc.perform(post("/api/community/publications").with(jwtSubject(teacherId))
+                        .contentType(MediaType.APPLICATION_JSON).content(createBody(foreignExam)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("COMMUNITY_NOT_FOUND"));
+    }
+
+    @Test
     void createRejectsDuplicatePublicationWith409() throws Exception {
         long examId = newPublishedExam(teacherId, null);
         createPublication(examId);
@@ -202,6 +222,24 @@ class CommunityPublicationOwnerApiIntegrationTests {
                         .contentType(MediaType.APPLICATION_JSON).content(createBody(examId)))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_PUBLICATION_EXISTS"));
+    }
+
+    @Test
+    void createRejectsAliasEqualToUsernameVariantsAndUppercasedEmail() throws Exception {
+        long examId = newPublishedExam(teacherId, null);
+        String username = jdbc.queryForObject(
+                "SELECT username FROM users WHERE id = ?", String.class, teacherId);
+        String uppercasedEmail = jdbc.queryForObject(
+                "SELECT upper(email) FROM users WHERE id = ?", String.class, teacherId);
+
+        for (String alias : new String[] {username, username.toUpperCase(), uppercasedEmail}) {
+            mockMvc.perform(post("/api/community/publications").with(jwtSubject(teacherId))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"examId\":" + examId + ",\"title\":\"T\",\"authorAlias\":\""
+                                    + alias + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("COMMUNITY_ALIAS_INVALID"));
+        }
     }
 
     @Test
@@ -341,6 +379,31 @@ class CommunityPublicationOwnerApiIntegrationTests {
                         .content("{\"expectedVersion\":0,\"authorAlias\":\"" + email + "\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_ALIAS_INVALID"));
+    }
+
+    @Test
+    void patchRejectsAliasEqualToUsernameVariantsAndUppercasedEmail() throws Exception {
+        long publicationId = createPublication();
+        String username = jdbc.queryForObject(
+                "SELECT username FROM users WHERE id = ?", String.class, teacherId);
+        String uppercasedEmail = jdbc.queryForObject(
+                "SELECT upper(email) FROM users WHERE id = ?", String.class, teacherId);
+
+        for (String alias : new String[] {username, username.toUpperCase(), uppercasedEmail}) {
+            mockMvc.perform(patch("/api/community/publications/" + publicationId)
+                            .with(jwtSubject(teacherId))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"expectedVersion\":0,\"authorAlias\":\"" + alias + "\"}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("COMMUNITY_ALIAS_INVALID"));
+        }
+
+        // The gate never burned the version: a clean alias still applies.
+        mockMvc.perform(patch("/api/community/publications/" + publicationId)
+                        .with(jwtSubject(teacherId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":0,\"authorAlias\":\"Sensei\"}"))
+                .andExpect(status().isOk());
     }
 
     // ==================================================================

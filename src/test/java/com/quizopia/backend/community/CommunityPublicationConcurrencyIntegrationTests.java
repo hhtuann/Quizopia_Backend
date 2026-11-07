@@ -102,6 +102,24 @@ class CommunityPublicationConcurrencyIntegrationTests {
     }
 
     @Test
+    void concurrentTagOnlyPatchesWithSameExpectedVersionYieldOneWinner() throws Exception {
+        long publicationId = createPublication();
+
+        // Tag-only PATCHes never dirty the JPA entity, so the @Version
+        // flush alone cannot arbitrate them — the guarded bump must:
+        // exactly one 200 whose response version == expected+1, one 409,
+        // and the final tag set is the winner's.
+        List<String> results = runTwoConcurrently(
+                tagOnlyPatch(publicationId, "alpha-tag"),
+                tagOnlyPatch(publicationId, "beta-tag"));
+
+        assertThat(results).containsExactlyInAnyOrder(
+                "OK/1", CommunityErrorCode.COMMUNITY_CONCURRENT_MODIFICATION.code());
+        assertThat(tagsAndVersion(publicationId)).isIn("alpha-tag/1", "beta-tag/1");
+    }
+
+
+    @Test
     void concurrentPublishPublishBothSucceedWithSingleTransition() throws Exception {
         long publicationId = createAliasedPublication();
 
@@ -217,6 +235,52 @@ class CommunityPublicationConcurrencyIntegrationTests {
         pool.shutdown();
         assertThat(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         return results;
+    }
+
+    /** Two DIFFERENT tasks racing on one start latch (tag-only PATCH race). */
+    private List<String> runTwoConcurrently(Callable<String> first, Callable<String> second)
+            throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        var f1 = pool.submit(() -> {
+            start.await();
+            return first.call();
+        });
+        var f2 = pool.submit(() -> {
+            start.await();
+            return second.call();
+        });
+        start.countDown();
+        List<String> results = List.of(f1.get(60, java.util.concurrent.TimeUnit.SECONDS),
+                f2.get(60, java.util.concurrent.TimeUnit.SECONDS));
+        pool.shutdown();
+        assertThat(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        return results;
+    }
+
+    private Callable<String> tagOnlyPatch(long publicationId, String tag) {
+        return () -> {
+            try {
+                var response = communityService.updatePublication(teacherId, publicationId,
+                        new UpdatePublicationRequest(0, null, null, null, List.of(tag), null, null));
+                return "OK/" + response.version();
+            } catch (CommunityException ex) {
+                return ex.getErrorCode().code();
+            }
+        };
+    }
+
+    private String tagsAndVersion(long publicationId) {
+        String tags = String.join(",", jdbc.queryForList("""
+                SELECT t.label
+                FROM community_publication_tags pt
+                JOIN community_tags t ON t.id = pt.tag_id
+                WHERE pt.publication_id = ?
+                ORDER BY t.label
+                """, String.class, publicationId));
+        Integer version = jdbc.queryForObject(
+                "SELECT version FROM community_publications WHERE id = ?", Integer.class, publicationId);
+        return tags + "/" + version;
     }
 
     private long insert(String sql) {
