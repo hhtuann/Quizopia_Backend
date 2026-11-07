@@ -39,11 +39,11 @@ All ids BIGINT IDENTITY; timestamps TIMESTAMPTZ; enum state CHECK-constrained. *
     ORDER BY LOWER(s.code), s.id
   ) t;
   ```
-  (`name`→`title` mapping explicit; deterministic tie-break; works identically on fresh and V25→V26 legs — 15 rows, unique codes, asserted by the migration matrix). No CRUD API.
+  (`name`→`title` mapping explicit; deterministic tie-break; works identically on fresh and V25→V26 legs. Matrix assertion: `count(*) = count(DISTINCT LOWER(code))` with contiguous unique positions — not a literal row count, since the upgrade leg preserves legacy subject codes). No CRUD API.
 - `community_publications`:
   - `id` PK; `exam_id BIGINT NOT NULL UNIQUE` FK→`exams` ON DELETE RESTRICT (one publication per exam, immutable); `publisher_user_id BIGINT NOT NULL` FK→`users` ON DELETE RESTRICT (immutable, equals `exams.created_by_user_id` at every state change — invariant rechecked, never updated; app-layer enforced — the entity exposes no setter and no UPDATE path writes these columns, asserted by test).
   - `status` CHECK `('UNPUBLISHED','PUBLISHED')`; `moderation_state` CHECK `('VISIBLE','HIDDEN')`; `reuse_policy` CHECK `('NO_FORK','ALLOW_FORK')` DEFAULT `NO_FORK`.
-  - `title VARCHAR(255) NOT NULL`; `summary VARCHAR(500)`; `author_alias VARCHAR(80)` NULL (required at publish, §4/§7); `category_id` FK→`community_categories` NULL; `question_count INT NOT NULL DEFAULT 0`; `section_count INT NOT NULL DEFAULT 0`; `duration_minutes INT NOT NULL DEFAULT 0` (`COALESCE(exams.duration_minutes, 0)` — the source column is nullable); `published_at TIMESTAMPTZ` NULL.
+  - `title VARCHAR(255) NOT NULL`; `summary VARCHAR(500)`; `author_alias VARCHAR(80)` NULL (required at publish, §4/§7); `category_id` FK→`community_categories` ON DELETE RESTRICT NULL (categories are migration-managed and never deleted); `question_count INT NOT NULL DEFAULT 0`; `section_count INT NOT NULL DEFAULT 0`; `duration_minutes INT NOT NULL DEFAULT 0` (`COALESCE(exams.duration_minutes, 0)` — the source column is nullable); `published_at TIMESTAMPTZ` NULL.
   - `version INT NOT NULL DEFAULT 0` (JPA `@Version`, the owner optimistic token); `created_at`/`updated_at`.
   - Indexes: catalog `(status, moderation_state, published_at DESC, id DESC)`; owner list `(publisher_user_id, created_at DESC, id DESC)`.
 - `community_tags`: `id`, `label VARCHAR(40)` unique ci; created on demand from create/PATCH payloads (lower-cased, trimmed, `[a-z0-9][a-z0-9 -]{0,39}`, max 5 distinct per publication) via `INSERT … ON CONFLICT DO NOTHING`.
@@ -56,7 +56,7 @@ All ids BIGINT IDENTITY; timestamps TIMESTAMPTZ; enum state CHECK-constrained. *
 - `community_reports`: `id`, `publication_id` FK CASCADE, `reporter_user_id` FK→users RESTRICT, `reason_code` CHECK `('INAPPROPRIATE_CONTENT','COPYRIGHT','MISLEADING','SPAM','OTHER')`, `details VARCHAR(500)`, `status` CHECK `('OPEN','DISMISSED','RESOLVED')` DEFAULT OPEN, `handled_by` NULL FK→users RESTRICT, `handled_at`, `resolution_note VARCHAR(500)`, `created_at`; partial unique index `UNIQUE(reporter_user_id, publication_id) WHERE status='OPEN'`; indexes `(status, created_at)`, `(publication_id)`.
 - `community_moderation_actions` (append-only audit): `id`, `actor_user_id` FK→users RESTRICT (the operator's dedicated platform account for GRANT/REVOKE rows, §5), `publication_id` NULL FK RESTRICT, `report_id` NULL FK RESTRICT, `action` CHECK `('HIDE','RESTORE','REPORT_DISMISS','REPORT_RESOLVE','MODERATOR_GRANTED','MODERATOR_REVOKED')`, `from_status`/`to_status`, `from_moderation_state`/`to_moderation_state`, `reason VARCHAR(500) NOT NULL`, `correlation_id VARCHAR(64)`, `created_at`; indexes `(publication_id, created_at DESC)`, `(report_id)`. Repository exposes `save` + reads only.
 
-**V28 `community_bookmarks`**: `id`, `user_id` FK CASCADE, `publication_id` FK CASCADE, `created_at`, `UNIQUE(user_id, publication_id)`, index `(user_id, created_at DESC, id DESC)`.
+**V28 `community_bookmarks`**: `id`, `user_id` FK→users RESTRICT, `publication_id` FK CASCADE, `created_at`, `UNIQUE(user_id, publication_id)`, index `(user_id, created_at DESC, id DESC)`.
 
 **V29 `community_fork_records`**: `id`, `actor_user_id` FK RESTRICT, `idempotency_key_hash VARCHAR(64)` CHECK 64-hex (server-keyed HMAC of `community-fork:<actor_user_id>:<key>`, §9 key posture), `source_publication_id` FK RESTRICT, `source_exam_id` FK RESTRICT, `target_exam_id BIGINT NOT NULL UNIQUE` FK→exams RESTRICT, `source_title_snapshot VARCHAR(255)`, `source_alias_snapshot VARCHAR(80)`, `created_at`; `UNIQUE(actor_user_id, idempotency_key_hash)`.
 
