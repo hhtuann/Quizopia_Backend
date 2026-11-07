@@ -30,6 +30,8 @@ public record ClassroomDetailView(
             Long studentProfileId,
             String studentCode,
             String displayName,
+            String username,
+            String email,
             Instant addedAt
     ) {
     }

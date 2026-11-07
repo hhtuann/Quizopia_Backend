@@ -15,7 +15,9 @@ import java.util.List;
  * version selection — one exam has exactly one published content set.
  */
 public record CreateExamSessionRequest(
-        @NotNull @Positive Long examId,
+        /** Body value used only by the canonical POST /api/exam-sessions; the nested
+         * POST /api/exams/{examId}/sessions route supplies it from the path instead. */
+        @Positive Long examId,
         @Size(max = 30) String code,
         @NotBlank @Size(max = 255) String title,
         @NotNull Instant startsAt,

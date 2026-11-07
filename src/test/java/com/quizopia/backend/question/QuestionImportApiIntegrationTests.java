@@ -155,14 +155,14 @@ class QuestionImportApiIntegrationTests {
                 jdbc.update("DELETE FROM grade_levels WHERE code = 'GL-IMP'");
                 jdbc.update("DELETE FROM schools WHERE code = 'API-IMP-SCH'");
                 jdbc.update("DELETE FROM role_permissions WHERE role_id = (SELECT id FROM roles WHERE code = 'SYSTEM_ADMIN') AND permission_id = (SELECT id FROM permissions WHERE code = 'QUESTION_CREATE')");
-                jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
-                jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
+                jdbc.update("DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
+                jdbc.update("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
                 // Personal workspaces provisioned by the no-profile tests own
                 // FK rows referencing the test users — remove them first.
-                jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')))");
-                jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')))");
-                jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other'))");
-                jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other')");
+                jdbc.update("DELETE FROM question_banks WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')))");
+                jdbc.update("DELETE FROM workspace_memberships WHERE workspace_id IN (SELECT id FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')))");
+                jdbc.update("DELETE FROM workspaces WHERE owner_user_id IN (SELECT id FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx'))");
+                jdbc.update("DELETE FROM users WHERE username IN ('api-import-teacher','api-import-student','api-import-admin','api-import-notp','api-import-other','api-import-prevx')");
         }
 
         // ============================================================
@@ -488,6 +488,83 @@ class QuestionImportApiIntegrationTests {
                 mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import", bankId)
                                 .file(corrupt)
                                 .with(jwtFor(student.getId())))
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
+        }
+
+        // ============================================================
+        // Read-only Excel preview (import-preview)
+        // ============================================================
+
+        @Test
+        void previewValidFile_returnsRowsAndPersistsNothing() throws Exception {
+                byte[] xlsx = workbookBytes(row -> {
+                        set(row, C_CODE, "Q-PREV-1");
+                        set(row, C_TYPE, "SINGLE_CHOICE");
+                        set(row, C_CONTENT, "Preview question?");
+                        set(row, C_POINTS, "1");
+                        set(row, C_DIFFICULTY, "EASY");
+                        set(row, C_OPT_A, "a");
+                        set(row, C_OPT_B, "b");
+                        set(row, C_OPT_C, "c");
+                        set(row, C_OPT_D, "d");
+                        set(row, C_CORRECT, "A");
+                });
+
+                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import-preview", bankId)
+                                .file(xlsxPart(xlsx))
+                                .with(jwtFor(teacherUserId)))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.totalRows").value(1))
+                                .andExpect(jsonPath("$.readyRows").value(1))
+                                .andExpect(jsonPath("$.rows.length()").value(1))
+                                .andExpect(jsonPath("$.rows[0].rowNumber").value(2)) // header is row 1
+                                .andExpect(jsonPath("$.rows[0].questionType").value("SINGLE_CHOICE"))
+                                .andExpect(jsonPath("$.rows[0].content").value("Preview question?"))
+                                .andExpect(jsonPath("$.rows[0].correctAnswers[0]").value("A"))
+                                .andExpect(jsonPath("$.rows[0].status").value("READY"));
+
+                Integer qCount = jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM questions WHERE question_bank_id = ?", Integer.class, bankId);
+                assertThat(qCount).isZero();
+        }
+
+        @Test
+        void previewWithInvalidRow_reportsIssuesWithoutImport() throws Exception {
+                byte[] xlsx = workbookBytes(row -> {
+                        set(row, C_CODE, "Q-PREV-2");
+                        set(row, C_TYPE, "MULTIPLE_CHOICE");
+                        set(row, C_CONTENT, "x");
+                        set(row, C_OPT_A, "a");
+                        set(row, C_OPT_B, "b");
+                        set(row, C_OPT_C, "c");
+                        set(row, C_OPT_D, "d");
+                        set(row, C_CORRECT, "A"); // MULTIPLE_CHOICE needs >= 2
+                });
+
+                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import-preview", bankId)
+                                .file(xlsxPart(xlsx))
+                                .with(jwtFor(teacherUserId)))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.readyRows").value(0))
+                                .andExpect(jsonPath("$.rows[0].status").value("INVALID"))
+                                .andExpect(jsonPath("$.rows[0].issues.length()").value(1));
+
+                Integer qCount = jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM questions WHERE question_bank_id = ?", Integer.class, bankId);
+                assertThat(qCount).isZero();
+        }
+
+        @Test
+        void previewByOutsider_returns403() throws Exception {
+                User other = userRepo.saveAndFlush(
+                                new User("api-import-prevx", "aipx@test.com", "hash", "API Preview Outsider"));
+                jdbc.update("INSERT INTO user_roles (user_id, role_id) "
+                                + "SELECT ?, id FROM roles WHERE code = 'TEACHER'", other.getId());
+
+                mockMvc.perform(multipart("/api/question-banks/{bankId}/questions/import-preview", bankId)
+                                .file(xlsxPart(validSingleChoiceBytes()))
+                                .with(jwtFor(other.getId())))
                                 .andExpect(status().isForbidden())
                                 .andExpect(jsonPath("$.code").value("QUESTION_BANK_ACCESS_DENIED"));
         }

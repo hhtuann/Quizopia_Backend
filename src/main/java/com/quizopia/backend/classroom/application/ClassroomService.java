@@ -188,16 +188,20 @@ public class ClassroomService {
         Map<Long, StudentProfile> profiles = batchStudentProfiles(
                 members.stream().map(ClassroomMember::getStudentProfileId)
                         .filter(Objects::nonNull).toList());
-        Map<Long, String> displayNames = batchDisplayNames(
-                members.stream().map(ClassroomMember::getUserId).collect(Collectors.toSet()));
+        Set<Long> memberUserIds = members.stream().map(ClassroomMember::getUserId).collect(Collectors.toSet());
+        Map<Long, String> displayNames = batchDisplayNames(memberUserIds);
+        Map<Long, Object[]> accounts = batchUserAccounts(memberUserIds);
 
         List<MemberView> memberViews = members.stream()
                 .map(m -> {
                     StudentProfile sp = m.getStudentProfileId() != null ? profiles.get(m.getStudentProfileId()) : null;
+                    Object[] account = accounts.get(m.getUserId());
                     return new MemberView(
                             m.getStudentProfileId(),
                             sp != null ? sp.getStudentCode() : null,
                             displayNames.get(m.getUserId()),
+                            account != null ? (String) account[0] : null,
+                            account != null ? (String) account[1] : null,
                             m.getAddedAt());
                 })
                 .toList();
@@ -526,6 +530,22 @@ public class ClassroomService {
     }
 
     /** Single Hibernate-tracked projection (no N+1). */
+    /** Batch username + email per user id (index 0/1). */
+    private Map<Long, Object[]> batchUserAccounts(Set<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Object[]> rows = entityManager.createQuery(
+                "SELECT u.id, u.username, u.email FROM User u WHERE u.id IN :ids", Object[].class)
+                .setParameter("ids", userIds)
+                .getResultList();
+        Map<Long, Object[]> accounts = new HashMap<>();
+        for (Object[] row : rows) {
+            accounts.put((Long) row[0], new Object[] { row[1], row[2] });
+        }
+        return accounts;
+    }
+
     private Map<Long, String> batchDisplayNames(Set<Long> userIds) {
         if (userIds == null || userIds.isEmpty()) {
             return Map.of();

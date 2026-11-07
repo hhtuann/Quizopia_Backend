@@ -100,6 +100,9 @@ public class ExamSessionService {
     public ExamSessionDetailResponse createSession(Long userId, Long pathExamId, CreateExamSessionRequest request) {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_CREATE");
         Long examId = pathExamId != null ? pathExamId : request.examId();
+        if (examId == null) {
+            throw new ExamException(ExamErrorCode.EXAM_VALIDATION_ERROR);
+        }
         if (request.examId() != null && pathExamId != null && !request.examId().equals(pathExamId)) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_EXAM_MISMATCH);
         }
