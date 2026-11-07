@@ -32,8 +32,7 @@ class P1CheckpointBMetadataConcurrencyIntegrationTests {
     void sameTokenAllowsExactlyOneCommittedWriter() throws Exception {
         long user = jdbc.queryForObject("INSERT INTO users(username,email,password_hash,display_name) VALUES ('p1bc','p1bc@test.com','h','B') RETURNING id", Long.class);
         jdbc.update("INSERT INTO user_roles(user_id,role_id) SELECT ?,id FROM roles WHERE code='TEACHER'", user);
-        long workspace = jdbc.queryForObject("INSERT INTO workspaces(workspace_type,name,owner_user_id) VALUES ('PERSONAL','B',?) RETURNING id", Long.class, user);
-        long exam = jdbc.queryForObject("INSERT INTO exams(workspace_id,created_by_user_id,code,title) VALUES (?,?,'P1BC','Original') RETURNING id", Long.class, workspace, user);
+        long exam = jdbc.queryForObject("INSERT INTO exams(created_by_user_id,code,title) VALUES (?,?,'P1BC','Original') RETURNING id", Long.class, user);
         CountDownLatch start = new CountDownLatch(1);
         try (var pool = Executors.newFixedThreadPool(2)) {
             java.util.concurrent.Callable<String> writer = () -> {

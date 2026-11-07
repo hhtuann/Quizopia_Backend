@@ -48,9 +48,7 @@ class ExamPublishServiceIntegrationTests {
     private ExamService examService;
 
     private long teacherUserId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
 
     @BeforeEach
     void setUp() {
@@ -58,12 +56,8 @@ class ExamPublishServiceIntegrationTests {
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('pt','pt@t','h','PT')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('PS','Publish School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
-                + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                + teacherUserId + "," + schoolId + ",'PTC')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ("
+                + "(SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
     }
 
     // -- Test group: happy path publish (4 types) --
@@ -291,7 +285,7 @@ class ExamPublishServiceIntegrationTests {
         long other = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('o3','o3@t','h','O3')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        // Not the creator and not a workspace OWNER/ADMIN -> 403 EXAM_ACCESS_DENIED.
+        // Not the creator -> 403 EXAM_ACCESS_DENIED (creator-only management).
         assertThatThrownBy(() -> examService.publishExam(other, examId, new PublishExamRequest(null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> {
@@ -331,8 +325,8 @@ class ExamPublishServiceIntegrationTests {
     }
 
     private long newBank() {
-        return insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'PB"
+        return insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + teacherUserId + "," + subjectId + ",'PB"
                 + Math.abs(System.nanoTime() % 1_000_000_000L) + "','Bank')");
     }
 
@@ -366,7 +360,7 @@ class ExamPublishServiceIntegrationTests {
 
     private Long createExam(String code) {
         return examService.createExam(teacherUserId,
-                new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null, code, "T", null)).id();
+                new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null, code, "T", null)).id();
     }
 
     private long insert(String sql) {

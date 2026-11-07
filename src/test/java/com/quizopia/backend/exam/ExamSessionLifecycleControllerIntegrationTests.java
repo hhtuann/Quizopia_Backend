@@ -37,7 +37,6 @@ class ExamSessionLifecycleControllerIntegrationTests {
     @Autowired private EntityManager entityManager;
 
     private long teacherUserId;
-    private long schoolId;
     private long draftSessionId;
     private long scheduledSessionId;
     private long openSessionId;
@@ -46,11 +45,8 @@ class ExamSessionLifecycleControllerIntegrationTests {
     void setUp() throws Exception {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('lcc','lcc@t','h','LCC')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('LCH','Lifecycle HTTP School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'LHC')");
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'LHB','Bank')");
+        long subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'LHB','Bank')");
         long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q','ACTIVE',1," + teacherUserId + ")");
         long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
@@ -130,7 +126,7 @@ class ExamSessionLifecycleControllerIntegrationTests {
     void foreignOwnerReturns403() throws Exception {
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('lco','lco@t','h','LCO')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'LOC')");
+
         mockMvc.perform(post("/api/exam-sessions/" + draftSessionId + "/schedule")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(other)))))
                 .andExpect(status().isForbidden())

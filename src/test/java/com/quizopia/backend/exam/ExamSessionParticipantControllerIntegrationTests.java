@@ -33,64 +33,44 @@ class ExamSessionParticipantControllerIntegrationTests {
 
     private Long teacherUserId;
     private Long sessionId;
-    private Long studentProfileId;
+    private Long studentUserId;
 
     @BeforeEach
     void setUp() throws Exception {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('pc2','pc2@t','h','PC2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        Long schoolId = insert("INSERT INTO schools (code, name) VALUES ('PCS2','PC2 School')");
-        Long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        Long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        Long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'PC2T')");
-        Long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp + ",'QB','Bank')");
+        Long subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        Long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Bank')");
         Long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q','ACTIVE',1," + teacherUserId + ")");
         Long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + q + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
         for (Object[] o : new Object[][]{{"A", true, 0}, {"B", false, 1}, {"C", false, 2}, {"D", false, 3}}) {
             jdbc.update("INSERT INTO question_options (question_version_id, option_key, content, is_correct, position) VALUES (" + v + ",'" + o[0] + "','opt'," + o[1] + "," + o[2] + ")");
         }
-        Long examId = createExamAndPublish(schoolId, subjectId);
+        Long examId = createExamAndPublish(subjectId);
         Instant starts = Instant.now().plusSeconds(3600);
         Instant ends = starts.plusSeconds(7200);
         sessionId = createSession(examId, starts, ends);
-        Long sUser = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s1','s1@t','h','Student1')");
-        studentProfileId = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES (" + sUser + "," + schoolId + ",'HS001')");
-    }
-
-    @Test
-    void addParticipantsReturns200() throws Exception {
-        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants")
-                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"studentProfileIds\":[" + studentProfileId + "]}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.added").value(1));
+        studentUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('s1','s1@t','h','Student1')");
     }
 
     @Test
     void listParticipantsReturns200() throws Exception {
-        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants")
-                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"studentProfileIds\":[" + studentProfileId + "]}"))
-                .andExpect(status().isOk());
+        // The bulk add-participants endpoint was removed with the school model;
+        // participant rows are staged via direct SQL (user-based identity).
+        jdbc.update("INSERT INTO exam_session_participants (exam_session_id, user_id, status, added_by, version) "
+                + "VALUES (?,?,?,?,0)", sessionId, studentUserId, "ELIGIBLE", teacherUserId);
         mockMvc.perform(get("/api/exam-sessions/" + sessionId + "/participants")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].studentProfileId").value(studentProfileId))
+                .andExpect(jsonPath("$.items[0].userId").value(studentUserId))
                 .andExpect(jsonPath("$.items[0].displayName").value("Student1"))
-                .andExpect(jsonPath("$.items[0].studentCode").value("HS001"))
+                .andExpect(jsonPath("$.items[0].status").value("ELIGIBLE"))
                 .andExpect(jsonPath("$.items[0].answerKey").doesNotExist());
     }
 
     @Test
     void blockUnblockReturns200() throws Exception {
-        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants")
-                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"studentProfileIds\":[" + studentProfileId + "]}"))
-                .andExpect(status().isOk());
-        Long pid = jdbc.queryForObject("SELECT id FROM exam_session_participants WHERE exam_session_id=? AND student_profile_id=?", Long.class, sessionId, studentProfileId);
+        Long pid = insertParticipant();
         entityManager.clear();
         mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants/" + pid + "/block")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
@@ -104,9 +84,24 @@ class ExamSessionParticipantControllerIntegrationTests {
     }
 
     @Test
-    void addUnauthenticatedReturns401() throws Exception {
-        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants")
-                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+    void blockUnblockByUserReturns200() throws Exception {
+        insertParticipant();
+        entityManager.clear();
+        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants/by-user/" + studentUserId + "/block")
+                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").value(studentUserId))
+                .andExpect(jsonPath("$.status").value("BLOCKED"));
+        entityManager.clear();
+        mockMvc.perform(post("/api/exam-sessions/" + sessionId + "/participants/by-user/" + studentUserId + "/unblock")
+                        .with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ELIGIBLE"));
+    }
+
+    @Test
+    void listUnauthenticatedReturns401() throws Exception {
+        mockMvc.perform(get("/api/exam-sessions/" + sessionId + "/participants"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -123,7 +118,6 @@ class ExamSessionParticipantControllerIntegrationTests {
     void listForeignOwnerReturns403() throws Exception {
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o8','o8@t','h','O8')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        jdbc.update("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + jdbc.queryForObject("SELECT school_id FROM exam_sessions WHERE id=?", Long.class, sessionId) + ",'PC3')");
         mockMvc.perform(get("/api/exam-sessions/" + sessionId + "/participants")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(other)))))
                 .andExpect(status().isForbidden())
@@ -132,7 +126,15 @@ class ExamSessionParticipantControllerIntegrationTests {
 
     // -- Helpers --
 
-    private Long createExamAndPublish(Long schoolId, Long subjectId) throws Exception {
+    /** Stages a participant row the way the system does now: direct SQL with user identity. */
+    private Long insertParticipant() {
+        return jdbc.queryForObject(
+                "INSERT INTO exam_session_participants (exam_session_id, user_id, status, added_by, version) "
+                        + "VALUES (?,?,?,?,0) RETURNING id",
+                Long.class, sessionId, studentUserId, "ELIGIBLE", teacherUserId);
+    }
+
+    private Long createExamAndPublish(Long subjectId) throws Exception {
         String body = mockMvc.perform(post("/api/exams")
                         .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)

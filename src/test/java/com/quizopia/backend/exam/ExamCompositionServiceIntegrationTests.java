@@ -49,18 +49,14 @@ class ExamCompositionServiceIntegrationTests {
     @jakarta.persistence.PersistenceContext private jakarta.persistence.EntityManager em;
 
     private long teacherUserId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
 
     @BeforeEach
     void setUp() {
         teacherUserId = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('tc','tc@t','h','TC')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('SC','School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + teacherUserId + "," + schoolId + ",'TC1')");
+        // Global academic catalog (V24): reuse the seeded G10 grade level.
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'),'SUB','Sub')");
     }
 
     // -- Test group: COMPOSITION SUCCESS (4 types) --
@@ -240,48 +236,44 @@ class ExamCompositionServiceIntegrationTests {
     // -- Test group: SOURCE POLICY rejects --
 
     @Test
-    void sameWorkspaceForeignOwnerBankAccepted() {
-        // Public platform foundation (issue #1): the org workspace is the sharing
-        // boundary. A second teacher in the SAME school (same org workspace)
-        // contributes questions; cross-workspace banks stay rejected (below).
+    void foreignOwnerBankRejected() {
+        // User-centric model: strict source ownership — only banks created by
+        // the exam owner may contribute questions (no workspace sharing).
         long u2 = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o2','o2@t','h','O2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId + ",'TC2')");
-        long bank2 = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + tp2 + ",'FB','Foreign')");
+        long bank2 = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + u2 + "," + subjectId + ",'FB','Foreign')");
         long fq = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank2 + ",'fq','ACTIVE',1," + u2 + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + fq + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + u2 + ")");
         Long examId = createExam("E10");
-        TeacherExamEditorResponse r = examService.updateDraftComposition(teacherUserId, examId,
+        assertThatThrownBy(() -> examService.updateDraftComposition(teacherUserId, examId,
                 new UpdateDraftCompositionRequest(0, null, null, List.of(
-                        new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(fq, 0, null))))));
-        assertThat(r.composition()).hasSize(1);
+                        new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(fq, 0, null)))))))
+                .isInstanceOfSatisfying(ExamException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
     }
 
     @Test
-    void crossSchoolAndWrongSubjectAndInactiveRejected() {
-        // Cross-school bank (different school, different owner user).
-        long s2 = insert("INSERT INTO schools (code, name) VALUES ('XS','XS')");
-        long gl2 = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + s2 + ",'GL','G')");
-        long sub2 = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + s2 + "," + gl2 + ",'XS','X')");
+    void foreignOwnerAndInactiveSourcesRejected() {
+        // Foreign-owner bank (bank created by another user).
         long uCs = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('ucs','ucs@t','h','UCS')");
-        long tpCs = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + uCs + "," + s2 + ",'TCS')");
-        long bankCs = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + s2 + "," + sub2 + "," + tpCs + ",'CSB','Cross')");
+        long bankCs = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + uCs + "," + subjectId + ",'CSB','Foreign')");
         long qCs = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bankCs + ",'csq','ACTIVE',1," + teacherUserId + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qCs + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
-        // Wrong-subject bank (same owner + school, different subject).
-        long subWs = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + ",(SELECT id FROM grade_levels WHERE school_id=" + schoolId + " LIMIT 1),'WS','WrongSub')");
-        long bankWs = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subWs + "," + teacherProfileId + ",'WSB','WrongSub')");
+        // Different-subject bank, SAME owner: subjects are optional global
+        // metadata now — the scope check is gone, so this is accepted (below).
+        long subWs = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'),'WS','WrongSub')");
+        long bankWs = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subWs + ",'WSB','WrongSub')");
         long qWs = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bankWs + ",'wsq','ACTIVE',1," + teacherUserId + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qWs + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
-        // Inactive (ARCHIVED) bank, same owner/school/subject.
-        long bankIn = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name, status) VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'INB','Inactive','ARCHIVED')");
+        // Inactive (ARCHIVED) bank, same owner.
+        long bankIn = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name, status) VALUES (" + teacherUserId + "," + subjectId + ",'INB','Inactive','ARCHIVED')");
         long qIn = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bankIn + ",'inq','ACTIVE',1," + teacherUserId + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qIn + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
         // Inactive (ARCHIVED) question in an active bank.
-        long bankOk = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'OKB','Ok')");
+        long bankOk = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'OKB','Ok')");
         long qArch = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bankOk + ",'arq','ARCHIVED',1," + teacherUserId + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, metadata, created_by) VALUES (" + qArch + ",1,'SINGLE_CHOICE','c','MEDIUM',1,'{}'::jsonb," + teacherUserId + ")");
 
@@ -290,12 +282,14 @@ class ExamCompositionServiceIntegrationTests {
         Long examIdIn = createExam("Ein");
         Long examIdArch = createExam("Earch");
 
-        // Cross-school -> 403.
+        // Foreign-owner bank -> 403.
         assertThatThrownBy(() -> putOne(examIdCs, qCs)).isInstanceOfSatisfying(ExamException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
-        // Wrong-subject -> 403.
-        assertThatThrownBy(() -> putOne(examIdWs, qWs)).isInstanceOfSatisfying(ExamException.class,
-                ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_ACCESS_DENIED));
+        // Different-subject bank, same owner -> ACCEPTED (subject scope is gone).
+        TeacherExamEditorResponse ws = examService.updateDraftComposition(teacherUserId, examIdWs,
+                new UpdateDraftCompositionRequest(0, null, null, List.of(
+                        new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(qWs, 0, null))))));
+        assertThat(ws.composition()).hasSize(1);
         // Inactive bank -> 400.
         assertThatThrownBy(() -> putOne(examIdIn, qIn)).isInstanceOfSatisfying(ExamException.class,
                 ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
@@ -367,7 +361,6 @@ class ExamCompositionServiceIntegrationTests {
         Long examId = createExam("Efo");
         long other = insert("INSERT INTO users (username, email, password_hash, display_name) VALUES ('o3','o3@t','h','O3')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", other);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + other + "," + schoolId + ",'TC3')");
         assertThatThrownBy(() -> examService.updateDraftComposition(other, examId,
                 new UpdateDraftCompositionRequest(0, null, null, List.of(
                         new CompositionSectionRequest(0, "S", null, List.of(new CompositionQuestionRequest(b.singleQ, 0, null)))))))
@@ -380,7 +373,7 @@ class ExamCompositionServiceIntegrationTests {
     @Test
     void numericAnswerKeyPreservedVerbatim() {
         // Build a numeric question with expectedAnswer "02.5" (trailing/leading representation preserved).
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'NB','Num')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'NB','Num')");
         long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'nq','ACTIVE',1," + teacherUserId + ")");
         insert("INSERT INTO question_versions (question_id, version_number, question_type, content, difficulty, default_points, answer_key, metadata, created_by) VALUES ("
                 + q + ",1,'NUMERIC_FILL','n','MEDIUM',1,'{\"expectedAnswer\":\"02.5\",\"requiredInputLength\":4,\"roundingInstruction\":\"2dp\"}'::jsonb,'{}'::jsonb," + teacherUserId + ")");
@@ -400,7 +393,7 @@ class ExamCompositionServiceIntegrationTests {
     @Test
     void updateDraftCompositionSelectCountDoesNotGrowWithSourceCount() {
         // Build a bank with 20 ACTIVE single-choice questions (each version + 4 options).
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES (" + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Q')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES (" + teacherUserId + "," + subjectId + ",'QB','Q')");
         List<Long> qIds = new ArrayList<>();
         for (int i = 0; i < 20; i++) {
             long q = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES (" + bank + ",'q" + i + "','ACTIVE',1," + teacherUserId + ")");
@@ -460,7 +453,7 @@ class ExamCompositionServiceIntegrationTests {
 
     private Long createExam(String code) {
         return examService.createExam(teacherUserId,
-                new com.quizopia.backend.exam.dto.CreateExamRequest(null, subjectId, null, code, "T", null)).id();
+                new com.quizopia.backend.exam.dto.CreateExamRequest(subjectId, null, code, "T", null)).id();
     }
 
     /**
@@ -480,8 +473,8 @@ class ExamCompositionServiceIntegrationTests {
 
     /** Creates a bank owned by the caller with the 4 MVP question types (ACTIVE, each with a version + options). */
     private Bank bank4(String bankCode) {
-        long bank = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'" + bankCode + "','Bank')");
+        long bank = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + teacherUserId + "," + subjectId + ",'" + bankCode + "','Bank')");
         long singleQ = choiceQuestion(bank, "s", "SINGLE_CHOICE", new boolean[]{true, false, false, false});
         long multiQ = choiceQuestion(bank, "m", "MULTIPLE_CHOICE", new boolean[]{true, true, false, false});
         long tfQ = choiceQuestion(bank, "t", "TRUE_FALSE_MATRIX", new boolean[]{true, false, true, false});

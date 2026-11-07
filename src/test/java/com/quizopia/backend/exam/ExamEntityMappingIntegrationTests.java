@@ -26,9 +26,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Integration tests proving the redesigned exam JPA entities (Task B, issue
- * #2 — one Exam = one content set) map correctly to the V13-V15 schema via
- * Hibernate {@code ddl-auto=validate}, and that JSONB, defaults, lifecycle
- * transitions, composite provenance FKs, workspace-scoped code uniqueness,
+ * #2 — one Exam = one content set) map correctly to the user-centric schema
+ * via Hibernate {@code ddl-auto=validate}, and that JSONB, defaults, lifecycle
+ * transitions, composite provenance FKs, creator-scoped code uniqueness,
  * the session state machine, optimistic versioning and toString safety all
  * work on real PostgreSQL 17 via Testcontainers.
  */
@@ -50,12 +50,11 @@ class ExamEntityMappingIntegrationTests {
     private ExamQuestionRepository questionRepo;
     @Autowired
     private ExamSessionRepository sessionRepo;
+    @Autowired
+    private ExamSessionParticipantRepository participantRepo;
 
     private long userId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
-    private long workspaceId;
     private long questionIdA;
     private long questionVersionIdA;
     private long questionIdB;
@@ -65,16 +64,10 @@ class ExamEntityMappingIntegrationTests {
     void setUp() {
         userId = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('eu','eu@t','h','EU')");
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('ES','Exam School')");
-        long glId = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + ","
-                + glId + ",'SUB','S')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + userId
-                + "," + schoolId + ",'ETC')");
-        // Lazily provision the school's organization workspace (V10 resolver).
-        workspaceId = jdbc.queryForObject("SELECT quizopia_org_workspace_for_school(?)", Long.class, schoolId);
-        long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Bank')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) VALUES ("
+                + "(SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
+        long bankId = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + userId + "," + subjectId + ",'QB','Bank')");
         questionIdA = insert("INSERT INTO questions (question_bank_id, code, created_by) VALUES (" + bankId + ",'qA',"
                 + userId + ")");
         questionVersionIdA = insert(
@@ -112,11 +105,8 @@ class ExamEntityMappingIntegrationTests {
         exam = examRepo.saveAndFlush(exam);
         entityManager.clear();
         Exam reloaded = examRepo.findById(exam.getId()).orElseThrow();
-        assertThat(reloaded.getWorkspaceId()).isEqualTo(workspaceId);
         assertThat(reloaded.getCreatedByUserUserId()).isEqualTo(userId);
-        assertThat(reloaded.getSchoolId()).isEqualTo(schoolId);
         assertThat(reloaded.getSubjectId()).isEqualTo(subjectId);
-        assertThat(reloaded.getOwnerTeacherId()).isEqualTo(teacherProfileId);
         assertThat(reloaded.getCode()).isEqualTo("RT2");
         assertThat(reloaded.getTitle()).isEqualTo("T");
         assertThat(reloaded.getDescription()).isEqualTo("desc");
@@ -275,18 +265,33 @@ class ExamEntityMappingIntegrationTests {
         assertThat(managed.getVersion()).isEqualTo(2);
     }
 
-    // -- Workspace ownership trigger (legacy-style insert) --
+    // -- User-ownership columns (user-centric model) --
 
     @Test
-    void legacyInsertTriggerFillsWorkspaceAndCreator() {
-        // Legacy-shape INSERT (no workspace/creator columns): the V11 BEFORE
-        // INSERT trigger resolves both from the school/teacher provenance.
-        long legacyId = insert("INSERT INTO exams (school_id, subject_id, owner_teacher_id, code, title) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'TRG','T')");
+    void userOwnershipColumnsRoundTrip() {
+        // exams.created_by_user_id <-> Exam.getCreatedByUserUserId()
+        Exam exam = examRepo.saveAndFlush(newExam("OWN1"));
+        assertThat(jdbc.queryForObject("SELECT created_by_user_id FROM exams WHERE id=?",
+                Long.class, exam.getId())).isEqualTo(userId);
+        // question_banks.created_by_user_id -> the bank owning the fixture questions
+        assertThat(jdbc.queryForObject(
+                "SELECT qb.created_by_user_id FROM question_banks qb "
+                        + "JOIN questions q ON q.question_bank_id = qb.id WHERE q.id = ?",
+                Long.class, questionIdA)).isEqualTo(userId);
+        // exam_sessions.created_by <-> ExamSession.getCreatedBy()
+        Instant starts = Instant.now();
+        Instant ends = starts.plusSeconds(3600);
+        var session = sessionRepo.saveAndFlush(new ExamSession(
+                exam.getId(), "OWN", "T", starts, ends, 1, 30, userId));
+        assertThat(jdbc.queryForObject("SELECT created_by FROM exam_sessions WHERE id=?",
+                Long.class, session.getId())).isEqualTo(session.getCreatedBy()).isEqualTo(userId);
+        // exam_session_participants.user_id <-> ExamSessionParticipant.getUserId()
+        ExamSessionParticipant p = participantRepo.saveAndFlush(
+                new ExamSessionParticipant(userId, session.getId(), userId));
         entityManager.clear();
-        Exam reloaded = examRepo.findById(legacyId).orElseThrow();
-        assertThat(reloaded.getWorkspaceId()).isEqualTo(workspaceId);
-        assertThat(reloaded.getCreatedByUserUserId()).isEqualTo(userId);
+        ExamSessionParticipant reloadedP = participantRepo.findById(p.getId()).orElseThrow();
+        assertThat(jdbc.queryForObject("SELECT user_id FROM exam_session_participants WHERE id=?",
+                Long.class, p.getId())).isEqualTo(reloadedP.getUserId()).isEqualTo(userId);
     }
 
     // -- ExamSection round-trip + position uniqueness --
@@ -420,15 +425,13 @@ class ExamEntityMappingIntegrationTests {
         Exam exam = examRepo.saveAndFlush(newExam("SS1"));
         Instant starts = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant ends = starts.plusSeconds(3600);
-        var session = new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        var session = new ExamSession(exam.getId(),
                 "S1", "T", starts, ends, 2, 60, userId);
         // @Version default makes save() merge — capture the managed instance.
         session = sessionRepo.saveAndFlush(session);
         entityManager.clear();
         ExamSession reloaded = sessionRepo.findById(session.getId()).orElseThrow();
         assertThat(reloaded.getExamId()).isEqualTo(exam.getId());
-        assertThat(reloaded.getSchoolId()).isEqualTo(schoolId);
-        assertThat(reloaded.getOwnerTeacherId()).isEqualTo(teacherProfileId);
         assertThat(reloaded.getCode()).isEqualTo("S1");
         assertThat(reloaded.getTitle()).isEqualTo("T");
         assertThat(reloaded.getStatus()).isEqualTo(ExamSessionStatus.DRAFT);
@@ -449,15 +452,15 @@ class ExamEntityMappingIntegrationTests {
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
         // null duration rejected (session-owned, no exam fallback)
-        assertThatThrownBy(() -> new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        assertThatThrownBy(() -> new ExamSession(exam.getId(),
                 "X1", "T", starts, ends, 1, null, userId))
                 .isInstanceOf(NullPointerException.class);
         // negative duration rejected
-        assertThatThrownBy(() -> new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        assertThatThrownBy(() -> new ExamSession(exam.getId(),
                 "X2", "T", starts, ends, 1, -1, userId))
                 .isInstanceOf(IllegalArgumentException.class);
         // 0 = unlimited convention is accepted and persists
-        var unlimited = sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        var unlimited = sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "X3", "T", starts, ends, 1, 0, userId));
         assertThat(unlimited.getDurationMinutes()).isZero();
     }
@@ -473,7 +476,7 @@ class ExamEntityMappingIntegrationTests {
 
         // DRAFT -> SCHEDULED -> OPEN -> CLOSED
         Exam exam1 = examRepo.saveAndFlush(newExam("SM1"));
-        var s1 = sessionRepo.saveAndFlush(new ExamSession(exam1.getId(), schoolId, teacherProfileId,
+        var s1 = sessionRepo.saveAndFlush(new ExamSession(exam1.getId(),
                 "SM1", "T", starts, ends, 1, 45, userId));
         s1.schedule();
         sessionRepo.saveAndFlush(s1);
@@ -492,7 +495,7 @@ class ExamEntityMappingIntegrationTests {
 
         // SCHEDULED -> CLOSED via expire (never opened: both timestamps = now)
         Exam exam2 = examRepo.saveAndFlush(newExam("SM2"));
-        var s2 = sessionRepo.saveAndFlush(new ExamSession(exam2.getId(), schoolId, teacherProfileId,
+        var s2 = sessionRepo.saveAndFlush(new ExamSession(exam2.getId(),
                 "SM2", "T", starts, ends, 1, 45, userId));
         s2.schedule();
         s2.expire(t1);
@@ -505,7 +508,7 @@ class ExamEntityMappingIntegrationTests {
 
         // SCHEDULED -> CANCELLED (no timestamps)
         Exam exam3 = examRepo.saveAndFlush(newExam("SM3"));
-        var s3 = sessionRepo.saveAndFlush(new ExamSession(exam3.getId(), schoolId, teacherProfileId,
+        var s3 = sessionRepo.saveAndFlush(new ExamSession(exam3.getId(),
                 "SM3", "T", starts, ends, 1, 45, userId));
         s3.schedule();
         s3.cancel();
@@ -522,7 +525,7 @@ class ExamEntityMappingIntegrationTests {
         Exam exam = examRepo.saveAndFlush(newExam("UC1"));
         Instant starts = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant ends = starts.plusSeconds(3600);
-        var session = sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        var session = sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "UC1", "T", starts, ends, 1, 30, userId));
         Instant starts2 = starts.plusSeconds(600);
         Instant ends2 = starts2.plusSeconds(1800);
@@ -544,48 +547,43 @@ class ExamEntityMappingIntegrationTests {
 
     @Test
     void examCodeSameCreatorDifferentCaseRejected() {
-        // Personal-workspace shape (no legacy teacher provenance) isolates the
-        // workspace-scoped unique index (workspace_id, created_by_user_id, LOWER(code)).
-        long wsP = insert("INSERT INTO workspaces (workspace_type, name, owner_user_id) VALUES ('PERSONAL','PW',"
-                + userId + ")");
-        examRepo.saveAndFlush(new Exam(wsP, userId, null, null, null, "CODE-1", "T"));
-        assertThatThrownBy(() -> examRepo.saveAndFlush(new Exam(wsP, userId, null, null, null, "code-1", "T")))
+        // Creator-scoped unique index (created_by_user_id, LOWER(code)).
+        examRepo.saveAndFlush(new Exam(userId, null, "CODE-1", "T"));
+        assertThatThrownBy(() -> examRepo.saveAndFlush(new Exam(userId, null, "code-1", "T")))
                 .isInstanceOf(DataIntegrityViolationException.class)
-                .hasMessageContaining("uk_exams_workspace_creator_code_ci");
+                .hasMessageContaining("uk_exams_creator_code_ci");
     }
 
     @Test
-    void examCodeDifferentCreatorsSameWorkspaceAccepted() {
+    void examCodeDifferentCreatorsAccepted() {
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2a','u2a@t','h','U2A')");
-        examRepo.saveAndFlush(new Exam(workspaceId, userId, null, null, null, "SHARED", "T"));
-        examRepo.saveAndFlush(new Exam(workspaceId, u2, null, null, null, "SHARED", "T"));
+        examRepo.saveAndFlush(new Exam(userId, null, "SHARED", "T"));
+        examRepo.saveAndFlush(new Exam(u2, null, "SHARED", "T"));
     }
 
     @Test
-    void sessionCodeSameOwnerDifferentCaseRejected() {
+    void sessionCodeSameCreatorDifferentCaseRejected() {
         Exam exam = examRepo.saveAndFlush(newExam("SC1"));
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
-        sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "SESS-1", "T", starts, ends, 1, 60, userId));
-        assertThatThrownBy(() -> sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        assertThatThrownBy(() -> sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "sess-1", "T", starts, ends, 1, 60, userId)))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    void sessionCodeTwoOwnersSameCodeAccepted() {
+    void sessionCodeDifferentCreatorsSameCodeAccepted() {
         Exam exam = examRepo.saveAndFlush(newExam("SC2"));
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u2b','u2b@t','h','U2B')");
-        long tp2 = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + ","
-                + schoolId + ",'ETC3')");
         Instant starts = Instant.now();
         Instant ends = starts.plusSeconds(3600);
-        sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, teacherProfileId,
+        sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "SHARED", "T", starts, ends, 1, 60, userId));
-        sessionRepo.saveAndFlush(new ExamSession(exam.getId(), schoolId, tp2,
+        sessionRepo.saveAndFlush(new ExamSession(exam.getId(),
                 "SHARED", "T", starts, ends, 1, 60, u2));
     }
 
@@ -613,9 +611,9 @@ class ExamEntityMappingIntegrationTests {
 
     // -- Helper --
 
-    /** New-model Exam in the school's organization workspace (all explicit). */
+    /** Creator-owned Exam in the user-centric model (all explicit). */
     private Exam newExam(String code) {
-        return new Exam(workspaceId, userId, schoolId, subjectId, teacherProfileId, code, "T");
+        return new Exam(userId, subjectId, code, "T");
     }
 
     private long insert(String sql) {

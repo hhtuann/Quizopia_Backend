@@ -87,25 +87,10 @@ class ReviewRound3P0IntegrationTests {
                 return jdbc.queryForObject(sql + " RETURNING id", Long.class);
         }
 
-        /** Org exam + session fixture. Returns [sessionId, examId, wsId, schoolId, teacherProfileId]. */
+        /** User-owned exam + session fixture. Returns [sessionId, examId]. */
         private Long[] orgExamSession(Long orgUserId, String visibility) {
-                Long schoolId = insert("INSERT INTO schools (code, name) VALUES ('R3-SCH-" + System.nanoTime()
-                                + "','S')");
-                Long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId
-                                + ",'GL','G')");
-                Long subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES ("
-                                + schoolId + "," + gl + ",'SUB','S')");
-                Long orgWs = insert("INSERT INTO organizations (legacy_school_id, code, name) VALUES ("
-                                + schoolId + ",'R3-ORG','O')");
-                Long wsId = insert("INSERT INTO workspaces (workspace_type, name, organization_id) "
-                                + "VALUES ('ORGANIZATION','O'," + orgWs + ")");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + orgUserId + ",'EDITOR','ACTIVE')");
-                Long tp = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                                + orgUserId + "," + schoolId + ",'TC')");
-                Long bank = insert("INSERT INTO question_banks (workspace_id, created_by_user_id, school_id, "
-                                + "subject_id, owner_teacher_id, code, name) VALUES (" + wsId + "," + orgUserId
-                                + "," + schoolId + "," + subjectId + "," + tp + ",'B','B')");
+                Long bank = insert("INSERT INTO question_banks (created_by_user_id, code, name) VALUES ("
+                                + orgUserId + ",'B','B')");
                 Long q = insert("INSERT INTO questions (question_bank_id, code, status, created_by) VALUES ("
                                 + bank + ",'q','ACTIVE'," + orgUserId + ")");
                 Long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, "
@@ -117,10 +102,9 @@ class ReviewRound3P0IntegrationTests {
                                         + "is_correct, position) VALUES (" + v + ",'" + o[0] + "','o'," + o[1]
                                         + "," + o[2] + ")");
                 }
-                Long examId = insert("INSERT INTO exams (workspace_id, created_by_user_id, school_id, subject_id, "
-                                + "owner_teacher_id, code, title, status, published_at, total_points, "
-                                + "instructions, duration_minutes, tf_matrix_scoring) VALUES (" + wsId + ","
-                                + orgUserId + "," + schoolId + "," + subjectId + "," + tp + ",'R3E','E',"
+                Long examId = insert("INSERT INTO exams (created_by_user_id, code, title, status, "
+                                + "published_at, total_points, instructions, duration_minutes, "
+                                + "tf_matrix_scoring) VALUES (" + orgUserId + ",'R3E','E',"
                                 + "'PUBLISHED',now(),1,'i',30,'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)");
                 Long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId
                                 + ",'S',0)");
@@ -134,12 +118,11 @@ class ReviewRound3P0IntegrationTests {
                                         + "is_correct, position) VALUES (" + eq + ",'" + o[0] + "','o'," + o[1]
                                         + "," + o[2] + ")");
                 }
-                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, school_id, owner_teacher_id, code, "
-                                + "title, status, starts_at, ends_at, created_by, visibility, max_attempts, "
-                                + "duration_minutes, opened_at) VALUES (" + examId + "," + schoolId + "," + tp
-                                + ",'R3SES','S','OPEN','" + STARTS + "','" + ENDS + "'," + orgUserId + ",'"
-                                + visibility + "',5,60,now())");
-                return new Long[] { sessionId, examId, wsId, schoolId, tp };
+                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
+                                + "ends_at, created_by, visibility, max_attempts, duration_minutes, opened_at) "
+                                + "VALUES (" + examId + ",'R3SES','S','OPEN','" + STARTS + "','" + ENDS + "',"
+                                + orgUserId + ",'" + visibility + "',5,60,now())");
+                return new Long[] { sessionId, examId };
         }
 
         /** Starts + submits an attempt over HTTP for a TEACHER-only public user; returns [userId, attemptId]. */
@@ -176,9 +159,6 @@ class ReviewRound3P0IntegrationTests {
                 for (JsonNode item : items) {
                         if (item.get("userId").asLong() == publicUserId) {
                                 found = true;
-                                assertThat(item.get("studentProfileId").isNull())
-                                                .as("public profile-less learner must have null studentProfileId")
-                                                .isTrue();
                                 assertThat(item.get("displayName").asString()).isNotBlank();
                         }
                 }
@@ -207,135 +187,61 @@ class ReviewRound3P0IntegrationTests {
         }
 
         // =====================================================================
-        // P0-R6 — participant management honors workspace policy
+        // P0-R6 — participant management is creator-only (user-centric policy)
         // =====================================================================
 
-        /** School student registered + profile + participant row on the session. */
-        private Long addSchoolParticipant(Long sessionId, Long schoolId, String tag, Long addedBy) {
+        /** Registers a user and inserts a user-based participant row on the session. */
+        private Long addUserParticipant(Long sessionId, String tag, Long addedBy) {
                 Long student = insert("INSERT INTO users (username, email, password_hash, display_name) "
                                 + "VALUES ('" + tag + "-" + System.nanoTime() + "','" + tag + "@t.com','h','"
                                 + tag + "')");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + student + "," + schoolId + ",'" + tag.toUpperCase() + "')");
-                insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, "
-                                + "added_by) VALUES (" + schoolId + "," + sessionId + "," + sp + "," + addedBy + ")");
-                return sp;
+                insert("INSERT INTO exam_session_participants (exam_session_id, user_id, added_by) VALUES ("
+                                + sessionId + "," + student + "," + addedBy + ")");
+                return student;
         }
 
         @Test
-        void p0r6_revokedCreatorDeniedParticipantManagement() throws Exception {
-                Long organizer = register("r6-org-" + System.nanoTime(), "TEACHER");
-                Long[] fixture = orgExamSession(organizer, "CLASS_RESTRICTED");
-                Long sessionId = fixture[0];
-                Long examId = fixture[1];
-                Long wsId = fixture[2];
-                Long schoolId = fixture[3];
-
-                Long spId = addSchoolParticipant(sessionId, schoolId, "r6stu", organizer);
-                Long participantRowId = jdbc.queryForObject(
-                                "SELECT id FROM exam_session_participants WHERE student_profile_id = " + spId
-                                                + " AND exam_session_id = " + sessionId, Long.class);
-
-                // Revoke the creator's membership.
-                jdbc.update("UPDATE workspace_memberships SET status = 'REMOVED' "
-                                + "WHERE workspace_id = " + wsId + " AND user_id = " + organizer);
-
-                mockMvc.perform(get("/api/exam-sessions/{id}/participants", sessionId)
-                                .with(jwt(organizer, "TEACHER")))
-                                .andExpect(status().isForbidden());
-                mockMvc.perform(post("/api/exam-sessions/{id}/participants", sessionId)
-                                .with(jwt(organizer, "TEACHER"))
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"studentProfileIds\":[" + spId + "]}"))
-                                .andExpect(status().isForbidden());
-                mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/block", sessionId,
-                                participantRowId).with(jwt(organizer, "TEACHER")))
-                                .andExpect(status().isForbidden());
-                mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/unblock", sessionId,
-                                participantRowId).with(jwt(organizer, "TEACHER")))
-                                .andExpect(status().isForbidden());
-        }
-
-        @Test
-        void p0r6_activeAdminAllowedAndCrossTenantDenied() throws Exception {
+        void p0r6_nonCreatorDeniedParticipantManagement() throws Exception {
                 Long organizer = register("r6b-org-" + System.nanoTime(), "TEACHER");
                 Long[] fixture = orgExamSession(organizer, "CLASS_RESTRICTED");
                 Long sessionId = fixture[0];
-                Long wsId = fixture[2];
-                Long schoolId = fixture[3];
-                Long spId = addSchoolParticipant(sessionId, schoolId, "r6bstu", organizer);
+                Long studentUserId = addUserParticipant(sessionId, "r6bstu", organizer);
                 Long participantRowId = jdbc.queryForObject(
-                                "SELECT id FROM exam_session_participants WHERE student_profile_id = " + spId
+                                "SELECT id FROM exam_session_participants WHERE user_id = " + studentUserId
                                                 + " AND exam_session_id = " + sessionId, Long.class);
 
-                // ACTIVE org ADMIN (not the creator) may manage.
-                Long admin = register("r6b-admin-" + System.nanoTime(), "TEACHER");
-                jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                                + "VALUES (" + wsId + "," + admin + ",'ADMIN','ACTIVE')");
+                // The creator manages fine.
                 mockMvc.perform(get("/api/exam-sessions/{id}/participants", sessionId)
-                                .with(jwt(admin, "TEACHER")))
+                                .with(jwt(organizer, "TEACHER")))
                                 .andExpect(status().isOk());
                 mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/block", sessionId,
-                                participantRowId).with(jwt(admin, "TEACHER")))
+                                participantRowId).with(jwt(organizer, "TEACHER")))
+                                .andExpect(status().isOk());
+                mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/unblock", sessionId,
+                                participantRowId).with(jwt(organizer, "TEACHER")))
                                 .andExpect(status().isOk());
 
-                // Foreign teacher (no membership) denied.
+                // Any other teacher (not the session creator) is denied.
                 Long foreign = register("r6b-foreign-" + System.nanoTime(), "TEACHER");
                 mockMvc.perform(get("/api/exam-sessions/{id}/participants", sessionId)
                                 .with(jwt(foreign, "TEACHER")))
                                 .andExpect(status().isForbidden());
+                mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/block", sessionId,
+                                participantRowId).with(jwt(foreign, "TEACHER")))
+                                .andExpect(status().isForbidden());
+                mockMvc.perform(post("/api/exam-sessions/{id}/participants/{pid}/unblock", sessionId,
+                                participantRowId).with(jwt(foreign, "TEACHER")))
+                                .andExpect(status().isForbidden());
         }
 
         @Test
-        void p0r6_personalWorkspaceSessionNo500() throws Exception {
-                // Personal-workspace owner with no TeacherProfile/school creates a
-                // session; participant listing must be a clean denial (or empty),
-                // never a NullPointerException 500.
+        void p0r6_sessionWithoutParticipantsListsEmpty() throws Exception {
+                // A user-created session with no participant rows: listing is a
+                // clean 200 with an empty page (never an NPE 500).
                 Long owner = register("r6c-owner-" + System.nanoTime(), "TEACHER");
-                Long personalWs = jdbc.queryForObject(
-                                "SELECT id FROM workspaces WHERE owner_user_id = " + owner
-                                                + " AND workspace_type = 'PERSONAL'", Long.class);
-                Long bank = insert("INSERT INTO question_banks (workspace_id, created_by_user_id, code, name) "
-                                + "VALUES (" + personalWs + "," + owner + ",'PB','PB')");
-                Long q = insert("INSERT INTO questions (question_bank_id, code, status, created_by) VALUES ("
-                                + bank + ",'q','ACTIVE'," + owner + ")");
-                Long v = insert("INSERT INTO question_versions (question_id, version_number, question_type, "
-                                + "content, difficulty, default_points, metadata, created_by) VALUES (" + q
-                                + ",1,'SINGLE_CHOICE','q?','MEDIUM',1,'{}'::jsonb," + owner + ")");
-                for (Object[] o : new Object[][] { { "A", true, 0 }, { "B", false, 1 }, { "C", false, 2 },
-                                { "D", false, 3 } }) {
-                        insert("INSERT INTO question_options (question_version_id, option_key, content, "
-                                        + "is_correct, position) VALUES (" + v + ",'" + o[0] + "','o'," + o[1]
-                                        + "," + o[2] + ")");
-                }
-                Long examId = insert("INSERT INTO exams (workspace_id, created_by_user_id, code, title, status, "
-                                + "published_at, total_points, instructions, duration_minutes, tf_matrix_scoring) "
-                                + "VALUES (" + personalWs + "," + owner + ",'PE','PE','PUBLISHED',now(),1,'i',30,"
-                                + "'{\"0\":0,\"1\":10,\"2\":25,\"3\":50,\"4\":100}'::jsonb)");
-                Long sec = insert("INSERT INTO exam_sections (exam_id, title, position) VALUES (" + examId
-                                + ",'S',0)");
-                Long eq = insert("INSERT INTO exam_questions (exam_id, exam_section_id, source_question_id, "
-                                + "source_question_version_id, question_code, question_type, content, "
-                                + "default_points, position, metadata) VALUES (" + examId + "," + sec + "," + q
-                                + "," + v + ",'q','SINGLE_CHOICE','q?',1,0,'{}'::jsonb)");
-                for (Object[] o : new Object[][] { { "A", true, 0 }, { "B", false, 1 }, { "C", false, 2 },
-                                { "D", false, 3 } }) {
-                        insert("INSERT INTO exam_question_options (exam_question_id, option_key, content, "
-                                        + "is_correct, position) VALUES (" + eq + ",'" + o[0] + "','o'," + o[1]
-                                        + "," + o[2] + ")");
-                }
-                Long sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
-                                + "ends_at, created_by, visibility, max_attempts, duration_minutes, opened_at) "
-                                + "VALUES (" + examId + ",'PSES','S','OPEN','" + STARTS + "','" + ENDS + "',"
-                                + owner + ",'PUBLIC',5,60,now())");
+                Long[] fixture = orgExamSession(owner, "PUBLIC");
+                Long sessionId = fixture[0];
 
-                // Expect 4xx (clean business denial), definitely NOT 500.
-                mockMvc.perform(post("/api/exam-sessions/{id}/participants", sessionId)
-                                .with(jwt(owner, "TEACHER"))
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"studentProfileIds\":[1]}"))
-                                .andExpect(status().is4xxClientError());
-                // Listing is a clean 200 with an empty page (never an NPE 500).
                 mockMvc.perform(get("/api/exam-sessions/{id}/participants", sessionId)
                                 .with(jwt(owner, "TEACHER")))
                                 .andExpect(status().isOk())
@@ -351,15 +257,12 @@ class ReviewRound3P0IntegrationTests {
                 Long organizer = register("r7-org-" + System.nanoTime(), "TEACHER");
                 Long[] fixture = orgExamSession(organizer, "PUBLIC");
                 Long sessionId = fixture[0];
-                Long schoolId = fixture[3];
 
                 Long student = register("r7-stu-" + System.nanoTime(), "STUDENT");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + student + "," + schoolId + ",'R7')");
-                insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, "
-                                + "added_by) VALUES (" + schoolId + "," + sessionId + "," + sp + "," + organizer + ")");
+                insert("INSERT INTO exam_session_participants (exam_session_id, user_id, added_by) VALUES ("
+                                + sessionId + "," + student + "," + organizer + ")");
                 Long participantRowId = jdbc.queryForObject(
-                                "SELECT id FROM exam_session_participants WHERE student_profile_id = " + sp
+                                "SELECT id FROM exam_session_participants WHERE user_id = " + student
                                                 + " AND exam_session_id = " + sessionId, Long.class);
 
                 // Block the participant (organizer, via HTTP).
@@ -399,15 +302,12 @@ class ReviewRound3P0IntegrationTests {
                 Long organizer = register("r7b-org-" + System.nanoTime(), "TEACHER");
                 Long[] fixture = orgExamSession(organizer, "PUBLIC");
                 Long sessionId = fixture[0];
-                Long schoolId = fixture[3];
 
                 Long student = register("r7b-stu-" + System.nanoTime(), "STUDENT");
-                Long sp = insert("INSERT INTO student_profiles (user_id, school_id, student_code) VALUES ("
-                                + student + "," + schoolId + ",'R7B')");
-                insert("INSERT INTO exam_session_participants (school_id, exam_session_id, student_profile_id, "
-                                + "added_by) VALUES (" + schoolId + "," + sessionId + "," + sp + "," + organizer + ")");
+                insert("INSERT INTO exam_session_participants (exam_session_id, user_id, added_by) VALUES ("
+                                + sessionId + "," + student + "," + organizer + ")");
                 Long participantRowId = jdbc.queryForObject(
-                                "SELECT id FROM exam_session_participants WHERE student_profile_id = " + sp
+                                "SELECT id FROM exam_session_participants WHERE user_id = " + student
                                                 + " AND exam_session_id = " + sessionId, Long.class);
 
                 // Start an attempt (IN_PROGRESS).

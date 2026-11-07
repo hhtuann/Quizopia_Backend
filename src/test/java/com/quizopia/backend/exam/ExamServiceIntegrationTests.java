@@ -34,9 +34,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Service-level integration tests for the one-exam-one-content Exam CRUD
- * surface (Task B redesign, issue #2): create (organization + personal
- * workspaces), creator-scoped listing, management detail, duplicate, and
- * archive with its session guard. Uses real PostgreSQL 17 Testcontainers;
+ * surface (Task B redesign, issue #2): create (user-owned, with or without
+ * subject metadata), creator-scoped listing, management detail, duplicate,
+ * and archive with its session guard. Uses real PostgreSQL 17 Testcontainers;
  * authorization via DB (not JWT claims).
  */
 @SpringBootTest
@@ -60,9 +60,7 @@ class ExamServiceIntegrationTests {
     private ExamQuestionOptionRepository optionRepo;
 
     private long teacherUserId;
-    private long schoolId;
     private long subjectId;
-    private long teacherProfileId;
 
     @BeforeEach
     void setUp() {
@@ -70,20 +68,16 @@ class ExamServiceIntegrationTests {
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('t1','t1@t','h','T1')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('SVC','SVC')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
-                + ",'SUB','Sub')");
-        teacherProfileId = insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                + teacherUserId + "," + schoolId + ",'TC1')");
+        subjectId = insert(
+                "INSERT INTO subjects (grade_level_id, code, name) VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
     }
 
-    // -- Create exam (organization workspace) --
+    // -- Create exam --
 
     @Test
     void createExamSucceedsWithDraftDefaults() {
         ExamListItem result = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "EX1", "Exam 1", "desc"));
+                new CreateExamRequest(subjectId, null, "EX1", "Exam 1", "desc"));
         assertThat(result.id()).isPositive();
         assertThat(result.code()).isEqualTo("EX1");
         assertThat(result.title()).isEqualTo("Exam 1");
@@ -94,71 +88,49 @@ class ExamServiceIntegrationTests {
         assertThat(result.createdAt()).isNotNull();
         assertThat(result.purpose()).isNull();
         assertThat(result.subject()).isEqualTo(new SubjectSummary(subjectId, "SUB", "Sub"));
-        // The teacher profile resolves the school's ORGANIZATION workspace.
+        // The exam is owned by its creator.
         assertThat(jdbc.queryForObject(
-                "SELECT w.workspace_type FROM exams e JOIN workspaces w ON w.id = e.workspace_id WHERE e.id = ?",
-                String.class, result.id())).isEqualTo("ORGANIZATION");
+                "SELECT created_by_user_id FROM exams WHERE id = ?",
+                Long.class, result.id())).isEqualTo(teacherUserId);
     }
 
     @Test
     void createExamDuplicateCodeSameCreatorConflict() {
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "CODE-1", "T", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "CODE-1", "T", null));
         assertThatThrownBy(() -> examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "code-1", "T", null)))
+                new CreateExamRequest(subjectId, null, "code-1", "T", null)))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_CODE_CONFLICT));
     }
 
-    @Test
-    void createOrgExamMissingSubjectRejected() {
-        // Teacher with a profile defaults to the ORGANIZATION workspace, where
-        // subjectId is mandatory.
-        assertThatThrownBy(() -> examService.createExam(teacherUserId,
-                new CreateExamRequest(null, null, null, "EX2", "T", null)))
-                .isInstanceOfSatisfying(ExamException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
-    }
-
-    // -- Create exam (personal workspace, no teacher profile) --
+    // -- Create exam (no subject metadata) --
 
     @Test
-    void createPersonalWorkspaceExamSucceedsWithNullSubject() {
-        // User with the TEACHER role but NO teacher profile: the personal
-        // workspace is auto-provisioned by WorkspaceProvisioningService.
+    void createExamSucceedsWithNullSubject() {
+        // Subject is optional metadata: any TEACHER user may create an
+        // exam without one.
         long soloUserId = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('solo','solo@t','h','SOLO')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 soloUserId);
         ExamListItem result = examService.createExam(soloUserId,
-                new CreateExamRequest(null, null, null, "PEX", "Personal", null));
+                new CreateExamRequest(null, null, "PEX", "Personal", null));
         assertThat(result.id()).isPositive();
         assertThat(result.status()).isEqualTo("DRAFT");
         assertThat(result.subject()).isNull();
         assertThat(result.questionCount()).isZero();
         assertThat(result.totalPoints()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(jdbc.queryForObject(
-                "SELECT w.workspace_type FROM exams e JOIN workspaces w ON w.id = e.workspace_id WHERE e.id = ?",
-                String.class, result.id())).isEqualTo("PERSONAL");
-    }
-
-    @Test
-    void createPersonalWorkspaceExamWithSubjectRejected() {
-        long soloUserId = insert(
-                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('solo2','solo2@t','h','SOLO2')");
-        jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
-                soloUserId);
-        assertThatThrownBy(() -> examService.createExam(soloUserId,
-                new CreateExamRequest(null, subjectId, null, "PEX2", "T", null)))
-                .isInstanceOfSatisfying(ExamException.class,
-                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ExamErrorCode.EXAM_VALIDATION_ERROR));
+                "SELECT created_by_user_id FROM exams WHERE id = ?",
+                Long.class, result.id())).isEqualTo(soloUserId);
     }
 
     // -- List my exams --
 
     @Test
     void listMyExamsOwnerScoped() {
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "A", "TA", null));
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "B", "TB", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "A", "TA", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "B", "TB", null));
         PageResponse<ExamListItem> result = examService.listMyExams(teacherUserId, null, null, null, 0, 20, null);
         assertThat(result.items()).hasSize(2);
         assertThat(result.totalElements()).isEqualTo(2);
@@ -166,8 +138,8 @@ class ExamServiceIntegrationTests {
 
     @Test
     void listMyExamsSearchCodeCaseInsensitive() {
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "ALPHA", "TA", null));
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "BETA", "TB", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "ALPHA", "TA", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "BETA", "TB", null));
         PageResponse<ExamListItem> result = examService.listMyExams(teacherUserId, "alpha", null, null, 0, 20, null);
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).code()).isEqualTo("ALPHA");
@@ -175,7 +147,7 @@ class ExamServiceIntegrationTests {
 
     @Test
     void listMyExamsSearchTitleCaseInsensitive() {
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "X", "Special Title", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "X", "Special Title", null));
         PageResponse<ExamListItem> result = examService.listMyExams(teacherUserId, "special", null, null, 0, 20, null);
         assertThat(result.items()).hasSize(1);
     }
@@ -183,9 +155,9 @@ class ExamServiceIntegrationTests {
     @Test
     void listMyExamsStatusFilter() {
         Long draftId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "D1", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "D1", "T", null)).id();
         Long publishedId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "P1", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "P1", "T", null)).id();
         publishViaSql(publishedId);
         entityManager.clear();
         PageResponse<ExamListItem> drafts = examService.listMyExams(teacherUserId, null, null, "DRAFT", 0, 20, null);
@@ -215,7 +187,7 @@ class ExamServiceIntegrationTests {
     @Test
     void listMyExamsPagination() {
         for (int i = 0; i < 3; i++) {
-            examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "PG" + i, "T", null));
+            examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "PG" + i, "T", null));
         }
         PageResponse<ExamListItem> page0 = examService.listMyExams(teacherUserId, null, null, null, 0, 2, null);
         assertThat(page0.items()).hasSize(2);
@@ -227,12 +199,10 @@ class ExamServiceIntegrationTests {
 
     @Test
     void listMyExamsNotReturnOtherTeacherExams() {
-        examService.createExam(teacherUserId, new CreateExamRequest(null, subjectId, null, "MINE", "T", null));
+        examService.createExam(teacherUserId, new CreateExamRequest(subjectId, null, "MINE", "T", null));
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u3','u3@t','h','U3')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
-                + ",'TC3')");
         PageResponse<ExamListItem> u2Result = examService.listMyExams(u2, null, null, null, 0, 20, null);
         assertThat(u2Result.items()).isEmpty();
     }
@@ -242,7 +212,7 @@ class ExamServiceIntegrationTests {
     @Test
     void getExamDetailOwnShowsComposition() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "D1", "Detail Exam", "desc")).id();
+                new CreateExamRequest(subjectId, null, "D1", "Detail Exam", "desc")).id();
         long[] src = sourceQuestionFixture();
         ExamSection section = sectionRepo.saveAndFlush(new ExamSection(examId, "Section A", 0));
         ExamQuestion q1 = questionRepo.saveAndFlush(new ExamQuestion(examId, section.getId(), src[0], src[1],
@@ -280,13 +250,11 @@ class ExamServiceIntegrationTests {
     @Test
     void getExamDetailForeignTeacherReturns404() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "D2", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "D2", "T", null)).id();
         long u2 = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('u4','u4@t','h','U4')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'", u2);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + u2 + "," + schoolId
-                + ",'TC4')");
-        // Different teacher (no workspace membership) — anti-enumeration: 404.
+        // Different user (non-creator) — anti-enumeration: 404.
         assertThatThrownBy(() -> examService.getExamDetail(u2, examId))
                 .isInstanceOfSatisfying(ExamException.class,
                         ex -> {
@@ -305,7 +273,7 @@ class ExamServiceIntegrationTests {
     @Test
     void getExamDetailShowsPublishedState() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "DP", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "DP", "T", null)).id();
         publishViaSql(examId);
         entityManager.clear();
         TeacherExamEditorResponse result = examService.getExamDetail(teacherUserId, examId);
@@ -319,7 +287,7 @@ class ExamServiceIntegrationTests {
     @Test
     void duplicateExamDeepCopiesCompositionAndSetsSourceProvenance() {
         Long originalId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "DUP", "Original", "d")).id();
+                new CreateExamRequest(subjectId, null, "DUP", "Original", "d")).id();
         long[] src = sourceQuestionFixture();
         ExamSection section = sectionRepo.saveAndFlush(new ExamSection(originalId, "S", 0));
         ExamQuestion q = questionRepo.saveAndFlush(new ExamQuestion(originalId, section.getId(), src[0], src[1],
@@ -355,7 +323,7 @@ class ExamServiceIntegrationTests {
     @Test
     void archivePublishedExamWithoutSessionsSucceeds() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "AR", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "AR", "T", null)).id();
         publishViaSql(examId);
         entityManager.clear();
         TeacherExamEditorResponse result = examService.archiveExam(teacherUserId, examId);
@@ -367,11 +335,11 @@ class ExamServiceIntegrationTests {
     @Test
     void archiveExamWithOpenSessionConflict() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "ARO", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "ARO", "T", null)).id();
         publishViaSql(examId);
-        insert("INSERT INTO exam_sessions (exam_id, school_id, owner_teacher_id, code, title, status, starts_at, ends_at, "
-                + "max_attempts, duration_minutes, created_by, opened_at) VALUES (" + examId + "," + schoolId + ","
-                + teacherProfileId + ",'OS1','T','OPEN', now() - interval '1 hour', now() + interval '1 hour', 1, 60, "
+        insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, "
+                + "max_attempts, duration_minutes, created_by, opened_at) VALUES (" + examId
+                + ",'OS1','T','OPEN', now() - interval '1 hour', now() + interval '1 hour', 1, 60, "
                 + teacherUserId + ", now())");
         entityManager.clear();
         assertThatThrownBy(() -> examService.archiveExam(teacherUserId, examId))
@@ -384,7 +352,7 @@ class ExamServiceIntegrationTests {
     @Test
     void archiveExamIdempotentWhenAlreadyArchived() {
         Long examId = examService.createExam(teacherUserId,
-                new CreateExamRequest(null, subjectId, null, "ARI", "T", null)).id();
+                new CreateExamRequest(subjectId, null, "ARI", "T", null)).id();
         publishViaSql(examId);
         entityManager.clear();
         examService.archiveExam(teacherUserId, examId);
@@ -403,11 +371,11 @@ class ExamServiceIntegrationTests {
 
     /**
      * Creates an ACTIVE SINGLE_CHOICE source question + current version (raw
-     * SQL, same-school bank). Returns {questionId, versionId}.
+ * SQL, creator-owned bank). Returns {questionId, versionId}.
      */
     private long[] sourceQuestionFixture() {
-        long bankId = insert("INSERT INTO question_banks (school_id, subject_id, owner_teacher_id, code, name) VALUES ("
-                + schoolId + "," + subjectId + "," + teacherProfileId + ",'QB','Bank')");
+        long bankId = insert("INSERT INTO question_banks (created_by_user_id, subject_id, code, name) VALUES ("
+                + teacherUserId + "," + subjectId + ",'QB','Bank')");
         long qId = insert("INSERT INTO questions (question_bank_id, code, status, current_version_number, created_by) VALUES ("
                 + bankId + ",'Q1','ACTIVE',1," + teacherUserId + ")");
         long qvId = insert(

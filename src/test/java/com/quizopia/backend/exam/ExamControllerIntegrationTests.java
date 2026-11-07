@@ -38,7 +38,6 @@ class ExamControllerIntegrationTests {
     private JdbcTemplate jdbc;
 
     private Long teacherUserId;
-    private Long schoolId;
     private Long subjectId;
 
     @BeforeEach
@@ -47,22 +46,18 @@ class ExamControllerIntegrationTests {
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('ct','ct@t','h','CT')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 teacherUserId);
-        schoolId = insert("INSERT INTO schools (code, name) VALUES ('CTS','CT School')");
-        long gl = insert("INSERT INTO grade_levels (school_id, code, name) VALUES (" + schoolId + ",'GL','G')");
-        subjectId = insert("INSERT INTO subjects (school_id, grade_level_id, code, name) VALUES (" + schoolId + "," + gl
-                + ",'SUB','Sub')");
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES ("
-                + teacherUserId + "," + schoolId + ",'CTC')");
+        subjectId = insert("INSERT INTO subjects (grade_level_id, code, name) "
+                + "VALUES ((SELECT id FROM grade_levels WHERE code='G10'), 'SUB','Sub')");
     }
 
     // -- Success smoke (4 endpoints) --
 
     @Test
     void getPurposesReturns200() throws Exception {
-        insert("INSERT INTO exam_purposes (school_id, code, title, position) VALUES (" + schoolId + ",'MID','Mid',0)");
+        // Purposes are a global catalog pre-seeded by V24 (MIDTERM..PRACTICE).
         mockMvc.perform(get("/api/exam-purposes").with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[0].code").value("MID"))
+                .andExpect(jsonPath("$.items[0].code").value("MIDTERM"))
                 .andExpect(jsonPath("$.items[0].schoolId").doesNotExist());
     }
 
@@ -95,18 +90,14 @@ class ExamControllerIntegrationTests {
     }
 
     @Test
-    void getMyExamsWithSubjectlessPersonalExamReturns200AndNullSubject() throws Exception {
-        // P1-C E2E regression: a personal-workspace exam carries no subject; the list
-        // mapping must not NPE on the null key lookup into an empty subject map.
-        long workspaceId = insert("INSERT INTO workspaces (workspace_type, name, owner_user_id) "
-                + "VALUES ('PERSONAL', 'CT personal', " + teacherUserId + ")");
-        jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role, status) "
-                + "VALUES (" + workspaceId + "," + teacherUserId + ",'OWNER','ACTIVE')");
-
+    void getMyExamsWithSubjectlessExamReturns200AndNullSubject() throws Exception {
+        // P1-C E2E regression: an exam may carry no subject (subject is optional
+        // metadata); the list mapping must not NPE on the null key lookup into an
+        // empty subject map.
         mockMvc.perform(post("/api/exams")
                 .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"workspaceId\":" + workspaceId + ",\"code\":\"PEX1\",\"title\":\"Personal exam\"}"))
+                .content("{\"code\":\"PEX1\",\"title\":\"Subjectless exam\"}"))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(get("/api/exams/my").with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
@@ -177,11 +168,12 @@ class ExamControllerIntegrationTests {
     }
 
     @Test
-    void postExamMissingSubjectIdReturns400() throws Exception {
+    void postExamMissingTitleReturns400() throws Exception {
+        // subjectId is optional metadata now; title is the required field.
         mockMvc.perform(post("/api/exams")
                 .with(jwt().jwt(j -> j.subject(teacherUserId.toString())))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"code\":\"X\",\"title\":\"T\"}"))
+                .content("{\"code\":\"X\"}"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -206,13 +198,11 @@ class ExamControllerIntegrationTests {
                 .andReturn();
         Long examId = jdbc.queryForObject("SELECT id FROM exams WHERE code='FX'", Long.class);
 
-        // Access as different teacher
+        // Access as a different teacher (non-creator)
         long otherUser = insert(
                 "INSERT INTO users (username, email, password_hash, display_name) VALUES ('o2','o2@t','h','O2')");
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code='TEACHER'",
                 otherUser);
-        insert("INSERT INTO teacher_profiles (user_id, school_id, teacher_code) VALUES (" + otherUser + "," + schoolId
-                + ",'TC2')");
 
         mockMvc.perform(get("/api/exams/" + examId).with(jwt().jwt(j -> j.subject(String.valueOf(otherUser)))))
                 .andExpect(status().isNotFound())
@@ -248,7 +238,6 @@ class ExamControllerIntegrationTests {
 
     @Test
     void getPurposesNoSchoolIdInResponse() throws Exception {
-        insert("INSERT INTO exam_purposes (school_id, code, title, position) VALUES (" + schoolId + ",'T1','T1',0)");
         mockMvc.perform(get("/api/exam-purposes").with(jwt().jwt(j -> j.subject(teacherUserId.toString()))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items[0].schoolId").doesNotExist())

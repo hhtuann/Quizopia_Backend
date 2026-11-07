@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Checkpoint A: executable regressions only; permissions and workspace policy use the real DB. */
+/** Checkpoint A: executable regressions only; permissions and creator-ownership policy use the real DB. */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
@@ -57,11 +57,10 @@ class P1CheckpointAIntegrationTests {
 
     private static final long CREATOR = 8_100_001L;
     private static final long OTHER_CREATOR = 8_100_002L;
-    private static final long OWNER = 8_100_003L;
-    private static final long ADMIN = 8_100_004L;
+    private static final long COLLEAGUE = 8_100_003L;
+    private static final long OTHER_TEACHER = 8_100_004L;
     private static final long MEMBER = 8_100_005L;
     private static final long OUTSIDER = 8_100_006L;
-    private static final long WORKSPACE = 8_100_010L;
     private static final long SOURCE_EXAM = 8_100_020L;
     private static final long OTHER_EXAM = 8_100_021L;
     private static final long SECTION = 8_100_030L;
@@ -88,40 +87,25 @@ class P1CheckpointAIntegrationTests {
     @BeforeEach
     void fixture() {
         // Explicit ownership keys avoid school/profile provisioning and legacy insert defaults.
-        for (long user : List.of(CREATOR, OTHER_CREATOR, OWNER, ADMIN, MEMBER, OUTSIDER)) {
+        for (long user : List.of(CREATOR, OTHER_CREATOR, COLLEAGUE, OTHER_TEACHER, MEMBER, OUTSIDER)) {
             jdbc.update("INSERT INTO users (id, username, email, password_hash, display_name) "
                     + "VALUES (?, ?, ?, 'unused-test-hash', ?)",
                     user, "p1a-" + user, "p1a-" + user + "@test.com", "P1 A " + user);
         }
-        jdbc.update("INSERT INTO organizations (id, code, name) OVERRIDING SYSTEM VALUE "
-                + "VALUES (8100010, 'P1A-ORG', 'P1 A organization')");
-        jdbc.update("INSERT INTO workspaces (id, workspace_type, name, organization_id) "
-                + "OVERRIDING SYSTEM VALUE VALUES (?, 'ORGANIZATION', 'P1 A organization', 8100010)",
-                WORKSPACE);
-        membership(8_100_201L, CREATOR, "EDITOR");
-        membership(8_100_202L, OTHER_CREATOR, "EDITOR");
-        membership(8_100_203L, OWNER, "OWNER");
-        membership(8_100_204L, ADMIN, "ADMIN");
-        membership(8_100_205L, MEMBER, "MEMBER");
-        // An outsider still has an accessible workspace: denial cannot rely on an empty scope.
-        jdbc.update("INSERT INTO workspaces (id, workspace_type, name, owner_user_id) "
-                + "OVERRIDING SYSTEM VALUE VALUES (8100011, 'PERSONAL', 'Outsider personal', ?)", OUTSIDER);
-        jdbc.update("INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status) "
-                + "OVERRIDING SYSTEM VALUE VALUES (8100206, 8100011, ?, 'OWNER', 'ACTIVE')", OUTSIDER);
 
         for (long exam : List.of(SOURCE_EXAM, OTHER_EXAM)) {
-            jdbc.update("INSERT INTO exams (id, workspace_id, created_by_user_id, code, title, description, "
+            jdbc.update("INSERT INTO exams (id, created_by_user_id, code, title, description, "
                     + "instructions, duration_minutes, status, published_at, total_points) "
-                    + "VALUES (?, ?, ?, ?, 'P1 A published content', 'Original description', "
+                    + "VALUES (?, ?, ?, 'P1 A published content', 'Original description', "
                     + "'Read every statement', 45, 'PUBLISHED', TIMESTAMPTZ '2030-01-01 00:00:00Z', 7.50)",
-                    exam, WORKSPACE, CREATOR, "P1A-EX-" + exam);
+                    exam, CREATOR, "P1A-EX-" + exam);
         }
         // The current exams column accepts this valid monotone, nondefault ladder.
         // The detached exam_versions table has a fixed-object CHECK and must not be used.
         jdbc.update("UPDATE exams SET tf_matrix_scoring = CAST(? AS jsonb) WHERE id = ?", SCORING, SOURCE_EXAM);
 
-        jdbc.update("INSERT INTO question_banks (id, workspace_id, created_by_user_id, code, name) "
-                + "VALUES (8100050, ?, ?, 'P1A-BANK', 'P1 A bank')", WORKSPACE, CREATOR);
+        jdbc.update("INSERT INTO question_banks (id, created_by_user_id, code, name) "
+                + "VALUES (8100050, ?, 'P1A-BANK', 'P1 A bank')", CREATOR);
         for (int position = 0; position < 2; position++) {
             long sourceQuestion = 8_100_060L + position;
             long version = 8_100_070L + position;
@@ -164,9 +148,9 @@ class P1CheckpointAIntegrationTests {
 
         session(ALPHA, SOURCE_EXAM, CREATOR, "P1A-ALPHA", "Alpha shared", "DRAFT");
         session(BETA, SOURCE_EXAM, OTHER_CREATOR, "P1A-BETA-CODE", "Beta shared", "SCHEDULED");
-        session(GAMMA, SOURCE_EXAM, OWNER, "P1A-GAMMA", "Gamma shared", "DRAFT");
-        session(DELTA, SOURCE_EXAM, ADMIN, "P1A-DELTA", "Delta closed", "CLOSED");
-        session(DECOY, OTHER_EXAM, OWNER, "P1A-DECOY", "Aardvark shared", "DRAFT");
+        session(GAMMA, SOURCE_EXAM, COLLEAGUE, "P1A-GAMMA", "Gamma shared", "DRAFT");
+        session(DELTA, SOURCE_EXAM, OTHER_TEACHER, "P1A-DELTA", "Delta closed", "CLOSED");
+        session(DECOY, OTHER_EXAM, COLLEAGUE, "P1A-DECOY", "Aardvark shared", "DRAFT");
         jdbc.update("INSERT INTO attempts (id, exam_session_id, user_id, attempt_number, status, "
                 + "started_at, deadline_at, submitted_at, submission_idempotency_key) "
                 + "VALUES (8100110, ?, ?, 1, 'SUBMITTED', TIMESTAMPTZ '2030-01-01 01:00:00Z', "
@@ -177,14 +161,11 @@ class P1CheckpointAIntegrationTests {
     @Test
     void duplicateReturnsPersistedPurposeSummary() throws Exception {
         grant(CREATOR, "TEACHER");
-        Long schoolId = jdbc.queryForObject(
-                "INSERT INTO schools (code, name) VALUES ('P1A-PURPOSE', 'Purpose school') RETURNING id",
-                Long.class);
+        // Global catalog: purposes are school-free; reference a fresh global purpose.
         Long purposeId = jdbc.queryForObject(
-                "INSERT INTO exam_purposes (school_id, code, title) VALUES (?, 'MIDTERM', 'Midterm exam') RETURNING id",
-                Long.class, schoolId);
-        jdbc.update("UPDATE exams SET school_id = ?, purpose_id = ? WHERE id = ?",
-                schoolId, purposeId, SOURCE_EXAM);
+                "INSERT INTO exam_purposes (code, title) VALUES ('P1A-PURP', 'P1 A purpose') RETURNING id",
+                Long.class);
+        jdbc.update("UPDATE exams SET purpose_id = ? WHERE id = ?", purposeId, SOURCE_EXAM);
 
         var response = mvc.perform(post("/api/exams/{examId}/duplicate", SOURCE_EXAM)
                         .with(jwt().jwt(token -> token.subject(String.valueOf(CREATOR)))))
@@ -196,8 +177,8 @@ class P1CheckpointAIntegrationTests {
         assertThat(jdbc.queryForObject("SELECT purpose_id FROM exams WHERE id = ?", Long.class, copyId))
                 .isEqualTo(purposeId);
         response.andExpect(jsonPath("$.purpose.id").value(purposeId))
-                .andExpect(jsonPath("$.purpose.code").value("MIDTERM"))
-                .andExpect(jsonPath("$.purpose.title").value("Midterm exam"));
+                .andExpect(jsonPath("$.purpose.code").value("P1A-PURP"))
+                .andExpect(jsonPath("$.purpose.title").value("P1 A purpose"));
     }
 
     @Test
@@ -322,15 +303,13 @@ class P1CheckpointAIntegrationTests {
         assertThat(sourceSnapshot()).isEqualTo(before);
     }
 
-    @ParameterizedTest(name = "nested list: active {0} sees sessions from every creator")
-    @CsvSource({"OWNER, 8100003", "ADMIN, 8100004"})
-    void nestedOwnerOrAdminListsAllParentSessions(String role, long caller) throws Exception {
-        grant(caller, "ACADEMIC_ADMIN");
-        assertThat(caller).isNotIn(CREATOR, OTHER_CREATOR);
-        assertThat(jdbc.queryForObject("SELECT role FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
-                String.class, WORKSPACE, caller)).isEqualTo(role);
-        readExam(caller);
-        expectIds(nested(caller).param("sort", "title,asc"), ALPHA, BETA, DELTA, GAMMA)
+    @Test
+    void nestedExamOwnerListsAllSessionsOfTheirExamAcrossCreators() throws Exception {
+        // User-centric model: the nested list is exam-creator-scoped — the exam
+        // owner sees every session on their exam, whoever created it.
+        grant(CREATOR, "TEACHER");
+        readExam(CREATOR);
+        expectIds(nested(CREATOR).param("sort", "title,asc"), ALPHA, BETA, DELTA, GAMMA)
                 .andExpect(jsonPath("$.totalElements").value(4))
                 .andExpect(jsonPath("$.totalPages").value(1))
                 .andExpect(jsonPath("$.items[0].examId").value(SOURCE_EXAM))
@@ -339,76 +318,53 @@ class P1CheckpointAIntegrationTests {
                 .andExpect(jsonPath("$.items[3].examId").value(SOURCE_EXAM));
     }
 
-    @Test
-    void nestedActiveMemberCanListSessionsWhenParentExamReadIsAllowed() throws Exception {
-        grant(MEMBER, "TEACHER");
-        // ExamService.requireViewableExam and WorkspaceAccessService.requireResourceRead
-        // explicitly allow any ACTIVE organization member, including MEMBER.
-        readExam(MEMBER);
-        expectIds(nested(MEMBER).param("sort", "title,asc"), ALPHA, BETA, DELTA, GAMMA);
+    @ParameterizedTest(name = "nested non-creator {0} is denied rather than given an empty success")
+    @ValueSource(longs = {OTHER_CREATOR, COLLEAGUE, OTHER_TEACHER, MEMBER, OUTSIDER})
+    void nestedNonCreatorIsDeniedRatherThanGivenAnEmptySuccess(long caller) throws Exception {
+        // Exam read and the nested list are creator-only (404 anti-enumeration).
+        assertThat(caller).isNotEqualTo(CREATOR);
+        grant(caller, "TEACHER");
+        denied(get("/api/exams/{id}", SOURCE_EXAM).with(subject(caller)));
+        denied(nested(caller));
     }
 
     @ParameterizedTest(name = "nested filters: search={0}, status={1}")
     @CsvSource({"'  sHaReD  ', DRAFT, 8100101, 8100103", "'  beta-code  ', SCHEDULED, 8100102, 8100102"})
     void nestedSearchAndStatusFilterAcrossCreators(String search, String state, long first, long last) throws Exception {
-        grant(ADMIN, "ACADEMIC_ADMIN");
+        grant(CREATOR, "TEACHER");
         long[] expected = first == last ? new long[] {first} : new long[] {first, last};
-        expectIds(nested(ADMIN).param("search", search).param("status", state).param("sort", "title,asc"), expected)
+        expectIds(nested(CREATOR).param("search", search).param("status", state).param("sort", "title,asc"), expected)
                 .andExpect(jsonPath("$.totalElements").value(expected.length))
                 .andExpect(jsonPath("$.totalPages").value(1));
     }
 
     @Test
     void nestedPaginationAndDescendingSortUseAllParentSessions() throws Exception {
-        grant(ADMIN, "ACADEMIC_ADMIN");
-        expectIds(nested(ADMIN).param("page", "0").param("size", "2").param("sort", "title,desc"), GAMMA, DELTA)
+        grant(CREATOR, "TEACHER");
+        expectIds(nested(CREATOR).param("page", "0").param("size", "2").param("sort", "title,desc"), GAMMA, DELTA)
                 .andExpect(jsonPath("$.totalElements").value(4)).andExpect(jsonPath("$.totalPages").value(2))
                 .andExpect(jsonPath("$.page").value(0)).andExpect(jsonPath("$.size").value(2))
                 .andExpect(jsonPath("$.sort").value("title: DESC,id: DESC"));
-        expectIds(nested(ADMIN).param("page", "1").param("size", "2").param("sort", "title,desc"), BETA, ALPHA)
+        expectIds(nested(CREATOR).param("page", "1").param("size", "2").param("sort", "title,desc"), BETA, ALPHA)
                 .andExpect(jsonPath("$.page").value(1)).andExpect(jsonPath("$.totalElements").value(4));
     }
 
-    @Test
-    void nestedOutsiderIsDeniedRatherThanGivenAnEmptySuccess() throws Exception {
-        grant(OUTSIDER, "TEACHER");
-        denied(get("/api/exams/{id}", SOURCE_EXAM).with(subject(OUTSIDER)));
-        denied(nested(OUTSIDER));
-    }
-
-    @ParameterizedTest(name = "nested revoked {0} membership is denied")
-    @ValueSource(strings = {"SUSPENDED", "REMOVED"})
-    void nestedRevokedAdminIsDeniedRatherThanGivenAnEmptySuccess(String membershipStatus) throws Exception {
-        grant(ADMIN, "ACADEMIC_ADMIN");
-        revoke(ADMIN, membershipStatus);
-        denied(get("/api/exams/{id}", SOURCE_EXAM).with(subject(ADMIN)));
-        denied(nested(ADMIN));
-    }
-
-    @ParameterizedTest(name = "nested revoked creator ({0}) is denied despite owning content")
-    @ValueSource(strings = {"SUSPENDED", "REMOVED"})
-    void nestedRevokedCreatorIsDeniedRatherThanGivenAnEmptySuccess(String membershipStatus) throws Exception {
-        grant(CREATOR, "TEACHER");
-        revoke(CREATOR, membershipStatus);
-        denied(get("/api/exams/{id}", SOURCE_EXAM).with(subject(CREATOR)));
-        denied(nested(CREATOR));
-    }
-
     @ParameterizedTest(name = "legacy my list stays creator-only for {0}")
-    @CsvSource({"OWNER, 8100003, 8100105, 8100103", "ADMIN, 8100004, 8100104, 8100104"})
-    void legacyMySessionsRemainsCreatedByOnly(String role, long caller, long first, long last) throws Exception {
-        grant(caller, "ACADEMIC_ADMIN");
+    @CsvSource({"8100003, 8100105, 8100103", "8100004, 8100104, 8100104"})
+    void legacyMySessionsRemainsCreatedByOnly(long caller, long first, long last) throws Exception {
+        grant(caller, "TEACHER");
         long[] expected = first == last ? new long[] {first} : new long[] {first, last};
         expectIds(get("/api/exam-sessions/my").with(subject(caller)).param("sort", "title,asc"), expected)
                 .andExpect(jsonPath("$.totalElements").value(expected.length));
         expectIds(get("/api/exam-sessions/my").with(subject(caller))
-                .param("examId", String.valueOf(SOURCE_EXAM)), caller == OWNER ? GAMMA : DELTA)
+                .param("examId", String.valueOf(SOURCE_EXAM)), caller == COLLEAGUE ? GAMMA : DELTA)
                 .andExpect(jsonPath("$.totalElements").value(1));
     }
 
     @Test
-    void nestedRefreshesDueAndExpiredAcrossCreatorsBeforeFilteringAndIsIdempotent() throws Exception {
-        grant(ADMIN, "ACADEMIC_ADMIN");
+    void nestedRefreshesDueAndExpiredSessionsBeforeFilteringAndIsIdempotent() throws Exception {
+        grant(CREATOR, "TEACHER");
+
         Instant before = Instant.now().minusSeconds(1);
         jdbc.update("UPDATE exam_sessions SET status='SCHEDULED', starts_at=now()-interval '2 hours', "
                 + "ends_at=now()+interval '1 hour' WHERE id=?", ALPHA);
@@ -418,8 +374,8 @@ class P1CheckpointAIntegrationTests {
                 + "ends_at=now()-interval '1 hour', opened_at=now()-interval '2 hours' WHERE id=?", GAMMA);
         var original = jdbc.queryForList("SELECT * FROM exam_sessions WHERE id IN (?, ?, ?) ORDER BY id",
                 GAMMA, DELTA, DECOY);
-        expectIds(nested(ADMIN).param("status", "OPEN"), ALPHA);
-        expectIds(nested(ADMIN).param("status", "CLOSED").param("sort", "title,asc"), BETA, DELTA, GAMMA);
+        expectIds(nested(CREATOR).param("status", "OPEN"), ALPHA);
+        expectIds(nested(CREATOR).param("status", "CLOSED").param("sort", "title,asc"), BETA, DELTA, GAMMA);
         var refreshed = jdbc.queryForList("SELECT * FROM exam_sessions ORDER BY id");
         Instant after = Instant.now().plusSeconds(1);
         for (long id : List.of(ALPHA, BETA, GAMMA)) {
@@ -435,28 +391,23 @@ class P1CheckpointAIntegrationTests {
                 .isEqualTo(original.getFirst().get("opened_at"));
         assertThat(jdbc.queryForMap("SELECT * FROM exam_sessions WHERE id=?", DELTA)).isEqualTo(original.get(1));
         assertThat(jdbc.queryForMap("SELECT * FROM exam_sessions WHERE id=?", DECOY)).isEqualTo(original.get(2));
-        expectIds(nested(ADMIN).param("status", "OPEN"), ALPHA);
+        expectIds(nested(CREATOR).param("status", "OPEN"), ALPHA);
         assertThat(jdbc.queryForList("SELECT * FROM exam_sessions ORDER BY id")).isEqualTo(refreshed);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"OUTSIDER", "SUSPENDED", "REMOVED", "NO_PERMISSION"})
+    @ValueSource(strings = {"NO_ROLE", "NOT_EXAM_OWNER"})
     void deniedNestedRefreshHasNoLifecycleSideEffects(String denial) throws Exception {
-        long caller = denial.equals("OUTSIDER") ? OUTSIDER : ADMIN;
-        if (!denial.equals("NO_PERMISSION")) grant(caller, "ACADEMIC_ADMIN");
-        if (denial.equals("SUSPENDED") || denial.equals("REMOVED")) revoke(caller, denial);
+        // NO_ROLE: no DB role → permission denial. NOT_EXAM_OWNER: a real
+        // teacher who does not own the parent exam → 404 anti-enumeration.
+        long caller = denial.equals("NOT_EXAM_OWNER") ? OUTSIDER : MEMBER;
+        if (denial.equals("NOT_EXAM_OWNER")) grant(caller, "TEACHER");
         jdbc.update("UPDATE exam_sessions SET starts_at=now()-interval '2 hours', "
                 + "ends_at=now()-interval '1 hour' WHERE id=?", BETA);
         var before = sourceSnapshot();
         denied(nested(caller));
         assertThat(sourceSnapshot()).isEqualTo(before);
     }
-
-    private void membership(long id, long user, String role) {
-        jdbc.update("INSERT INTO workspace_memberships (id, workspace_id, user_id, role, status) "
-                + "OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, ?, 'ACTIVE')", id, WORKSPACE, user, role);
-    }
-
     private void grant(long user, String role) {
         assertThat(jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code = ?",
                 user, role)).as("DB-backed role grant").isEqualTo(1);
@@ -499,12 +450,6 @@ class P1CheckpointAIntegrationTests {
     private void denied(MockHttpServletRequestBuilder request) throws Exception {
         mvc.perform(request).andExpect(result -> assertThat(result.getResponse().getStatus())
                 .as("parent-scoped read must deny access, not return 200 with an empty list").isIn(403, 404));
-    }
-
-    private void revoke(long user, String state) {
-        assertThat(jdbc.update("UPDATE workspace_memberships SET status = ? WHERE workspace_id = ? AND user_id = ?",
-                state, WORKSPACE, user)).isEqualTo(1);
-        em.clear();
     }
 
     private Map<String, List<Map<String, Object>>> sourceSnapshot() {
