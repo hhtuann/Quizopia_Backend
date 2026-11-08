@@ -134,6 +134,23 @@ public class ClassroomRosterEntry {
         // user_id intentionally KEPT for audit (constraint allows it).
     }
 
+    /**
+     * CLASS-M1 (issue #50): synthetic opt-out record for a learner who
+     * LEFT a direct-add membership (no roster row ever existed). Records
+     * the standing DECLINED history that keeps a future invitation of the
+     * same (classroom, email) from auto-relinking without explicit
+     * learner consent — same guard as a learner-declined LINKED entry.
+     */
+    public static ClassroomRosterEntry declinedOptOut(Classroom classroom,
+            String emailNormalized, String fullName, Long userId, Instant at) {
+        ClassroomRosterEntry entry = new ClassroomRosterEntry(
+                classroom, emailNormalized, fullName, userId);
+        entry.status = RosterStatus.DECLINED;
+        entry.userId = userId;
+        entry.leftAt = at;
+        return entry;
+    }
+
     public Long getId() { return id; }
     public Classroom getClassroom() { return classroom; }
     public Long getClassroomId() { return classroomId; }

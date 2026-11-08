@@ -45,4 +45,29 @@ public interface ClassroomMemberRepository extends JpaRepository<ClassroomMember
             """, nativeQuery = true)
     int insertMembershipIfAbsent(@org.springframework.data.repository.query.Param("classroomId") Long classroomId,
             @org.springframework.data.repository.query.Param("userId") Long userId);
+
+    /**
+     * CLASS-M1 (issue #50): the caller's joined-classroom projection —
+     * CURRENT memberships joined to non-sensitive classroom metadata and
+     * the owner's display name. SQL-level paging/count, stable order
+     * (addedAt desc, member id desc), no N+1.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            value = """
+                    select new com.quizopia.backend.classroom.dto.JoinedClassroomResponse(
+                        c.id, c.code, c.name, c.description, c.status, u.displayName, m.addedAt)
+                    from ClassroomMember m
+                    join Classroom c on c.id = m.classroomId
+                    join User u on u.id = c.ownerUserId
+                    where m.userId = :userId
+                    order by m.addedAt desc, m.id desc
+                    """,
+            countQuery = """
+                    select count(m) from ClassroomMember m
+                    join Classroom c on c.id = m.classroomId
+                    join User u on u.id = c.ownerUserId
+                    where m.userId = :userId
+                    """)
+    Page<com.quizopia.backend.classroom.dto.JoinedClassroomResponse> findJoinedClassrooms(
+            @org.springframework.data.repository.query.Param("userId") Long userId, Pageable pageable);
 }

@@ -21,6 +21,8 @@ public record RosterEntryResponse(
         String parentPhone,
         String email,
         Instant createdAt,
-        Instant linkedAt
+        Instant linkedAt,
+        String classroomName,
+        String teacherDisplayName
 ) {
 }

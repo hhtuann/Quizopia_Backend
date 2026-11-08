@@ -1,6 +1,8 @@
 package com.quizopia.backend.classroom.api;
 
 import com.quizopia.backend.classroom.application.ClassroomRosterService;
+import com.quizopia.backend.classroom.application.ClassroomMembershipService;
+import com.quizopia.backend.classroom.dto.JoinedClassroomResponse;
 import com.quizopia.backend.classroom.application.ClassroomService;
 import com.quizopia.backend.classroom.dto.CreateRosterEntryRequest;
 import com.quizopia.backend.classroom.dto.RosterEntryResponse;
@@ -36,10 +38,14 @@ public class ClassroomController {
 
     private final ClassroomService classroomService;
     private final ClassroomRosterService rosterService;
+    private final ClassroomMembershipService membershipService;
 
-    public ClassroomController(ClassroomService classroomService, ClassroomRosterService rosterService) {
+    public ClassroomController(ClassroomService classroomService,
+            ClassroomRosterService rosterService,
+            ClassroomMembershipService membershipService) {
         this.classroomService = classroomService;
         this.rosterService = rosterService;
+        this.membershipService = membershipService;
     }
 
     // ============================================================
@@ -111,6 +117,39 @@ public class ClassroomController {
             @AuthenticationPrincipal Jwt jwt) {
         Long userId = Long.valueOf(jwt.getSubject());
         return ResponseEntity.status(HttpStatus.CREATED).body(classroomService.createClassroom(userId, request));
+    }
+
+    // ============================================================
+    // CLASS-M1 (issue #50): learner membership projection + self-leave
+    // ============================================================
+
+    /**
+     * GET /api/classrooms/joined — the CALLER's current joined classrooms
+     * (source of truth: classroom_members, any enrollment source). Any
+     * authenticated user may read their own list (self-scoped, same policy
+     * as /roster/my). SQL paging/count; stable order joinedAt desc.
+     */
+    @GetMapping("/joined")
+    public PageResponse<JoinedClassroomResponse> joinedClassrooms(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return membershipService.listJoinedClassrooms(userId, page, size);
+    }
+
+    /**
+     * POST /api/classrooms/{id}/leave — learner self-exit for ANY
+     * enrollment source. Authorized by current membership only (the caller
+     * removes themself). Defined repeat-leave response: 404 when the caller
+     * is not (or no longer) a member.
+     */
+    @PostMapping("/{id}/leave")
+    public ResponseEntity<Void> leaveClassroom(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        membershipService.leaveClassroom(userId, id);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/my")
