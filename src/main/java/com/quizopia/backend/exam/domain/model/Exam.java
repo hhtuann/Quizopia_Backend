@@ -189,10 +189,18 @@ public class Exam {
 
     /** Copy grading policy into a new draft without aliasing the source JSON. */
     public void copyGradingPolicyFrom(Exam source) {
+        copyGradingPolicyFrom(source.tfMatrixScoring);
+    }
+
+    /**
+     * Copy grading policy from a raw snapshot (community fork, ADR-006
+     * §6) without aliasing the source JSON.
+     */
+    public void copyGradingPolicyFrom(JsonNode tfMatrixScoring) {
         if (!isDraft()) {
             throw new IllegalStateException("grading policy is immutable after publish");
         }
-        this.tfMatrixScoring = source.tfMatrixScoring != null ? source.tfMatrixScoring.deepCopy() : null;
+        this.tfMatrixScoring = tfMatrixScoring != null ? tfMatrixScoring.deepCopy() : null;
     }
 
     public ExamStatus getStatus() {
