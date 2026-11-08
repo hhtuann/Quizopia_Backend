@@ -202,6 +202,27 @@ def main():
           code == 200 and body.get("added") == 0 and learner_id in (body.get("duplicated") or []),
           str(body)[:200])
 
+    # --- Final-M1 gate F1: opt-out blocks DIRECT re-add too --------------
+    code, _ = req("POST", f"/api/classrooms/{class_a}/leave", {}, token_l)
+    check("learner leaves class A again", code == 204, str(code))
+    code, body = req("POST", f"/api/classrooms/{class_a}/members",
+                     {"userIds": [learner_id]}, token_a)
+    check("direct re-add after opt-out is REFUSED with per-user result",
+          code == 200 and body.get("added") == 0 and learner_id in (body.get("declined") or []),
+          str(body)[:200])
+    code, body = req("GET", "/api/classrooms/joined", None, token_l)
+    check("learner still out after refused re-add",
+          class_a not in [i["classroomId"] for i in body.get("items", [])], str(body)[:200])
+    code, body = req("POST", f"/api/classrooms/{class_a}/roster",
+                     {"fullName": "Learner " + run,
+                      "email": learner + "@example.com"}, token_a)
+    check("invitation is the rejoin path (stays PENDING)",
+          code == 201 and body.get("status") == "PENDING", str(body)[:200])
+    rejoin_entry = body.get("id")
+    code, body = req("POST", f"/api/classrooms/roster/{rejoin_entry}/accept", {}, token_l)
+    check("learner accepts and is back in class A",
+          code == 200 and body.get("status") == "LINKED", str(body)[:200])
+
     # --- teacher remove drops the joined card (existing flow intact) ----
     code, _ = req("DELETE", f"/api/classrooms/{class_a}/members/{learner_id}", None, token_a)
     check("teacher remove member succeeds", code in (200, 204), str(code))

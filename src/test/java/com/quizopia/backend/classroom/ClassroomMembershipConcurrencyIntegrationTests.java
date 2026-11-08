@@ -48,6 +48,8 @@ class ClassroomMembershipConcurrencyIntegrationTests {
     @Autowired
     private ClassroomMembershipService membershipService;
     @Autowired
+    private com.quizopia.backend.classroom.application.ClassroomService classroomService;
+    @Autowired
     private RosterReconciliationService reconciliationService;
     @Autowired
     private JdbcTemplate jdbc;
@@ -128,6 +130,32 @@ class ClassroomMembershipConcurrencyIntegrationTests {
                 .as("a committed opt-out must never be auto-relinked").isZero();
         assertThat(rosterRows("LINKED"))
                 .as("no stale LINKED entry may survive leave").isZero();
+    }
+
+    @Test
+    void leaveRacingDirectReAddNeverBypassesTheOptOut() throws Exception {
+        jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES (" + classroomId + "," + learnerId + ")");
+
+        // Final-M1 gate F1: whichever commits first, the committed opt-out
+        // can never be bypassed — final state is ALWAYS "no membership +
+        // standing DECLINED" (addMembers takes the same user-row lock as
+        // leave, so the DECLINED check and the insert serialize with it).
+        runConcurrently(2,
+                () -> {
+                    membershipService.leaveClassroom(learnerId, classroomId);
+                    return null;
+                },
+                () -> {
+                    classroomService.addMembers(teacherId, classroomId,
+                            new com.quizopia.backend.classroom.dto.AddMembersRequest(
+                                    java.util.List.of(learnerId)));
+                    return null;
+                });
+
+        assertThat(membershipCount())
+                .as("opt-out must survive a racing direct re-add").isZero();
+        assertThat(rosterRows("DECLINED"))
+                .as("the opt-out record must exist").isEqualTo(1);
     }
 
     // ============================================================

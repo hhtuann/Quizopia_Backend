@@ -219,18 +219,90 @@ class ClassroomMembershipApiIntegrationTests {
     }
 
     @Test
-    void repeatedDirectAddLeaveCyclesDoNotStackOptOutRows() throws Exception {
+    void directReAddAfterOptOutIsRefusedWithPerUserResult() throws Exception {
         long classA = createClassroom(teacherA, "CY" + tag, "Cycle " + tag);
-        // Enroll → leave → re-add → leave: exactly ONE standing DECLINED row.
-        addMemberDirect(teacherA, classA, learner);
-        mockMvc.perform(post("/api/classrooms/" + classA + "/leave").with(jwtFor(learner)))
-                .andExpect(status().isNoContent());
+        // Enroll → leave. The direct re-add is REFUSED (standing opt-out,
+        // Final-M1 gate F1 / issue #50 decision 6) and reported per-user so
+        // the teacher knows to send an invitation instead.
         addMemberDirect(teacherA, classA, learner);
         mockMvc.perform(post("/api/classrooms/" + classA + "/leave").with(jwtFor(learner)))
                 .andExpect(status().isNoContent());
 
+        mockMvc.perform(post("/api/classrooms/" + classA + "/members").with(jwtFor(teacherA))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userIds\":[" + learner + "]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.added").value(0))
+                .andExpect(jsonPath("$.declined[0]").value((int) learner));
+
+        // Still opted out; exactly ONE standing DECLINED row (no stacking —
+        // the refused re-add never recreates the membership).
+        mockMvc.perform(get("/api/classrooms/joined").with(jwtFor(learner)))
+                .andExpect(jsonPath("$.totalElements").value(0));
         assertThat(rosterCount(classA, "lrnr" + tag + "@t.com")).isEqualTo(1);
         assertThat(rosterStatus(classA, "lrnr" + tag + "@t.com")).isEqualTo("DECLINED");
+    }
+
+    @Test
+    void invitationAcceptIsTheOnlyRejoinPathAfterDirectAddOptOut() throws Exception {
+        long classA = createClassroom(teacherA, "CY" + tag, "Cycle " + tag);
+        addMemberDirect(teacherA, classA, learner);
+        mockMvc.perform(post("/api/classrooms/" + classA + "/leave").with(jwtFor(learner)))
+                .andExpect(status().isNoContent());
+
+        // Direct re-add refused; the teacher sends a roster invitation…
+        mockMvc.perform(post("/api/classrooms/" + classA + "/members").with(jwtFor(teacherA))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userIds\":[" + learner + "]}"))
+                .andExpect(jsonPath("$.declined[0]").value((int) learner));
+        JsonNode invitation = addRosterEntry(teacherA, classA, "Learner " + tag,
+                "lrnr" + tag + "@t.com");
+        // …which stays PENDING (opt-out history blocks auto-relink)…
+        assertThat(invitation.get("status").asString()).isEqualTo("PENDING");
+        // …until the learner EXPLICITLY accepts — membership restored once.
+        mockMvc.perform(post("/api/classrooms/roster/" + invitation.get("id").asLong() + "/accept")
+                        .with(jwtFor(learner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("LINKED"));
+        mockMvc.perform(get("/api/classrooms/joined").with(jwtFor(learner)))
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].classroomId").value((int) classA));
+    }
+
+    @Test
+    void optOutIsPerClassroomAndTeacherRemoveReAddStaysAllowed() throws Exception {
+        long classA = createClassroom(teacherA, "OA" + tag, "OptOutScope " + tag);
+        long classA2 = createClassroom(teacherA, "OA2" + tag, "OtherClassSameTeacher " + tag);
+        long classB = createClassroom(teacherB, "OB" + tag, "OtherTeacher " + tag);
+        long other = verifiedStudent("othr" + tag, "Other Learner " + tag);
+
+        addMemberDirect(teacherA, classA, learner);
+        mockMvc.perform(post("/api/classrooms/" + classA + "/leave").with(jwtFor(learner)))
+                .andExpect(status().isNoContent());
+
+        // Same learner, DIFFERENT classroom (other teacher AND another class
+        // of the same teacher): the opt-out is per-classroom, not global.
+        addMemberDirect(teacherB, classB, learner);
+        addMemberDirect(teacherA, classA2, learner);
+        mockMvc.perform(get("/api/classrooms/joined").with(jwtFor(learner)))
+                .andExpect(jsonPath("$.totalElements").value(2));
+
+        // Only the opted-out classroom refuses the re-add.
+        mockMvc.perform(post("/api/classrooms/" + classA + "/members").with(jwtFor(teacherA))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userIds\":[" + learner + "]}"))
+                .andExpect(jsonPath("$.added").value(0))
+                .andExpect(jsonPath("$.declined[0]").value((int) learner));
+
+        // TEACHER removal creates no opt-out: direct re-add stays allowed
+        // (the owner's own administrative action on their roster).
+        addMemberDirect(teacherB, classB, other);
+        mockMvc.perform(delete("/api/classrooms/" + classB + "/members/" + other)
+                        .with(jwtFor(teacherB)))
+                .andExpect(status().isOk());
+        addMemberDirect(teacherB, classB, other);
+        mockMvc.perform(get("/api/classrooms/joined").with(jwtFor(other)))
+                .andExpect(jsonPath("$.totalElements").value(1));
     }
 
     // ============================================================

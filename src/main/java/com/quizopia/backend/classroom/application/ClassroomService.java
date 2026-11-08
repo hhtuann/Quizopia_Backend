@@ -2,6 +2,7 @@ package com.quizopia.backend.classroom.application;
 
 import com.quizopia.backend.classroom.domain.model.Classroom;
 import com.quizopia.backend.classroom.domain.model.ClassroomMember;
+import com.quizopia.backend.classroom.domain.model.ClassroomRosterEntry;
 import com.quizopia.backend.classroom.dto.AddMembersRequest;
 import com.quizopia.backend.classroom.dto.AddMembersResponse;
 import com.quizopia.backend.classroom.dto.ClassroomDetailView;
@@ -48,6 +49,7 @@ public class ClassroomService {
     private final com.quizopia.backend.identity.repository.UserRepository userRepository;
     private final ClassroomRepository classroomRepository;
     private final ClassroomMemberRepository memberRepository;
+    private final com.quizopia.backend.classroom.repository.ClassroomRosterEntryRepository rosterEntryRepository;
     private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
     private final EntityManager entityManager;
@@ -58,6 +60,7 @@ public class ClassroomService {
             com.quizopia.backend.identity.repository.UserRepository userRepository,
             ClassroomRepository classroomRepository,
             ClassroomMemberRepository memberRepository,
+            com.quizopia.backend.classroom.repository.ClassroomRosterEntryRepository rosterEntryRepository,
             UserRoleRepository userRoleRepository,
             RolePermissionRepository rolePermissionRepository,
             EntityManager entityManager,
@@ -66,12 +69,14 @@ public class ClassroomService {
         this.userRepository = userRepository;
         this.classroomRepository = classroomRepository;
         this.memberRepository = memberRepository;
+        this.rosterEntryRepository = rosterEntryRepository;
         this.userRoleRepository = userRoleRepository;
         this.rolePermissionRepository = rolePermissionRepository;
         this.entityManager = entityManager;
         this.clock = clock;
         this.notificationService = notificationService;
     }
+
 
     // ============================================================
     // POST /api/classrooms
@@ -204,6 +209,29 @@ public class ClassroomService {
             }
         }
 
+        // Final-M1 gate F1 (issue #50 decision 6): a learner who LEFT this
+        // classroom (DECLINED consent record keyed by their canonical email)
+        // must not be directly re-added — the teacher sends an invitation
+        // and the learner explicitly accepts. The check runs UNDER the
+        // candidate user-row locks (sorted order — no bulk-lock cycles),
+        // the same serialization point leave/decline/accept/reconcile use,
+        // so a concurrent self-leave can never be bypassed by a re-add.
+        List<Long> lockOrder = new ArrayList<>(toInsert);
+        Collections.sort(lockOrder);
+        for (Long candidateId : lockOrder) {
+            lockUserRow(candidateId);
+        }
+        Map<Long, String> canonicalEmails = batchCanonicalEmails(toInsert);
+        Set<Long> declinedOptOut = toInsert.stream()
+                .filter(id -> {
+                    String email = canonicalEmails.get(id);
+                    return email != null && rosterEntryRepository
+                            .existsByClassroomIdAndEmailNormalizedAndStatus(classroomId, email,
+                                    ClassroomRosterEntry.RosterStatus.DECLINED);
+                })
+                .collect(Collectors.toSet());
+        toInsert = toInsert.stream().filter(id -> !declinedOptOut.contains(id)).toList();
+
         if (!toInsert.isEmpty()) {
             try {
                 for (Long memberUserId : toInsert) {
@@ -217,8 +245,10 @@ public class ClassroomService {
             }
         }
 
+        List<Long> declined = new ArrayList<>(declinedOptOut);
         Collections.sort(duplicated);
         Collections.sort(invalid);
+        Collections.sort(declined);
         // Notify the teacher + each added student.
         if (!toInsert.isEmpty()) {
             notificationService.create(userId,
@@ -236,7 +266,7 @@ public class ClassroomService {
                         "/sessions");
             }
         }
-        return new AddMembersResponse(toInsert.size(), duplicated, invalid);
+        return new AddMembersResponse(toInsert.size(), duplicated, invalid, declined);
     }
 
     // ============================================================
@@ -480,5 +510,24 @@ public class ClassroomService {
             cause = cause.getCause();
         }
         return false;
+    }
+
+    /** userId → canonical email (trimmed lowercase); absent for missing/blank emails. */
+    private Map<Long, String> batchCanonicalEmails(List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Object[]> rows = entityManager.createQuery(
+                "SELECT u.id, u.email FROM User u WHERE u.id IN :ids", Object[].class)
+                .setParameter("ids", new java.util.HashSet<>(userIds))
+                .getResultList();
+        Map<Long, String> emails = new HashMap<>();
+        for (Object[] row : rows) {
+            String email = (String) row[1];
+            if (email != null && !email.isBlank()) {
+                emails.put((Long) row[0], email.trim().toLowerCase());
+            }
+        }
+        return emails;
     }
 }
