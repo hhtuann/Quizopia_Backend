@@ -73,7 +73,7 @@ class V26CommunityFoundationMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain passed through V26 (head is now V29)")
-                .containsExactly("29");
+                .containsExactly("30");
 
                 // The V24 catalog seeds every code per grade level — the
                 // seed dedup ran on this leg too.
@@ -158,7 +158,7 @@ class V26CommunityFoundationMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain passed through V26 (head is now V29)")
-                .containsExactly("29");
+                .containsExactly("30");
             }
         } finally {
             dropDatabase(dbName);
