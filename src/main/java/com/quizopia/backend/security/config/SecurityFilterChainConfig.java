@@ -181,15 +181,17 @@ public class SecurityFilterChainConfig {
                         // (deny-by-default).
                         .requestMatchers("/api/community/**").authenticated()
                         // Community public discovery (issue #41, ADR-006 §7; social-summary
-                        // added by issue #65, ADR-007 §5/§11): anonymous, exact-path,
-                        // GET-only — /publications, /publications/{id},
-                        // /publications/{id}/social-summary, /categories and /tags. Every
+                        // added by issue #65, comments page by issue #66, ADR-007 §5/§11):
+                        // anonymous, exact-path, GET-only — /publications,
+                        // /publications/{id}, /publications/{id}/social-summary,
+                        // /publications/{id}/comments, /categories and /tags. Every
                         // other method on these paths falls through to the deny-by-default
                         // chain (401 anonymous); nothing else under /api/public is open.
                         .requestMatchers(HttpMethod.GET,
                                 "/api/public/community/publications",
                                 "/api/public/community/publications/*",
                                 "/api/public/community/publications/*/social-summary",
+                                "/api/public/community/publications/*/comments",
                                 "/api/public/community/categories",
                                 "/api/public/community/tags").permitAll()
                         .anyRequest().denyAll());

@@ -4,9 +4,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 
 /**
- * Community module error codes (ADR-006 §4/§7/§9). Anti-enumeration:
- * absent/foreign/invisible resources are always COMMUNITY_NOT_FOUND
- * (404); 403 is reserved for "authenticated but not allowed".
+ * Community module error codes (ADR-006 §4/§7/§9, ADR-007 §5).
+ * Anti-enumeration: absent/foreign/invisible PUBLICATIONS are always
+ * COMMUNITY_NOT_FOUND and absent/foreign/non-VISIBLE COMMENTS are
+ * always COMMUNITY_COMMENT_NOT_FOUND (404); 403 is reserved for
+ * "authenticated but not allowed".
  */
 public enum CommunityErrorCode {
 
@@ -23,7 +25,9 @@ public enum CommunityErrorCode {
     COMMUNITY_FORK_NOT_ALLOWED(HttpStatus.FORBIDDEN,
             "This publication does not allow forking (reuse policy NO_FORK)"),
 
+
     COMMUNITY_NOT_FOUND(HttpStatus.NOT_FOUND, "Community publication not found"),
+    COMMUNITY_COMMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "Community comment not found"),
 
     COMMUNITY_PUBLICATION_EXISTS(HttpStatus.CONFLICT, "A publication already exists for this exam"),
     COMMUNITY_CONCURRENT_MODIFICATION(HttpStatus.CONFLICT, "The publication was modified by another transaction"),
@@ -33,6 +37,9 @@ public enum CommunityErrorCode {
     COMMUNITY_SELF_RATING_NOT_ALLOWED(HttpStatus.CONFLICT,
             "Publishers cannot rate their own publication"),
     COMMUNITY_REPORT_NOT_OPEN(HttpStatus.CONFLICT, "The report is no longer open"),
+    COMMUNITY_ALIAS_TAKEN(HttpStatus.CONFLICT, "That public alias is already taken"),
+    COMMUNITY_COMMENT_STATE_INVALID(HttpStatus.CONFLICT,
+            "The comment is not in a state that allows this action"),
     COMMUNITY_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT,
             "The Idempotency-Key was already used for a different publication"),
 

@@ -1,17 +1,26 @@
 package com.quizopia.backend.community.application;
 
+import com.quizopia.backend.community.domain.model.CommunityComment;
+import com.quizopia.backend.community.domain.model.CommunityCommentReport;
+import com.quizopia.backend.community.domain.model.CommunityCommentState;
 import com.quizopia.backend.community.domain.model.CommunityModerationAction;
 import com.quizopia.backend.community.domain.model.CommunityModerationActionType;
 import com.quizopia.backend.community.domain.model.CommunityModerationState;
 import com.quizopia.backend.community.domain.model.CommunityPublication;
 import com.quizopia.backend.community.domain.model.CommunityReport;
 import com.quizopia.backend.community.domain.model.CommunityReportStatus;
+import com.quizopia.backend.community.dto.ModerationCommentEntry;
+import com.quizopia.backend.community.dto.ModerationCommentHistoryEntry;
+import com.quizopia.backend.community.dto.ModerationCommentReportEntry;
+import com.quizopia.backend.community.dto.ModerationCommentSummary;
 import com.quizopia.backend.community.dto.ModerationHistoryEntry;
 import com.quizopia.backend.community.dto.ModerationPublicationSummary;
 import com.quizopia.backend.community.dto.ModerationReportEntry;
 import com.quizopia.backend.community.exception.CommunityErrorCode;
 import com.quizopia.backend.community.exception.CommunityException;
 import com.quizopia.backend.community.repository.CommunityCategoryRepository;
+import com.quizopia.backend.community.repository.CommunityCommentReportRepository;
+import com.quizopia.backend.community.repository.CommunityCommentRepository;
 import com.quizopia.backend.community.repository.CommunityModerationActionRepository;
 import com.quizopia.backend.community.repository.CommunityPublicationRepository;
 import com.quizopia.backend.community.repository.CommunityPublicationTagRepository;
@@ -47,7 +56,13 @@ import java.util.stream.Collectors;
  * row lock ({@code findByIdForUpdate}) — never the exam lock;
  * dismiss/resolve take ONLY the report row lock. Idempotent repeats
  * (hide-while-HIDDEN, restore-while-VISIBLE) are 200 no-ops WITHOUT a
- * duplicate audit row. Restore never touches {@code status}.
+ * duplicate audit row. Restore never touches {@code status}. The #66
+ * comment twins (ADR-007 §5) mirror all of it publication-lock-free:
+ * comment hide/restore take ONLY the comment row lock, comment-report
+ * dismiss/resolve ONLY the comment-report row lock, repeats are 200
+ * no-ops without a duplicate audit row, and DELETED is a 409
+ * COMMUNITY_COMMENT_STATE_INVALID for both hide and restore — an
+ * owner tombstone can never be moderated back.
  *
  * <p>Rate admission (§9): every write — hide, restore, dismiss,
  * resolve — admits FIRST against the caller's MODERATION user bucket
@@ -67,6 +82,8 @@ public class CommunityModerationService {
     private final CommunityCategoryRepository categories;
     private final CommunityAuthorizationService auth;
     private final CommunityRateLimiter rateLimiter;
+    private final CommunityCommentRepository comments;
+    private final CommunityCommentReportRepository commentReports;
     private final Clock clock;
 
     public CommunityModerationService(CommunityPublicationRepository publications,
@@ -76,6 +93,8 @@ public class CommunityModerationService {
             CommunityCategoryRepository categories,
             CommunityAuthorizationService auth,
             CommunityRateLimiter rateLimiter,
+            CommunityCommentRepository comments,
+            CommunityCommentReportRepository commentReports,
             Clock clock) {
         this.publications = publications;
         this.reports = reports;
@@ -84,6 +103,8 @@ public class CommunityModerationService {
         this.categories = categories;
         this.auth = auth;
         this.rateLimiter = rateLimiter;
+        this.comments = comments;
+        this.commentReports = commentReports;
         this.clock = clock;
     }
 
@@ -253,6 +274,168 @@ public class CommunityModerationService {
     }
 
     // ============================================================
+    // #66 (ADR-007 §5) — comment moderation
+    // ============================================================
+
+    /**
+     * GET /api/community/moderation/comment-reports?status&page&size —
+     * the comment-reports queue, newest-first, optional status filter.
+     * Batched comment + publication lookups (no N+1).
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<ModerationCommentReportEntry> commentReportQueue(
+            Long userId, String status, int page, int size) {
+        requireModerator(userId);
+
+        int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
+        int safePage = Math.max(page, 0);
+        PageRequest pageable = PageRequest.of(safePage, safeSize,
+                Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id")));
+
+        Page<CommunityCommentReport> result = status == null || status.isBlank()
+                ? commentReports.findAll(pageable)
+                : commentReports.findByStatus(parseStatus(status), pageable);
+
+        List<Long> commentIds = result.getContent().stream()
+                .map(CommunityCommentReport::getCommentId).distinct().toList();
+        Map<Long, CommunityComment> commentById = commentIds.isEmpty()
+                ? Map.of()
+                : comments.findAllById(commentIds).stream()
+                        .collect(Collectors.toMap(CommunityComment::getId, Function.identity()));
+        Map<Long, ModerationPublicationSummary> summaries = publicationSummaries(
+                commentById.values().stream().map(CommunityComment::getPublicationId)
+                        .distinct().toList());
+
+        return new PageResponse<>(
+                result.getContent().stream()
+                        .map(report -> toCommentQueueEntry(report, commentById, summaries))
+                        .toList(),
+                result.getNumber(), result.getSize(), result.getTotalElements(),
+                result.getTotalPages(), pageable.getSort().toString());
+    }
+
+    /**
+     * POST /moderation/comments/{commentId}/hide — VISIBLE→HIDDEN under
+     * the comment row lock ONLY (never the publication row); audit
+     * COMMENT_HIDE carries the state pair in from/to_moderation_state
+     * and NULL statuses. Repeat hide is a 200 no-op without a duplicate
+     * audit row; hide of DELETED is 409 (tombstones are terminal).
+     */
+    @Transactional
+    public ModerationCommentEntry hideComment(Long userId, Long commentId, String reason) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
+        requireModerator(userId);
+        CommunityComment comment = lockComment(commentId);
+        String auditReason = requireReason(reason);
+
+        if (comment.getState() == CommunityCommentState.DELETED) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_COMMENT_STATE_INVALID);
+        }
+        if (comment.getState() == CommunityCommentState.HIDDEN) {
+            // Idempotent no-op: 200, NO duplicate audit row.
+            return toCommentEntry(comment);
+        }
+
+        comment.hideByModeration();
+        comments.saveAndFlush(comment);
+        appendCommentAudit(userId, commentId, CommunityModerationActionType.COMMENT_HIDE,
+                CommunityCommentState.VISIBLE.name(), CommunityCommentState.HIDDEN.name(),
+                auditReason);
+        return toCommentEntry(comment);
+    }
+
+    /**
+     * POST /moderation/comments/{commentId}/restore — HIDDEN→VISIBLE
+     * under the comment row lock ONLY; audit COMMENT_RESTORE. Repeat
+     * restore is a 200 no-op without a duplicate audit row; restore of
+     * DELETED is 409 (tombstones are terminal).
+     */
+    @Transactional
+    public ModerationCommentEntry restoreComment(Long userId, Long commentId, String reason) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
+        requireModerator(userId);
+        CommunityComment comment = lockComment(commentId);
+        String auditReason = requireReason(reason);
+
+        if (comment.getState() == CommunityCommentState.DELETED) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_COMMENT_STATE_INVALID);
+        }
+        if (comment.getState() == CommunityCommentState.VISIBLE) {
+            // Idempotent no-op: 200, NO duplicate audit row.
+            return toCommentEntry(comment);
+        }
+
+        comment.restoreByModeration();
+        comments.saveAndFlush(comment);
+        appendCommentAudit(userId, commentId, CommunityModerationActionType.COMMENT_RESTORE,
+                CommunityCommentState.HIDDEN.name(), CommunityCommentState.VISIBLE.name(),
+                auditReason);
+        return toCommentEntry(comment);
+    }
+
+    /**
+     * POST /moderation/comment-reports/{id}/dismiss|resolve — the #42
+     * transitions on the comment-report row lock ONLY; audit rows link
+     * {@code comment_report_id} and carry no states; 409
+     * COMMUNITY_REPORT_NOT_OPEN when not OPEN.
+     */
+    @Transactional
+    public ModerationCommentReportEntry dismissCommentReport(Long userId, Long reportId,
+            String note) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
+        return handleCommentReport(userId, reportId, note,
+                CommunityModerationActionType.COMMENT_REPORT_DISMISS);
+    }
+
+    @Transactional
+    public ModerationCommentReportEntry resolveCommentReport(Long userId, Long reportId,
+            String note) {
+        rateLimiter.admitUser(CommunityRateLimiter.Policy.MODERATION, userId);
+        return handleCommentReport(userId, reportId, note,
+                CommunityModerationActionType.COMMENT_REPORT_RESOLVE);
+    }
+
+    private ModerationCommentReportEntry handleCommentReport(Long userId, Long reportId,
+            String note, CommunityModerationActionType action) {
+        requireModerator(userId);
+        CommunityCommentReport report = commentReports.findForUpdateById(reportId)
+                .orElseThrow(() -> new CommunityException(
+                        CommunityErrorCode.COMMUNITY_COMMENT_NOT_FOUND));
+        if (report.getStatus() != CommunityReportStatus.OPEN) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_REPORT_NOT_OPEN);
+        }
+
+        String trimmedNote = boundNote(note);
+        Instant now = Instant.now(clock);
+        if (action == CommunityModerationActionType.COMMENT_REPORT_DISMISS) {
+            report.dismiss(userId, now, trimmedNote);
+        } else {
+            report.resolve(userId, now, trimmedNote);
+        }
+        commentReports.saveAndFlush(report);
+
+        // V27 reason NOT NULL: the note when given, else the action verb.
+        appendCommentReportAudit(userId, report.getId(), action,
+                trimmedNote != null ? trimmedNote : action.name());
+
+        return refreshedCommentQueueEntry(report);
+    }
+
+    /**
+     * GET /moderation/comments/{commentId}/history — audit rows
+     * newest-first, UNPAGED (publication-history precedent).
+     */
+    @Transactional(readOnly = true)
+    public List<ModerationCommentHistoryEntry> commentHistory(Long userId, Long commentId) {
+        requireModerator(userId);
+        if (!comments.existsById(commentId)) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_COMMENT_NOT_FOUND);
+        }
+        return actions.findByCommentIdOrderByCreatedAtDescIdDesc(commentId).stream()
+                .map(CommunityModerationService::toCommentHistoryEntry).toList();
+    }
+
+    // ============================================================
     // helpers
     // ============================================================
 
@@ -373,6 +556,97 @@ public class CommunityModerationService {
                 action.getReportId(),
                 action.getFromStatus(),
                 action.getToStatus(),
+                action.getFromModerationState(),
+                action.getToModerationState(),
+                action.getReason(),
+                action.getCreatedAt());
+    }
+
+    /** Comment row lock ONLY (ADR-007 §5/§8) — never the publication row. */
+    private CommunityComment lockComment(Long commentId) {
+        return comments.findForUpdateById(commentId)
+                .orElseThrow(() -> new CommunityException(
+                        CommunityErrorCode.COMMUNITY_COMMENT_NOT_FOUND));
+    }
+
+    /** §7 dismiss/resolve optional note: trimmed, ≤500, blank → null. */
+    private static String boundNote(String note) {
+        String trimmed = note == null ? null : note.trim();
+        if (trimmed != null && trimmed.isEmpty()) {
+            trimmed = null;
+        }
+        if (trimmed != null && trimmed.length() > 500) {
+            throw new CommunityException(CommunityErrorCode.COMMUNITY_VALIDATION_ERROR,
+                    "note must be at most 500 characters");
+        }
+        return trimmed;
+    }
+
+    private void appendCommentAudit(Long actorUserId, Long commentId,
+            CommunityModerationActionType action, String fromState, String toState,
+            String reason) {
+        actions.save(new CommunityModerationAction(actorUserId, action, commentId, null,
+                fromState, toState, reason));
+    }
+
+    private void appendCommentReportAudit(Long actorUserId, Long commentReportId,
+            CommunityModerationActionType action, String reason) {
+        actions.save(new CommunityModerationAction(actorUserId, action, null, commentReportId,
+                null, null, reason));
+    }
+
+    /** Queue entry for a just-handled report (fresh comment + summary reads). */
+    private ModerationCommentReportEntry refreshedCommentQueueEntry(CommunityCommentReport report) {
+        CommunityComment comment = comments.findById(report.getCommentId()).orElse(null);
+        Map<Long, CommunityComment> commentById = comment == null
+                ? Map.of()
+                : Map.of(comment.getId(), comment);
+        return toCommentQueueEntry(report, commentById,
+                publicationSummaries(comment == null
+                        ? List.of()
+                        : List.of(comment.getPublicationId())));
+    }
+
+    private static ModerationCommentReportEntry toCommentQueueEntry(
+            CommunityCommentReport report, Map<Long, CommunityComment> commentById,
+            Map<Long, ModerationPublicationSummary> summaries) {
+        CommunityComment comment = commentById.get(report.getCommentId());
+        return new ModerationCommentReportEntry(
+                report.getId(),
+                report.getCommentId(),
+                comment == null ? null : new ModerationCommentSummary(
+                        comment.getBody(), comment.getAuthorAlias(), comment.getCreatedAt()),
+                comment == null ? null : summaries.get(comment.getPublicationId()),
+                report.getReporterUserId(),
+                report.getReasonCode().name(),
+                report.getDetails(),
+                report.getStatus().name(),
+                report.getHandledBy(),
+                report.getHandledAt(),
+                report.getResolutionNote(),
+                report.getCreatedAt());
+    }
+
+    private static ModerationCommentEntry toCommentEntry(CommunityComment comment) {
+        return new ModerationCommentEntry(
+                comment.getId(),
+                comment.getPublicationId(),
+                comment.getAuthorAlias(),
+                comment.getBody(),
+                comment.getState().name(),
+                comment.getCreatedAt(),
+                comment.getEditedAt(),
+                comment.getUpdatedAt());
+    }
+
+    private static ModerationCommentHistoryEntry toCommentHistoryEntry(
+            CommunityModerationAction action) {
+        return new ModerationCommentHistoryEntry(
+                action.getId(),
+                action.getActorUserId(),
+                action.getAction().name(),
+                action.getCommentId(),
+                action.getCommentReportId(),
                 action.getFromModerationState(),
                 action.getToModerationState(),
                 action.getReason(),

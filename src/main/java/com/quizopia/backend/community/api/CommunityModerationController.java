@@ -1,6 +1,9 @@
 package com.quizopia.backend.community.api;
 
 import com.quizopia.backend.community.application.CommunityModerationService;
+import com.quizopia.backend.community.dto.ModerationCommentEntry;
+import com.quizopia.backend.community.dto.ModerationCommentHistoryEntry;
+import com.quizopia.backend.community.dto.ModerationCommentReportEntry;
 import com.quizopia.backend.community.dto.ModerationGrantResponse;
 import com.quizopia.backend.community.dto.ModerationHistoryEntry;
 import com.quizopia.backend.community.dto.ModerationReasonRequest;
@@ -102,6 +105,62 @@ public class CommunityModerationController {
             @PathVariable Long publicationId,
             @AuthenticationPrincipal Jwt jwt) {
         return noStore(moderationService.publicationHistory(userId(jwt), publicationId));
+    }
+
+    // ============================================================
+    // Comment moderation (ADR-007 §5, issue #66) — mirrors the
+    // publication routes; the comment twins take ONLY the comment /
+    // comment-report row locks, never the publication row.
+    // ============================================================
+
+    @GetMapping("/comment-reports")
+    public ResponseEntity<PageResponse<ModerationCommentReportEntry>> commentReports(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return noStore(moderationService.commentReportQueue(userId(jwt), status, page, size));
+    }
+
+    @PostMapping("/comments/{commentId}/hide")
+    public ResponseEntity<ModerationCommentEntry> hideComment(
+            @PathVariable Long commentId,
+            @RequestBody(required = false) ModerationReasonRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return noStore(moderationService.hideComment(userId(jwt), commentId, reasonOf(request)));
+    }
+
+    @PostMapping("/comments/{commentId}/restore")
+    public ResponseEntity<ModerationCommentEntry> restoreComment(
+            @PathVariable Long commentId,
+            @RequestBody(required = false) ModerationReasonRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return noStore(moderationService.restoreComment(userId(jwt), commentId, reasonOf(request)));
+    }
+
+    @PostMapping("/comment-reports/{reportId}/dismiss")
+    public ResponseEntity<ModerationCommentReportEntry> dismissCommentReport(
+            @PathVariable Long reportId,
+            @RequestBody(required = false) ModerationReasonRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return noStore(moderationService.dismissCommentReport(
+                userId(jwt), reportId, noteOf(request)));
+    }
+
+    @PostMapping("/comment-reports/{reportId}/resolve")
+    public ResponseEntity<ModerationCommentReportEntry> resolveCommentReport(
+            @PathVariable Long reportId,
+            @RequestBody(required = false) ModerationReasonRequest request,
+            @AuthenticationPrincipal Jwt jwt) {
+        return noStore(moderationService.resolveCommentReport(
+                userId(jwt), reportId, noteOf(request)));
+    }
+
+    @GetMapping("/comments/{commentId}/history")
+    public ResponseEntity<List<ModerationCommentHistoryEntry>> commentHistory(
+            @PathVariable Long commentId,
+            @AuthenticationPrincipal Jwt jwt) {
+        return noStore(moderationService.commentHistory(userId(jwt), commentId));
     }
 
     /** Hide/restore read {@code reason}; a body-less POST is a 400. */
