@@ -405,6 +405,21 @@ def main():
     code, lsess = req("GET", f"/api/classrooms/joined/{a1}/sessions", None, tok_2)
     check("M2: learner assigned-session list still works", code == 200, str(code))
 
+    # Final Gate P2-01/P2-02: UPCOMING sessions must not distort analytics.
+    # A1 state here: S1 window still OPEN, cohort {L1 (left mid-window,
+    # submitted), L2 (rejoined member, no attempt)} = 2 eligible / 1 completed.
+    up = create_session(tok_a, exam_a, f"M3 Upcoming {run}", future=True)
+    s, _ = req("POST", f"/api/classrooms/{a1}/sessions/{up}", {}, tok_a)
+    check("assign upcoming session to A1", s == 204, str(s))
+    code, upd = req("GET", f"/api/classrooms/{a1}/analytics?sessionId={up}", None, tok_a)
+    check("P2-01: upcoming detail completion/null notAttempted", code == 200 and
+          upd.get("completionPercentage") is None and upd.get("notAttemptedCount") is None
+          and upd.get("windowState") == "UPCOMING", str(upd)[:150])
+    code, over2 = req("GET", f"/api/classrooms/{a1}/analytics", None, tok_a)
+    check("P2-02: overview KPI unaffected by upcoming session", code == 200 and
+          over2.get("overallCompletionPercentage") == 50 and
+          over2.get("eligiblePairs") == 2 and over2.get("completedPairs") == 1,
+          str(over2)[:150])
     print()
     print(f"CLASS-M3 E2E: {len(PASSED)} passed, {len(FAILED)} failed")
     if FAILED:

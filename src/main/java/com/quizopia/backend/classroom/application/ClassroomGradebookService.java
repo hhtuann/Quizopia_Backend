@@ -706,7 +706,10 @@ public class ClassroomGradebookService {
                     assignedCount != null ? assignedCount : 0L, now);
         }
 
-        // Overview: trend over the latest window-begun sessions (chronological).
+        // Overview: bounded trend (latest TREND_LIMIT, chronological) for
+        // display; the overall KPI is a separate SQL aggregation over ALL
+        // eligible WINDOW sessions (Final Gate P2-02 — the presentation
+        // bound must never sample the denominator).
         List<SessionMeta> recent = assignedSessions(classroomId, userId, null, null, TREND_LIMIT);
         Map<Long, SessionWindow> windows = new LinkedHashMap<>();
         for (SessionMeta m : recent) {
@@ -720,8 +723,6 @@ public class ClassroomGradebookService {
         Map<Long, Map<Long, BestResult>> best = bestResults(new ArrayList<>(windows.keySet()), allUsers);
 
         List<ClassroomAnalyticsResponse.SessionAnalyticsTrend> trends = new ArrayList<>();
-        long sumSubmitted = 0L;
-        long sumCohort = 0L;
         List<SessionMeta> chronological = new ArrayList<>(recent);
         chronological.sort(Comparator.comparing(SessionMeta::startsAt).thenComparing(SessionMeta::id));
         for (SessionMeta m : chronological) {
@@ -747,20 +748,51 @@ public class ClassroomGradebookService {
                 }
             }
             boolean windowed = SessionWindow.WINDOW.equals(windows.get(m.id()).state());
-            // Design §1: upcoming sessions are prospective — never part of
-            // the completed-analytics denominator (review M3-Domain P2-1).
-            if (windowed) {
-                sumSubmitted += submitted;
-                sumCohort += cohort.size();
-            }
             trends.add(new ClassroomAnalyticsResponse.SessionAnalyticsTrend(m.id(), m.code(), m.title(),
                     m.status(), windows.get(m.id()).state(), m.startsAt(), cohort.size(), started,
                     submitted, graded,
                     windowed ? ratio(submitted, cohort.size()) : null, mean(pcts)));
         }
-        return new ClassroomAnalyticsResponse(null, null, null, null, null, null, rosterSize,
-                assignedCount != null ? assignedCount : 0L, 0L, 0L, 0L, 0L, 0L, null, null, null,
-                null, null, null, ratio(sumSubmitted, sumCohort), trends, HISTORY_COVERAGE);
+
+        // Overall completion: SQL-level aggregation of DISTINCT
+        // (session, learner) cohort pairs over EVERY eligible window of the
+        // class. Window shape mirrors windowOf: OPEN/CLOSED only (the owner
+        // lifecycle refresh above has already moved every due SCHEDULED
+        // session), [max(starts, opened), min(ends, closed)], and the
+        // never-held fabrication degenerates ws >= we and drops out.
+        String overallSql =
+                "WITH windows AS ( "
+                        + "  SELECT s.id, "
+                        + "         GREATEST(s.starts_at, COALESCE(s.opened_at, s.starts_at)) AS ws, "
+                        + "         LEAST(s.ends_at, COALESCE(s.closed_at, s.ends_at)) AS we "
+                        + "  FROM exam_session_classes esc "
+                        + "  JOIN exam_sessions s ON s.id = esc.exam_session_id "
+                        + "  WHERE esc.classroom_id = :cid AND s.created_by = :uid "
+                        + "    AND s.status IN ('OPEN','CLOSED') "
+                        + "), eligible AS ( "
+                        + "  SELECT * FROM windows WHERE ws < we "
+                        + ") "
+                        + "SELECT COUNT(DISTINCT (w.id, p.user_id)) AS eligible_pairs, "
+                        + "       COUNT(DISTINCT (w.id, p.user_id)) "
+                        + "         FILTER (WHERE EXISTS (SELECT 1 FROM attempts a "
+                        + "              WHERE a.exam_session_id = w.id AND a.user_id = p.user_id "
+                        + "                AND a.status IN ('SUBMITTED','GRADED'))) AS completed_pairs "
+                        + "FROM eligible w "
+                        + "JOIN classroom_membership_periods p ON p.classroom_id = :cid "
+                        + "  AND tstzrange(p.joined_at, COALESCE(p.left_at, 'infinity'), '[)') "
+                        + "      && tstzrange(w.ws, w.we, '[)')";
+        java.util.Map<String, Object> overall = jdbc.queryForMap(overallSql,
+                new MapSqlParameterSource().addValue("cid", classroomId).addValue("uid", userId));
+        long eligiblePairs = ((Number) overall.get("eligible_pairs")).longValue();
+        long completedPairs = ((Number) overall.get("completed_pairs")).longValue();
+        return new ClassroomAnalyticsResponse(
+                null, null, null, null, null, null,          // detail-only fields
+                rosterSize, assignedCount != null ? assignedCount : 0L,
+                0L, 0L, 0L, 0L, null,                        // per-session counters
+                null, null, null, null, null, null,           // detail-only metrics
+                ratio(completedPairs, eligiblePairs),
+                eligiblePairs == 0 ? null : eligiblePairs,
+                eligiblePairs == 0 ? null : completedPairs, trends, HISTORY_COVERAGE);
     }
 
     private ClassroomAnalyticsResponse sessionAnalytics(Long classroomId, Long ownerId, Long sessionId,
@@ -797,13 +829,22 @@ public class ClassroomGradebookService {
         List<BigDecimal> sorted = new ArrayList<>(pcts);
         sorted.sort(BigDecimal::compareTo);
         List<Long> buckets = distribution(sorted);
+        boolean windowed = SessionWindow.WINDOW.equals(w.state());
+        // Nullability contract (Final Gate P2-01): completion and
+        // notAttempted are COMPLETED-session metrics. For UPCOMING the
+        // roster is prospective (nobody "hasn't attempted" an assignment
+        // that has not opened); for DRAFT/CANCELLED/NOT_HELD there is no
+        // taking window at all. Raw started/submitted/graded counters stay
+        // exact (0 for prospective rosters).
         return new ClassroomAnalyticsResponse(meta.id(), meta.title(), meta.code(), meta.status(),
                 w.state(), meta.startsAt(), rosterSize, assignedCount, cohort.size(), started,
                 submitted, graded,
-                cohort.size() - started, ratio(submitted, cohort.size()), mean(pcts),
+                windowed ? (cohort.size() - started) : null,
+                windowed ? ratio(submitted, cohort.size()) : null,
+                mean(pcts),
                 sorted.isEmpty() ? null : sorted.get(0),
                 sorted.isEmpty() ? null : sorted.get(sorted.size() - 1),
-                median(sorted), buckets, null, null, HISTORY_COVERAGE);
+                median(sorted), buckets, null, null, null, null, HISTORY_COVERAGE);
     }
 
     /** 10 buckets: i = [i·10,(i+1)·10), bucket 9 = [90,100] (SessionStatistics rule). */

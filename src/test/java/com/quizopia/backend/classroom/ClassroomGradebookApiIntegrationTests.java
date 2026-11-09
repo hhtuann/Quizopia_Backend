@@ -638,6 +638,181 @@ class ClassroomGradebookApiIntegrationTests {
     }
 
     // ============================================================
+    // Final Gate remediation (P2-01 / P2-02)
+    // ============================================================
+
+    @Test
+    void upcomingDetailAnalyticsIsNullCompletionAndConsistentAcrossSurfaces() throws Exception {
+        long upcoming = session(teacherA, examA, "FG1" + tag, "SCHEDULED");
+        assign(teacherA, classA1, upcoming);
+        addMember(teacherA, classA1, s1); // nonempty prospective roster
+
+        JsonNode detail = analytics(classA1, teacherA, upcoming);
+        assertThat(detail.get("windowState").asText()).isEqualTo("UPCOMING");
+        assertThat(detail.get("cohortSize").asLong()).isEqualTo(1);
+        assertThat(detail.get("completionPercentage").isNull())
+                .as("P2-01: prospective completion is N/A, never 0.00")
+                .isTrue();
+        assertThat(detail.get("notAttemptedCount").isNull())
+                .as("P2-01: nobody has 'not attempted' an unopened session")
+                .isTrue();
+        assertThat(detail.get("startedCount").asLong()).isZero();
+        // Consistency: the sessions-column endpoint and the matrix footer
+        // report the same null for the same session.
+        MvcResult cols = mockMvc.perform(get("/api/classrooms/" + classA1
+                        + "/gradebook/sessions").with(jwtFor(teacherA)))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode col = objectMapper.readTree(cols.getResponse().getContentAsString())
+                .get("items").get(0);
+        assertThat(col.get("completionPercentage").isNull()).isTrue();
+        JsonNode matrix = gradebook(classA1, teacherA, null);
+        assertThat(matrix.get("sessions").get(0).get("completionPercentage").isNull()).isTrue();
+        assertThat(matrix.get("sessions").get(0).get("cohortSize").asLong()).isEqualTo(1);
+    }
+
+    @Test
+    void upcomingDetailWithEmptyRosterAndTerminalStatesAreNullCompletion() throws Exception {
+        long emptyUpcoming = session(teacherA, examA, "FG2" + tag, "SCHEDULED");
+        assign(teacherA, classA1, emptyUpcoming); // no members at all
+        long draft = session(teacherA, examA, "FG3" + tag, "DRAFT");
+        assign(teacherA, classA1, draft);
+        member(classA1, s1, "-3 hours", null);
+
+        for (long sid : new long[] { emptyUpcoming, draft }) {
+            JsonNode detail = analytics(classA1, teacherA, sid);
+            assertThat(detail.get("completionPercentage").isNull()).isTrue();
+            assertThat(detail.get("notAttemptedCount").isNull()).isTrue();
+        }
+        // CANCELLED with a member present.
+        long cancelled = windowedCancelled(teacherA, classA1, examA, "FG4" + tag);
+        JsonNode cancelledDetail = analytics(classA1, teacherA, cancelled);
+        assertThat(cancelledDetail.get("windowState").asText()).isEqualTo("CANCELLED");
+        assertThat(cancelledDetail.get("completionPercentage").isNull()).isTrue();
+        // NOT_HELD (fabricated CLOSED, never opened).
+        long notHeld = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
+                + "ends_at, max_attempts, created_by, visibility, duration_minutes) VALUES ("
+                + examA + ",'FG5" + tag + "','Never Held FG','SCHEDULED', "
+                + "now() + interval '1 day', now() + interval '2 days', 1," + teacherA
+                + ", 'CLASS_RESTRICTED', 30)");
+        assign(teacherA, classA1, notHeld);
+        jdbc.update("UPDATE exam_sessions SET status='CLOSED', starts_at = now() - interval '2 hours', "
+                + "ends_at = now() - interval '1 hour', opened_at = now() - interval '30 minutes', "
+                + "closed_at = now() - interval '30 minutes' WHERE id = " + notHeld);
+        JsonNode notHeldDetail = analytics(classA1, teacherA, notHeld);
+        assertThat(notHeldDetail.get("windowState").asText()).isEqualTo("NOT_HELD");
+        assertThat(notHeldDetail.get("completionPercentage").isNull()).isTrue();
+        assertThat(notHeldDetail.get("notAttemptedCount").isNull()).isTrue();
+    }
+
+    @Test
+    void twentyUpcomingSessionsDoNotHideOlderCompletedSession() throws Exception {
+        // The P2-02 repro: TREND_LIMIT newer UPCOMING assignments used to
+        // crowd the single completed session out of the aggregation.
+        long done = windowedSession(teacherA, classA1, examA, "FGD" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, done);
+        member(classA1, s1, "-3 hours", null);
+        member(classA1, s2, "-3 hours", null);
+        grade(attempt(done, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+        for (int i = 0; i < 20; i++) {
+            long upcoming = session(teacherA, examA, "FGU" + i + tag, "SCHEDULED");
+            assign(teacherA, classA1, upcoming);
+        }
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        assertThat(overview.get("overallCompletionPercentage").asDouble())
+                .as("the completed session still drives the KPI")
+                .isEqualTo(50.0);
+        assertThat(overview.get("eligiblePairs").asLong()).isEqualTo(2);
+        assertThat(overview.get("completedPairs").asLong()).isEqualTo(1);
+        assertThat(overview.get("sessions").size())
+                .as("trend stays bounded at 20 for display")
+                .isEqualTo(20);
+    }
+
+    @Test
+    void overallCompletionAggregatesMoreThanTwentyWindowedSessions() throws Exception {
+        member(classA1, s1, "-60 hours", null); // overlaps all 21 windows
+        for (int i = 0; i < 21; i++) {
+            long sess = windowedSession(teacherA, classA1, examA, "FGW" + i + tag,
+                    "-" + (20 + i) + " hours", "-" + (19 + i) + " hours");
+            if (i < 11) {
+                // 11 of 21 sessions get a submitted+graded attempt.
+                grade(attempt(sess, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+            }
+        }
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        assertThat(overview.get("eligiblePairs").asLong()).isEqualTo(21);
+        assertThat(overview.get("completedPairs").asLong()).isEqualTo(11);
+        assertThat(overview.get("overallCompletionPercentage").asDouble())
+                .isEqualTo(52.38); // 11/21, scale 2 HALF_UP
+        assertThat(overview.get("sessions").size()).isEqualTo(20);
+    }
+
+    @Test
+    void mixedStatesOverallAggregationCountsOnlyWindowPairs() throws Exception {
+        long windowed = windowedSession(teacherA, classA1, examA, "FGM1" + tag,
+                "-2 hours", "-1 hours");
+        assign(teacherA, classA1, windowed);
+        member(classA1, s1, "-3 hours", null);
+        member(classA1, s2, "-3 hours", null);
+        grade(attempt(windowed, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+        long upcoming = session(teacherA, examA, "FGM2" + tag, "SCHEDULED");
+        assign(teacherA, classA1, upcoming);
+        windowedCancelled(teacherA, classA1, examA, "FGM3" + tag);
+        long notHeld = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
+                + "ends_at, max_attempts, created_by, visibility, duration_minutes) VALUES ("
+                + examA + ",'FGM4" + tag + "','Never Held M','SCHEDULED', "
+                + "now() + interval '1 day', now() + interval '2 days', 1," + teacherA
+                + ", 'CLASS_RESTRICTED', 30)");
+        assign(teacherA, classA1, notHeld);
+        jdbc.update("UPDATE exam_sessions SET status='CLOSED', starts_at = now() - interval '2 hours', "
+                + "ends_at = now() - interval '1 hour', opened_at = now() - interval '30 minutes', "
+                + "closed_at = now() - interval '30 minutes' WHERE id = " + notHeld);
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        assertThat(overview.get("eligiblePairs").asLong())
+                .as("UPCOMING/CANCELLED/NOT_HELD contribute nothing")
+                .isEqualTo(2);
+        assertThat(overview.get("completedPairs").asLong()).isEqualTo(1);
+        assertThat(overview.get("overallCompletionPercentage").asDouble()).isEqualTo(50.0);
+    }
+
+    @Test
+    void noEligibleSessionsYieldNullOverall() throws Exception {
+        long upcoming = session(teacherA, examA, "FGN1" + tag, "SCHEDULED");
+        assign(teacherA, classA1, upcoming);
+        windowedCancelled(teacherA, classA1, examA, "FGN2" + tag);
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        assertThat(overview.get("overallCompletionPercentage").isNull()).isTrue();
+        assertThat(overview.get("eligiblePairs").isNull()).isTrue();
+        assertThat(overview.get("completedPairs").isNull()).isTrue();
+    }
+
+    @Test
+    void sharedSessionCountsOncePerLearnerInEachClassOverall() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "FGS" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        assign(teacherA, classA2, sess);
+        member(classA1, s1, "-3 hours", null);
+        member(classA1, s2, "-3 hours", null);
+        member(classA2, s1, "-3 hours", null); // s1 in BOTH cohorts, ONE attempt
+        grade(attempt(sess, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+
+        JsonNode overviewA1 = analytics(classA1, teacherA, null);
+        JsonNode overviewA2 = analytics(classA2, teacherA, null);
+        assertThat(overviewA1.get("eligiblePairs").asLong()).isEqualTo(2);
+        assertThat(overviewA1.get("completedPairs").asLong()).isEqualTo(1);
+        assertThat(overviewA1.get("overallCompletionPercentage").asDouble()).isEqualTo(50.0);
+        // The same learner's single attempt completes their pair in the other
+        // class too — no double count WITHIN a class.
+        assertThat(overviewA2.get("eligiblePairs").asLong()).isEqualTo(1);
+        assertThat(overviewA2.get("completedPairs").asLong()).isEqualTo(1);
+        assertThat(overviewA2.get("overallCompletionPercentage").asDouble()).isEqualTo(100.0);
+    }
+
+    // ============================================================
     // Helpers
     // ============================================================
 

@@ -5,12 +5,26 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * CLASS-M3 (issue #54): class analytics. Without {@code sessionId}: class
- * overview KPIs + per-session trend ({@code windowState} marks prospective
- * UPCOMING entries whose completion is null). With {@code sessionId}:
- * single-session detail — cohort counters, BEST-percentage average/min/max/
- * median and the 10-bucket distribution (buckets i = [i·10,(i+1)·10),
- * bucket 9 = [90,100] — the same rule as {@code SessionStatisticsService}).
+ * CLASS-M3 (issue #54): class analytics.
+ *
+ * <h2>Nullability contract (Final Gate P2-01/P2-02)</h2>
+ * <ul>
+ *   <li>Single-session detail ({@code sessionId} present): {@code windowState}
+ *       distinguishes states. {@code completionPercentage} and
+ *       {@code notAttemptedCount} are completed-session metrics — non-null
+ *       ONLY for {@code WINDOW} sessions (completion null at zero cohort);
+ *       null for UPCOMING (prospective roster — nobody has "not attempted"
+ *       an unopened assignment), DRAFT, CANCELLED and NOT_HELD. Raw
+ *       started/submitted/graded counters are always exact.</li>
+ *   <li>Overview ({@code sessionId} absent): {@code overallCompletionPercentage}
+ *       aggregates over ALL eligible WINDOW sessions of the class (never
+ *       sampled by the ≤20-session trend bound) = completedPairs /
+ *       eligiblePairs; null when there are no eligible pairs. The pair
+ *       fields are the transparent (session, learner) denominators — a
+ *       learner counts once per session and correctly across sessions.</li>
+ * </ul>
+ * Distribution buckets: i = [i·10,(i+1)·10), bucket 9 = [90,100] (same rule
+ * as {@code SessionStatisticsService}).
  */
 public record ClassroomAnalyticsResponse(
         Long sessionId,
@@ -25,7 +39,7 @@ public record ClassroomAnalyticsResponse(
         long startedCount,
         long submittedCount,
         long gradedCount,
-        long notAttemptedCount,
+        Long notAttemptedCount,
         BigDecimal completionPercentage,
         BigDecimal averagePercentage,
         BigDecimal minimumPercentage,
@@ -33,6 +47,8 @@ public record ClassroomAnalyticsResponse(
         BigDecimal medianPercentage,
         List<Long> distributionBuckets,
         BigDecimal overallCompletionPercentage,
+        Long eligiblePairs,
+        Long completedPairs,
         List<SessionAnalyticsTrend> sessions,
         String historyCoverage) {
 
