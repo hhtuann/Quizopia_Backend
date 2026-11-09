@@ -68,7 +68,7 @@ class ClassroomSessionConcurrencyIntegrationTests {
                 + "','E','PUBLISHED',now(),1)");
         sessionId = insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, "
                 + "ends_at, max_attempts, created_by, visibility, duration_minutes) VALUES ("
-                + exam + ",'" + tag + "','S','SCHEDULED', now() - interval '2 hours', "
+                + exam + ",'" + tag + "','S','SCHEDULED', now() + interval '1 day', "
                 + "now() + interval '2 days', 1," + teacherId + ",'CLASS_RESTRICTED',30)");
         classA1 = insert("INSERT INTO classrooms (owner_user_id, code, name) VALUES ("
                 + teacherId + ",'" + tag + "1','C1')");
