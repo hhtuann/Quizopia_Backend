@@ -296,6 +296,45 @@ class ClassroomSessionApiIntegrationTests {
                 .andExpect(jsonPath("$.totalElements").value(1));
     }
 
+    @Test
+    void dueScheduledClassAssignmentsAreGuardedAndClassReadsRefreshLifecycle() throws Exception {
+        long classA1 = createClassroom(teacherA, "TL" + tag);
+        long assigned = session(teacherA, examA, "TLS" + tag, "SCHEDULED");
+        long unassigned = session(teacherA, examA, "TLU" + tag, "SCHEDULED");
+        assign(teacherA, classA1, assigned);
+        // The scheduled start passes without any prior exam/available read.
+        // A stale persisted SCHEDULED status must not permit mid-flight changes.
+        jdbc.update("UPDATE exam_sessions SET starts_at=now() - interval '1 minute' "
+                + "WHERE id IN (" + assigned + "," + unassigned + ")");
+        mockMvc.perform(delete("/api/classrooms/" + classA1 + "/sessions/" + assigned)
+                        .with(jwtFor(teacherA)))
+                .andExpect(status().isConflict());
+        mockMvc.perform(post("/api/classrooms/" + classA1 + "/sessions/" + unassigned)
+                        .with(jwtFor(teacherA)))
+                .andExpect(status().isConflict());
+        assertThat(associationCount(assigned)).isEqualTo(1);
+        assertThat(associationCount(unassigned)).isZero();
+
+        // The class endpoints must use the canonical lazy lifecycle transition,
+        // including status filtering and the learner's safe projection.
+        jdbc.update("INSERT INTO classroom_members (classroom_id, user_id) VALUES ("
+                + classA1 + "," + learner + ")");
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/sessions")
+                        .with(jwtFor(teacherA)).param("status", "OPEN"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].sessionId").value((int) assigned));
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/sessions/assignable")
+                        .with(jwtFor(teacherA)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0));
+        mockMvc.perform(get("/api/classrooms/joined/" + classA1 + "/sessions")
+                        .with(jwtFor(learner)).param("status", "OPEN"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].status").value("OPEN"));
+    }
+
     // ============================================================
     // Learner: joined detail + assigned sessions
     // ============================================================
@@ -615,10 +654,14 @@ class ClassroomSessionApiIntegrationTests {
             default -> "NULL";
         };
         String closedAt = "CLOSED".equals(status) ? "now() - interval '1 hours'" : "NULL";
+        // SCHEDULED fixtures must be genuinely future-dated; otherwise the
+        // lifecycle-aware class read correctly moves them to OPEN immediately.
+        String startsAt = "SCHEDULED".equals(status)
+                ? "now() + interval '1 day'" : "now() - interval '2 hours'";
         return insert("INSERT INTO exam_sessions (exam_id, code, title, status, starts_at, ends_at, "
                 + "max_attempts, created_by, opened_at, closed_at, visibility, duration_minutes) VALUES ("
                 + examId + ",'" + code + "','" + (title != null ? title : "S " + code) + "','" + status
-                + "', now() - interval '2 hours', now() + interval '2 days', 1," + ownerId
+                + "', " + startsAt + ", now() + interval '2 days', 1," + ownerId
                 + ", " + openedAt + ", " + closedAt + ", '" + visibility + "', 30)");
     }
 
