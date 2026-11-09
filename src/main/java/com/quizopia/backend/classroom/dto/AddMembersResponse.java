@@ -10,6 +10,10 @@ import java.util.List;
 public record AddMembersResponse(
         int added,
         List<Long> duplicated,
-        List<Long> invalid
+        List<Long> invalid,
+        /** CLASS-M1 gate F1 (#50 decision 6): users REFUSED because they
+         *  previously left this classroom (standing DECLINED opt-out) — the
+         *  teacher must send an invitation the learner explicitly accepts. */
+        List<Long> declined
 ) {
 }

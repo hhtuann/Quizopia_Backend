@@ -23,6 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Identity-M3 roster application service (issue #15).
@@ -61,6 +62,7 @@ public class ClassroomRosterService {
     private final NotificationService notificationService;
     private final Clock clock;
     private final TransactionTemplate tx;
+    private final jakarta.persistence.EntityManager entityManager;
 
     public ClassroomRosterService(ClassroomRepository classroomRepository,
             ClassroomRosterEntryRepository rosterRepository,
@@ -69,7 +71,8 @@ public class ClassroomRosterService {
             SensitiveDataEncryptor encryptor,
             NotificationService notificationService,
             Clock clock,
-            TransactionTemplate tx) {
+            TransactionTemplate tx,
+            jakarta.persistence.EntityManager entityManager) {
         this.classroomRepository = classroomRepository;
         this.rosterRepository = rosterRepository;
         this.memberRepository = memberRepository;
@@ -78,6 +81,7 @@ public class ClassroomRosterService {
         this.notificationService = notificationService;
         this.clock = clock;
         this.tx = tx;
+        this.entityManager = entityManager;
     }
 
     // ============================================================
@@ -224,9 +228,11 @@ public class ClassroomRosterService {
     public List<RosterEntryResponse> myLinkedEntries(Long userId) {
         // Review M3-FINAL-03: LEARNER-facing projection — sensitive fields
         // (DOB, phones, raw email) are owner-facing only and stay null here.
-        return rosterRepository
-                .findAllByUserIdAndStatus(userId, ClassroomRosterEntry.RosterStatus.LINKED)
-                .stream().map(this::toLearnerResponse).toList();
+        // CLASS-M1: enriched with classroom name + teacher display name so
+        // learner views show real class identity, not "Class #id".
+        List<ClassroomRosterEntry> entries = rosterRepository
+                .findAllByUserIdAndStatus(userId, ClassroomRosterEntry.RosterStatus.LINKED);
+        return toLearnerResponses(entries);
     }
 
     /**
@@ -290,7 +296,10 @@ public class ClassroomRosterService {
             rosterRepository.saveAndFlush(locked);
             // Learner-facing response (review M3-FINAL-03 P1): the accept
             // endpoint is learner-reachable — sensitive fields stay redacted.
-            return toLearnerResponse(locked);
+            Map<Long, Object[]> meta = batchClassroomMeta(java.util.Set.of(classroomId));
+            return toLearnerResponse(locked,
+                    meta.containsKey(classroomId) ? (String) meta.get(classroomId)[0] : null,
+                    meta.containsKey(classroomId) ? (String) meta.get(classroomId)[1] : null);
         });
         return result;
     }
@@ -307,27 +316,74 @@ public class ClassroomRosterService {
             return List.of();
         }
         String canonical = canonicalEmail(user.getEmail());
-        return rosterRepository
+        // CLASS-M1: enriched with classroom name + teacher display name so
+        // the invitation card shows real class identity, not "Class #id".
+        return toLearnerResponses(rosterRepository
                 .findAllByEmailNormalizedAndStatus(canonical,
-                        ClassroomRosterEntry.RosterStatus.PENDING)
-                .stream().map(this::toLearnerResponse).toList();
+                        ClassroomRosterEntry.RosterStatus.PENDING));
     }
 
     /**
      * Learner projection (review M3-FINAL-03): identifiers + lifecycle only.
      * DOB, student phone, parent phone and the raw teacher-entered email are
-     * never exposed to the learner through the API.
+     * never exposed to the learner through the API. CLASS-M1 adds classroom
+     * name + teacher DISPLAY name (safe public metadata, issue #50).
      */
-    private RosterEntryResponse toLearnerResponse(ClassroomRosterEntry entry) {
+    private RosterEntryResponse toLearnerResponse(ClassroomRosterEntry entry,
+            String classroomName, String teacherDisplayName) {
         return new RosterEntryResponse(
                 entry.getId(),
-                entry.getClassroomId(),
+                classroomIdOf(entry),
                 entry.getStatus().name(),
                 entry.getUserId(),
                 entry.getFullName(),
                 null, null, null, null, null, null,
                 entry.getCreatedAt(),
-                entry.getLinkedAt());
+                entry.getLinkedAt(),
+                classroomName,
+                teacherDisplayName);
+    }
+
+    /** Batch learner projection with classroom metadata (one query, no N+1). */
+    private List<RosterEntryResponse> toLearnerResponses(List<ClassroomRosterEntry> entries) {
+        Map<Long, Object[]> meta = batchClassroomMeta(
+                entries.stream().map(this::classroomIdOf)
+                        .collect(java.util.stream.Collectors.toSet()));
+        return entries.stream()
+                .map(e -> {
+                    Object[] row = meta.get(classroomIdOf(e));
+                    return toLearnerResponse(e,
+                            row != null ? (String) row[0] : null,
+                            row != null ? (String) row[1] : null);
+                })
+                .toList();
+    }
+
+    /**
+     * The classroom_id mirror is insertable=false — same-persistence-context
+     * instances cached from a fresh insert carry a null mirror (production
+     * requests reload fresh); fall back to the association.
+     */
+    private Long classroomIdOf(ClassroomRosterEntry entry) {
+        return entry.getClassroomId() != null ? entry.getClassroomId() : entry.getClassroom().getId();
+    }
+
+    /** classroomId → [name, ownerDisplayName] for learner-facing cards. */
+    private Map<Long, Object[]> batchClassroomMeta(java.util.Set<Long> classroomIds) {
+        if (classroomIds == null || classroomIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Object[]> rows = entityManager.createQuery(
+                "SELECT c.id, c.name, u.displayName FROM Classroom c "
+                        + "JOIN User u ON u.id = c.ownerUserId WHERE c.id IN :ids",
+                Object[].class)
+                .setParameter("ids", classroomIds)
+                .getResultList();
+        Map<Long, Object[]> meta = new java.util.HashMap<>();
+        for (Object[] row : rows) {
+            meta.put((Long) row[0], new Object[] { row[1], row[2] });
+        }
+        return meta;
     }
 
     private boolean hasDeclinedHistory(Long classroomId, String canonicalEmail) {
@@ -438,7 +494,10 @@ public class ClassroomRosterService {
                 // Raw email only for the OWNER-facing response (they typed it).
                 decryptOrNull(entry.getEmailEncrypted()),
                 entry.getCreatedAt(),
-                entry.getLinkedAt());
+                entry.getLinkedAt(),
+                // CLASS-M1 metadata fields stay null on the owner projection
+                // (the teacher already knows their own class).
+                null, null);
     }
 
     private String encryptOrNull(String plain) {
