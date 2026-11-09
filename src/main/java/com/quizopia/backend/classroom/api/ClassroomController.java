@@ -39,13 +39,16 @@ public class ClassroomController {
     private final ClassroomService classroomService;
     private final ClassroomRosterService rosterService;
     private final ClassroomMembershipService membershipService;
+    private final com.quizopia.backend.exam.application.ClassroomSessionService classroomSessionService;
 
     public ClassroomController(ClassroomService classroomService,
             ClassroomRosterService rosterService,
-            ClassroomMembershipService membershipService) {
+            ClassroomMembershipService membershipService,
+            com.quizopia.backend.exam.application.ClassroomSessionService classroomSessionService) {
         this.classroomService = classroomService;
         this.rosterService = rosterService;
         this.membershipService = membershipService;
+        this.classroomSessionService = classroomSessionService;
     }
 
     // ============================================================
@@ -150,6 +153,78 @@ public class ClassroomController {
         Long userId = Long.valueOf(jwt.getSubject());
         membershipService.leaveClassroom(userId, id);
         return ResponseEntity.noContent().build();
+    }
+
+    // ============================================================
+    // CLASS-M2 (issue #52): classroom-scoped sessions (teacher + learner)
+    // ============================================================
+
+    /** GET /api/classrooms/{id}/sessions — assigned sessions of the OWNER's
+     *  classroom (all lifecycle states); SQL paging, stable order. */
+    @GetMapping("/{id}/sessions")
+    public PageResponse<com.quizopia.backend.exam.dto.ClassroomSessionItem> classroomSessions(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return classroomSessionService.listClassroomSessions(userId, id, page, size, status, search);
+    }
+
+    /** GET /api/classrooms/{id}/sessions/assignable — own eligible
+     *  CLASS_RESTRICTED DRAFT/SCHEDULED sessions not yet assigned to this
+     *  classroom (the assign picker; duplicates excluded). */
+    @GetMapping("/{id}/sessions/assignable")
+    public PageResponse<com.quizopia.backend.exam.dto.AssignableSessionItem> assignableSessions(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String search) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return classroomSessionService.listAssignableSessions(userId, id, page, size, search);
+    }
+
+    /** POST /api/classrooms/{id}/sessions/{sessionId} — ADDITIVE idempotent
+     *  assignment of one own session to one own ACTIVE classroom; other
+     *  classrooms' associations are never touched. */
+    @PostMapping("/{id}/sessions/{sessionId}")
+    public ResponseEntity<Void> assignSession(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long id, @PathVariable Long sessionId) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        classroomSessionService.assignSessionToClassroom(userId, id, sessionId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** DELETE /api/classrooms/{id}/sessions/{sessionId} — remove exactly THIS
+     *  association (idempotent); attempts/results untouched. */
+    @DeleteMapping("/{id}/sessions/{sessionId}")
+    public ResponseEntity<Void> unassignSession(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long id, @PathVariable Long sessionId) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        classroomSessionService.unassignSessionFromClassroom(userId, id, sessionId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /** GET /api/classrooms/joined/{id} — learner-safe detail of ONE joined
+     *  classroom (current members only; 404 otherwise). */
+    @GetMapping("/joined/{id}")
+    public com.quizopia.backend.classroom.dto.JoinedClassroomDetail joinedClassroom(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return classroomSessionService.getJoinedClassroom(userId, id);
+    }
+
+    /** GET /api/classrooms/joined/{id}/sessions — learner-safe assigned
+     *  sessions (all states except DRAFT) for this member's classroom. */
+    @GetMapping("/joined/{id}/sessions")
+    public PageResponse<com.quizopia.backend.exam.dto.LearnerClassroomSessionItem> joinedClassroomSessions(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(required = false) String status) {
+        Long userId = Long.valueOf(jwt.getSubject());
+        return classroomSessionService.listJoinedClassroomSessions(userId, id, page, size, status);
     }
 
     @GetMapping("/my")
