@@ -575,7 +575,7 @@ class ClassroomGradebookApiIntegrationTests {
         assign(teacherA, classA1, sess);
         // joined_at == window end exactly → OUT (half-open [) interval).
         jdbc.update("INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at) "
-                + "SELECT " + classA1 + ", " + s1 + ", closed_at FROM exam_sessions WHERE id = "
+                + "SELECT " + classA1 + ", " + s1 + ", ends_at FROM exam_sessions WHERE id = "
                 + sess);
         // left_at == window start exactly → OUT.
         jdbc.update("INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at, "
@@ -617,9 +617,12 @@ class ClassroomGradebookApiIntegrationTests {
         assign(teacherA, classA1, done);
         member(classA1, s1, "-3 hours", null);
         grade(attempt(done, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
-        // …and one UPCOMING session with the same prospective roster.
+        // …and one UPCOMING session with a LIVE second member on the roster:
+        // if prospective cohorts leaked into the denominator, the KPI would
+        // drop to 50% — that is what this assertion pins.
         long upcoming = session(teacherA, examA, "OC2" + tag, "SCHEDULED");
         assign(teacherA, classA1, upcoming);
+        addMember(teacherA, classA1, s2);
 
         JsonNode overview = analytics(classA1, teacherA, null);
         // Review M3-Domain P2-1: prospective cohorts never dilute the KPI.
@@ -627,6 +630,9 @@ class ClassroomGradebookApiIntegrationTests {
         JsonNode trendDone = overview.get("sessions").get(0);
         JsonNode trendUpcoming = overview.get("sessions").get(1);
         assertThat(trendDone.get("completionPercentage").asDouble()).isEqualTo(100.0);
+        assertThat(trendUpcoming.get("cohortSize").asLong())
+                .as("prospective roster IS visible on the trend entry")
+                .isEqualTo(1);
         assertThat(trendUpcoming.get("windowState").asText()).isEqualTo("UPCOMING");
         assertThat(trendUpcoming.get("completionPercentage").isNull()).isTrue();
     }

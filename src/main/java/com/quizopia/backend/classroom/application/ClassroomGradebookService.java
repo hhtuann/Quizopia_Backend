@@ -457,10 +457,11 @@ public class ClassroomGradebookService {
                     }
                 }
             }
+            boolean windowed = SessionWindow.WINDOW.equals(w.state());
             items.add(new GradebookSessionColumn(m.id(), m.code(), m.title(), m.status(),
                     m.startsAt(), m.endsAt(), w.state(), m.examId(), m.examTitle(),
                     cohort.size(), started, submitted, graded,
-                    ratio(submitted, cohort.size()), mean(pcts)));
+                    windowed ? ratio(submitted, cohort.size()) : null, mean(pcts)));
         }
         return new PageResponse<>(items, safePage, safeSize, totalCount, totalPages, "startsAt,desc");
     }
@@ -564,10 +565,11 @@ public class ClassroomGradebookService {
                     }
                 }
             }
+            boolean columnWindowed = SessionWindow.WINDOW.equals(w.state());
             columns.add(new GradebookSessionColumn(m.id(), m.code(), m.title(), m.status(),
                     m.startsAt(), m.endsAt(), w.state(), m.examId(), m.examTitle(),
                     cohort.size(), started, submitted, graded,
-                    ratio(submitted, cohort.size()), mean(pcts)));
+                    columnWindowed ? ratio(submitted, cohort.size()) : null, mean(pcts)));
         }
         return new GradebookResponse(columns, pageRows, safePage, safeSize, totalElements, totalPages,
                 safeSort + "," + safeDir, HISTORY_COVERAGE);

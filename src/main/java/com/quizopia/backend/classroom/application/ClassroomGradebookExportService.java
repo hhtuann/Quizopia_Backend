@@ -41,8 +41,6 @@ import java.util.List;
 @Service
 public class ClassroomGradebookExportService {
 
-    /** Extra safety bound on top of the service's cohort cap. */
-    private static final int MAX_EXPORT_ROWS = 5000;
     private static final DateTimeFormatter TS =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneId.systemDefault());
 
@@ -58,7 +56,10 @@ public class ClassroomGradebookExportService {
         return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     }
 
-    @Transactional(readOnly = true)
+    // NOT readOnly: the shared gradebook path lazily refreshes session
+    // lifecycle (bulk UPDATE) before reading — a read-only tx breaks it
+    // (SQLState 25006, caught in E2E).
+    @Transactional
     public ExportFile export(Long userId, Long classroomId, List<Long> sessionIds, String search) {
         // Authorization + data via the SAME code path as the API (owner-only),
         // with the export row bound instead of the API page cap (the cohort
