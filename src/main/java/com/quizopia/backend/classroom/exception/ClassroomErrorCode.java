@@ -21,7 +21,11 @@ public enum ClassroomErrorCode {
     ROSTER_IMPORT_FILE_INVALID(HttpStatus.BAD_REQUEST, "Invalid roster import file"),
     ROSTER_IMPORT_FILE_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "Roster import file exceeds 2 MB"),
     ROSTER_IMPORT_TEMPLATE_INVALID(HttpStatus.BAD_REQUEST, "Workbook does not match the roster import template"),
-    ROSTER_IMPORT_TOO_MANY_ROWS(HttpStatus.PAYLOAD_TOO_LARGE, "Roster import exceeds the 500-row limit");
+    ROSTER_IMPORT_TOO_MANY_ROWS(HttpStatus.PAYLOAD_TOO_LARGE, "Roster import exceeds the 500-row limit"),
+
+    // ---------- CLASS-M3 gradebook & analytics (issue #54) ----------
+    CLASSROOM_GRADEBOOK_INVALID_QUERY(HttpStatus.BAD_REQUEST, "Invalid gradebook query parameters"),
+    CLASSROOM_GRADEBOOK_TOO_LARGE(HttpStatus.BAD_REQUEST, "Gradebook cohort exceeds the supported size");
 
     private final HttpStatusCode status;
     private final String defaultMessage;
