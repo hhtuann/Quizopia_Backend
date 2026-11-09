@@ -175,8 +175,8 @@ def main():
     s1 = create_session(tok_a, exam_a, f"M2 Sitting {run}", schedule=True, future=True)
     s2_draft = create_session(tok_a, exam_a, f"M2 Draft {run}")            # stays DRAFT
     sb = create_session(tok_b, exam_b, f"M2 Bio {run}", schedule=True)     # B's own
-    s3 = create_session(tok_a, exam_a, f"M2 Lifecycle {run}", schedule=True)
-    s4 = create_session(tok_a, exam_a, f"M2 Open Sitting {run}", schedule=True)  # auto-OPENs in window
+    s3 = create_session(tok_a, exam_a, f"M2 Lifecycle {run}")  # assign DRAFT, then schedule
+    s4 = create_session(tok_a, exam_a, f"M2 Open Sitting {run}")  # assign DRAFT before window opens
 
     # --- additive assignment (never clobbers other classes) -------------
     s, _ = req("POST", f"/api/classrooms/{a1}/sessions/{s1}", {}, tok_a)
@@ -234,6 +234,8 @@ def main():
     # --- lifecycle: CLOSED remains visible as history -------------------
     s, _ = req("POST", f"/api/classrooms/{a1}/sessions/{s3}", {}, tok_a)
     check("assign S3 to A1", s == 204, str(s))
+    s, _ = req("POST", f"/api/exam-sessions/{s3}/schedule", {}, tok_a)
+    check("schedule S3 after assignment", s in (200, 201), str(s))
     s, _ = req("POST", f"/api/exam-sessions/{s3}/open", {}, tok_a)
     check("open S3", s in (200, 201), str(s))
     s, _ = req("POST", f"/api/exam-sessions/{s3}/close", {}, tok_a)
@@ -258,6 +260,8 @@ def main():
     # --- OPEN session: attempt then LEAVE keeps history ------------------
     s, _ = req("POST", f"/api/classrooms/{a2}/sessions/{s4}", {}, tok_a)
     check("assign S4 to A2", s == 204, str(s))
+    s, _ = req("POST", f"/api/exam-sessions/{s4}/schedule", {}, tok_a)
+    check("schedule S4 after assignment", s in (200, 201), str(s))
     code, att = req("POST", f"/api/exam-sessions/{s4}/attempts", {"clientInstanceId": None}, tok_l)
     check("learner starts attempt on OPEN S4", code in (200, 201), f"{code} {att}")
     attempt_id = att.get("attemptId") if isinstance(att, dict) else None
