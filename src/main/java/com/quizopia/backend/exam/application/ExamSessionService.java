@@ -423,6 +423,15 @@ public class ExamSessionService {
         if (session.getStatus() != ExamSessionStatus.DRAFT && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
+        // CLASS-M3 parity with the M2 additive assign/unassign routes
+        // (issue #54 design gate): SCHEDULED sessions persist past startsAt
+        // until a lifecycle-aware endpoint lazy-opens them — never mutate
+        // class assignments once the window has begun, or classroom-report
+        // cohort attribution loses its assignment-freeze guarantee.
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED
+                && !Instant.now().isBefore(session.getStartsAt())) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
         List<Classroom> classrooms = (classroomIds == null || classroomIds.isEmpty())
                 ? List.of()
                 : validateClassroomsForOwner(userId, classroomIds);

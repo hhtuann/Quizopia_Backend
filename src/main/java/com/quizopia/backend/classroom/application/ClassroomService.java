@@ -365,6 +365,16 @@ public class ClassroomService {
     }
 
     /**
+     * CLASS-M3 (issue #54): ownership + CLASSROOM_READ baseline for the
+     * gradebook/analytics/export reads. Archived classrooms stay readable
+     * (read-only reporting, consistent with M1/M2 member views).
+     */
+    public Classroom requireOwnedClassroomForReporting(Long userId, Long classroomId) {
+        requirePermission(userId, "CLASSROOM_READ");
+        return requireOwnedClassroom(userId, classroomId);
+    }
+
+    /**
      * Review M3-FINAL-01: permission predicate over the same DB-backed
      * permission store as requirePermission (deny by default).
      */
