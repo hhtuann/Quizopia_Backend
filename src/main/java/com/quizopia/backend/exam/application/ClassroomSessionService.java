@@ -141,7 +141,11 @@ public class ClassroomSessionService {
     public PageResponse<AssignableSessionItem> listAssignableSessions(Long userId, Long classroomId,
             int page, int size, String search) {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
-        classroomService.requireOwnedClassroom(userId, classroomId);
+        Classroom classroom = classroomService.requireOwnedClassroom(userId, classroomId);
+        if (classroom.getStatus() != ClassroomStatus.ACTIVE) {
+            // Archived classrooms are read-only: nothing is actually assignable.
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
+        }
         sessionRepository.refreshLifecycleForCreator(userId, Instant.now());
 
         String filter = searchFilter(search);
