@@ -2,6 +2,7 @@ package com.quizopia.backend.community;
 
 import com.quizopia.backend.community.application.CommunityCommentService;
 import com.quizopia.backend.community.dto.CreateCommentRequest;
+import com.quizopia.backend.community.dto.ReportCommentRequest;
 import com.quizopia.backend.community.dto.UpdateCommentRequest;
 import com.quizopia.backend.community.exception.CommunityErrorCode;
 import com.quizopia.backend.community.exception.CommunityException;
@@ -35,8 +36,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * post-upsert re-select — every comment snapshots the same stored
  * alias); a two-user ci-unique alias race yields exactly one 201 and
  * one 409 COMMUNITY_ALIAS_TAKEN with ZERO comment rows for the loser;
- * and the delete-then-edit tombstone race — a PATCH that raced a
- * committed DELETE gets 409 COMMUNITY_COMMENT_STATE_INVALID and can
+ * the same-reporter comment-report dedupe race — two concurrent
+ * reportComment calls collapse onto ONE OPEN row (one 201 + one 200
+ * carrying the SAME report id); and the delete-then-edit tombstone
+ * race — a PATCH that raced a committed DELETE gets 409
+ * COMMUNITY_COMMENT_STATE_INVALID and can
  * never resurrect the cleared body.
  *
  * <p>Deliberately NOT {@code @Transactional} so every service call runs
@@ -239,6 +243,50 @@ class CommunityCommentConcurrencyIntegrationTests {
                             ex -> assertThat(ex.getErrorCode())
                                     .isEqualTo(CommunityErrorCode.COMMUNITY_COMMENT_STATE_INVALID));
         }
+    }
+
+
+    // ==================================================================
+    // same-reporter report dedupe race → one OPEN row, same id
+    // ==================================================================
+
+    @Test
+    void concurrentSameReporterCommentReportsYieldExactlyOneOpenRow() throws Exception {
+        long commentId = commentService.createComment(
+                studentId, publicationId,
+                new CreateCommentRequest("report race target", "Racer-" + System.nanoTime()))
+                .getId();
+        long reporterId = newUser("ccr", "STUDENT");
+
+        Callable<String> task = () -> {
+            try {
+                CommunityCommentService.SubmittedCommentReport submitted =
+                        commentService.reportComment(
+                                reporterId, commentId,
+                                new ReportCommentRequest("SPAM", "race"), "10.0.0.1");
+                return (submitted.created() ? "CREATED:" : "DEDUPED:")
+                        + submitted.report().reportId();
+            } catch (CommunityException ex) {
+                return ex.getErrorCode().code();
+            }
+        };
+
+        List<String> results = runConcurrently(task, 2);
+
+        // One real insert (201) and one dedupe (200) — both carry the
+        // SAME report id, never two OPEN rows (publication-report twin
+        // pattern, CommunityModerationConcurrencyIntegrationTests).
+        assertThat(results.stream().map(r -> r.substring(0, r.indexOf(':'))).toList())
+                .containsExactlyInAnyOrder("CREATED", "DEDUPED");
+        assertThat(results.get(0).substring(results.get(0).indexOf(':') + 1))
+                .as("the 200 dedupe returns the same report the 201 created")
+                .isEqualTo(results.get(1).substring(results.get(1).indexOf(':') + 1));
+        assertThat(jdbc.queryForObject("""
+                        SELECT count(*) FROM community_comment_reports
+                        WHERE comment_id = ? AND reporter_user_id = ? AND status = 'OPEN'
+                        """, Integer.class, commentId, reporterId))
+                .as("exactly one OPEN report survives the race")
+                .isEqualTo(1);
     }
 
     // ==================================================================

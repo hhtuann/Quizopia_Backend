@@ -127,12 +127,16 @@ class CommunityCommentAliasIntegrationTests {
         expectAliasInvalid("someone@example.com");
         expectAliasInvalid("a@b");
 
-        // Zero-width + bidi + control characters (never allowed in an alias).
+        // Zero-width + bidi + control + line/paragraph separator
+        // characters (never allowed in an alias; U+2028/U+2029 are NOT
+        // ISO control — rejected on their own category).
         expectAliasInvalid("Ghost\u200BName");
         expectAliasInvalid("Rtl\u202EName");
         expectAliasInvalid("Iso\u2060l");
         expectAliasInvalid("Tab\tName");
         expectAliasInvalid("New\nline");
+        expectAliasInvalid("Sep\u2028Arated");
+        expectAliasInvalid("Para\u2029Graphed");
 
         // Nothing landed: no comment, no profile for the caller.
         assertThat(jdbc.queryForObject(

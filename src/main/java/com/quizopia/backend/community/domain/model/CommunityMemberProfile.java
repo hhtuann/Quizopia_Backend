@@ -29,7 +29,7 @@ public class CommunityMemberProfile {
     @Column(name = "user_id", nullable = false, updatable = false)
     private Long userId;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 80)
     private String alias;
 
     @CreationTimestamp

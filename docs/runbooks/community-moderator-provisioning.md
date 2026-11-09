@@ -215,3 +215,13 @@ WHERE r.code = 'COMMUNITY_MODERATOR'
   `COMMUNITY_MODERATION` permission, not role exclusivity.
 - **Session invalidation is unnecessary** — authorization re-resolves from the
   DB per request; tokens never carry moderation authority.
+
+## 8. Deploy note: V31 migration ordering (COMMUNITY_* grants)
+
+V31's in-migration verification asserts the **exact** `COMMUNITY_*` grant map
+(the three new permissions — `COMMUNITY_LIKE`, `COMMUNITY_RATE`,
+`COMMUNITY_COMMENT` — on exactly STUDENT + TEACHER, 13 `COMMUNITY_*` role
+grants total). Pre-granting `COMMUNITY_LIKE`/`COMMUNITY_RATE`/
+`COMMUNITY_COMMENT` to any additional role **before** running V31 will fail
+the migration — fail-loud by design. Provision any extra grants only **after**
+V31 has applied.

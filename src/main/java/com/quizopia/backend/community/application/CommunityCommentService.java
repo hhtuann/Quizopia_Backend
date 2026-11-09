@@ -26,29 +26,26 @@ import java.time.Instant;
 /**
  * Comment application service (ADR-007 §5/§6, issue #66): create,
  * public page, owner PATCH/DELETE and comment reports. Every write
- * follows the module-wide fixed order — do not reorder:
- *
- * <ol>
- *   <li><b>semantic validation</b> — bounded input never admits (the
- *       report body's bean-validation shape is re-checked here);</li>
- *   <li><b>rate admission</b> — COMMENT_CREATE 10/h, COMMENT_EDIT
- *       20/h, COMMENT_DELETE 30/h user buckets and the COMMENT_REPORT
- *       5/h user + 20/h IP pair as the FIRST statements of the write
- *       transaction (§5; separate buckets from the publication REPORT_*
- *       policies — the policy segment in the HMAC key exists for
- *       exactly this);</li>
- *   <li><b>permission gate</b> — ACTIVE + effective COMMUNITY_COMMENT
- *       (reports: COMMUNITY_REPORT); role-less callers are 403;</li>
- *   <li><b>§4 visibility predicate → 404</b> — commenting on an
- *       invisible/absent publication is anti-enumeration 404;</li>
- *   <li><b>alias flow (§4)</b> — validate, upsert the member profile,
- *       snapshot the post-upsert STORED alias; a different-user
- *       ci-collision aborts atomically → 409 COMMUNITY_ALIAS_TAKEN
- *       (constraint-name mapping of the DataIntegrityViolationException,
- *       fork-precedent recovery — the transaction is already doomed,
- *       the mapping only renames the failure, never a 500);</li>
- *   <li><b>write</b> — insert, or the §6 CAS statements.</li>
- * </ol>
+ * runs rate admission then the permission gate inside the write
+ * transaction, but semantic validation is placed per route, not in
+ * one fixed module-wide order: {@code reportComment} validates the
+ * bounded reason/details shape FIRST — garbage never admits, the
+ * rating-PUT precedent — before the COMMENT_REPORT 5/h user + 20/h
+ * IP admission pair and the ACTIVE + COMMUNITY_REPORT gate;
+ * {@code createComment} admits (COMMENT_CREATE 10/h), gates (ACTIVE +
+ * effective COMMUNITY_COMMENT), runs the §4 visibility predicate →
+ * anti-enumeration 404 and only THEN validates the body, before the
+ * §4 alias flow (validate, upsert the member profile, snapshot the
+ * post-upsert STORED alias; a different-user ci-collision aborts
+ * atomically → 409 COMMUNITY_ALIAS_TAKEN — constraint-name mapping
+ * of the DataIntegrityViolationException, fork-precedent recovery:
+ * the transaction is already doomed, the mapping only renames the
+ * failure, never a 500) and the insert; {@code updateComment} admits
+ * (COMMENT_EDIT 20/h) and gates before validating the body and firing
+ * the §6 CAS, while {@code deleteComment} (COMMENT_DELETE 30/h) has
+ * no body at all. The comment buckets stay separate from the
+ * publication REPORT_* policies — the policy segment in the HMAC key
+ * exists for exactly this.
  *
  * <p>Owner PATCH/DELETE check existence + ownership ONLY (§5 — users
  * keep control of their own UGC even on hidden publications; a hidden

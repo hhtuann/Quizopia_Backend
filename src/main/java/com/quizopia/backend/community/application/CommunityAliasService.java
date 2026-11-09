@@ -14,7 +14,8 @@ import org.springframework.stereotype.Service;
  * <p><b>Validation</b> (create and every alias change): 1–80 chars
  * after trim (bounds → COMMUNITY_VALIDATION_ERROR); printable visible
  * charset only — no control characters, no zero-width, no bidi
- * (Unicode {@code FORMAT} category), no {@code @} — and no
+ * (Unicode {@code FORMAT} category), no line/paragraph separators
+ * (U+2028/U+2029), no {@code @} — and no
  * case-insensitive equality with the requester's own email or
  * username, ANY {@code users.username} or ANY
  * {@code community_publications.author_alias} (charset and identity →
@@ -139,8 +140,9 @@ public class CommunityAliasService {
      * Printable visible charset only (§4): rejects ISO control
      * characters (an alias never admits even {@code \n}/{@code \t}),
      * the Unicode FORMAT category — zero-width spaces/joiners and the
-     * bidi controls — and {@code @} (namespace separator, mail
-     * impersonation).
+     * bidi controls — the LINE/PARAGRAPH separators U+2028/U+2029
+     * (Zl/Zp are NOT ISO control, so they need their own rejection)
+     * and {@code @} (namespace separator, mail impersonation).
      */
     private static void requireVisibleCodePoint(int codePoint) {
         if (codePoint == '@') {
@@ -151,9 +153,13 @@ public class CommunityAliasService {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID,
                     "alias must not contain control characters");
         }
-        if (Character.getType(codePoint) == Character.FORMAT) {
+        int type = Character.getType(codePoint);
+        if (type == Character.FORMAT
+                || type == Character.LINE_SEPARATOR
+                || type == Character.PARAGRAPH_SEPARATOR) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID,
-                    "alias must not contain zero-width or bidirectional characters");
+                    "alias must not contain zero-width, bidirectional or "
+                            + "line/paragraph separator characters");
         }
     }
 
