@@ -52,7 +52,7 @@ def req(method, path, body=None, token=None):
 def mailpit_otp(to_email):
     for _ in range(30):
         try:
-            with urllib.request.urlopen(MAILPIT + "/api/v1/messages?limit=20", timeout=5) as r:
+            with urllib.request.urlopen(MAILPIT + "/api/v1/messages?limit=100", timeout=5) as r:
                 msgs = json.loads(r.read())["messages"]
             for m in reversed(msgs):
                 if to_email.lower() in m["To"][0]["Address"].lower():
@@ -107,21 +107,28 @@ def main():
     f_tok = register_and_verify(forker)
     for t in (a_tok, f_tok):
         req("POST", "/api/auth/upgrade-teacher", token=t)
-    s, bank, _ = req("POST", "/api/question-banks", {"name": f"C3 Bank {run}"}, token=a_tok) if False else req("POST", "/api/question-banks", {"name": f"C3 Bank {run}"}, token=a_tok)
-    md = ("Cau 1 [SINGLE_CHOICE]: 2+2?\n*A. 3\nB. 4\nC. 5\nD. 6\n\n"
-          "Cau 2 [NUMERIC_FILL]: pi?\nĐáp án: 3.14\n")
-    req("POST", f"/api/question-banks/{bank.get('id')}/questions/import-markdown", {"markdown": md}, token=a_tok)
-    s, exam, _ = req("POST", "/api/exams", {"title": f"C3 Exam {run}"}, token=a_tok)
-    s, qs, _ = req("GET", f"/api/question-banks/{bank.get('id')}/questions", token=a_tok)
-    req("PUT", f"/api/exams/{exam.get('id')}/composition", {
+    s, bank = req("POST", "/api/question-banks", {"name": f"C3 Bank {run}"}, token=a_tok)
+    md = ("Câu 1 [SINGLE_CHOICE]: 2 + 2 bằng bao nhiêu?\n"
+          "*A. 3\nB. 4\nC. 5\nD. 6\nLời giải: 4\n\n"
+          "Câu 2 [NUMERIC_FILL]: pi làm tròn 2 số thập phân?\nĐáp án: 3.14\n")
+    s, imp = req("POST", f"/api/question-banks/{bank.get('id')}/questions/import-markdown",
+                 {"markdown": md}, token=a_tok)
+    check("markdown import", s in (200, 201), f"{s} {str(imp)[:120]}")
+    s, exam = req("POST", "/api/exams", {"title": f"C3 Exam {run}"}, token=a_tok)
+    check("exam created", s in (200, 201), f"{s}")
+    s, qs = req("GET", f"/api/question-banks/{bank.get('id')}/questions", token=a_tok)
+    check("questions listed", s == 200 and len(qs.get("items", [])) == 2, f"{s} n={len(qs.get('items', []))}")
+    s, comp = req("PUT", f"/api/exams/{exam.get('id')}/composition", {
         "expectedExamVersion": 0, "durationMinutes": 10,
         "sections": [{"title": "S1", "position": 0,
                       "questions": [{"sourceQuestionId": q["id"], "position": i, "defaultPoints": 5}
                                     for i, q in enumerate(qs.get("items", []))]}]}, token=a_tok)
-    req("POST", f"/api/exams/{exam.get('id')}/publish", {"expectedExamVersion": 1}, token=a_tok)
-    s, cats, _ = req("GET", "/api/public/community/categories")
+    check("composition", s == 200, f"{s} {str(comp)[:120]}")
+    s, expub = req("POST", f"/api/exams/{exam.get('id')}/publish", {"expectedExamVersion": 1}, token=a_tok)
+    check("exam published", s == 200, f"{s} {str(expub)[:120]}")
+    s, cats = req("GET", "/api/public/community/categories")
     cat = next((c for c in cats if c.get("code") == "toan"), cats[0])
-    s, r, _ = req("POST", "/api/community/publications", {
+    s, r = req("POST", "/api/community/publications", {
         "examId": exam.get("id"), "title": f"C3 Quiz {run}", "summary": "social e2e",
         "categoryId": cat["id"], "tags": ["c3"], "authorAlias": f"Prof{run}",
         "reusePolicy": "ALLOW_FORK"}, token=a_tok)
@@ -149,7 +156,7 @@ def main():
     check("rating 201 avg 4.0", s == 201 and r.get("average") == 4.0 and r.get("myRating") == 4, f"{s} {r}")
     s, r = req("PUT", f"/api/community/publications/{pub_id}/rating", {"rating": 5}, token=s_tok)
     check("rating update 200 avg 5.0", s == 200 and r.get("average") == 5.0 and r.get("ratingCount") == 1, f"{s} {r}")
-    s, r = req("PUT", f"/api/community/publications/{pub_id}/comments", {"body": "Great quiz!", "alias": f"Stu{run}"}, token=s_tok)
+    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "Great quiz!", "alias": f"Stu{run}"}, token=s_tok)
     check("comment 201 with alias", s == 201 and r.get("authorAlias") == f"Stu{run}", f"{s} {r}")
     c1 = r.get("commentId")
     s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "second without alias"}, token=s_tok)
@@ -171,7 +178,7 @@ def main():
 
     print("== fork + bookmark regression ==")
     key = f"c3-{run}-fork-1"
-    s, fork = req("POST", f"/api/community/publications/{pub_id}/fork", token=f_tok) if False else (401, None)
+    s, fork = 401, None  # replaced by the raw request below (needs Idempotency-Key header)
     import urllib.request as _u
     rq = _u.Request(BASE + f"/api/community/publications/{pub_id}/fork", data=json.dumps({}).encode(), method="POST")
     rq.add_header("Content-Type", "application/json")
@@ -231,17 +238,26 @@ def main():
 
     print("== ineligible publication exposes nothing ==")
     req("POST", f"/api/community/publications/{pub_id}/unpublish", token=a_tok)
-    for name, path, tok in [
-        ("guest summary 404", f"/api/public/community/publications/{pub_id}/social-summary", None),
-        ("guest comments 404", f"/api/public/community/publications/{pub_id}/comments", None),
-        ("auth summary 404", f"/api/community/publications/{pub_id}/social-summary", s_tok),
-        ("like 404", f"/api/community/publications/{pub_id}/like", s_tok),
-        ("comment 404", f"/api/community/publications/{pub_id}/comments", s_tok),
-        ("fork 404", f"/api/community/publications/{pub_id}/fork", f_tok),
+    for name, method, path, tok, body in [
+        ("guest summary 404", "GET", f"/api/public/community/publications/{pub_id}/social-summary", None, None),
+        ("guest comments 404", "GET", f"/api/public/community/publications/{pub_id}/comments", None, None),
+        ("auth summary 404", "GET", f"/api/community/publications/{pub_id}/social-summary", s_tok, None),
+        ("like 404", "PUT", f"/api/community/publications/{pub_id}/like", s_tok, None),
+        ("comment 404", "POST", f"/api/community/publications/{pub_id}/comments", s_tok, {"body": "x"}),
+        ("rating 404", "PUT", f"/api/community/publications/{pub_id}/rating", s_tok, {"rating": 3}),
     ]:
-        method = "PUT" if "like" in path or "fork" in path else ("POST" if "comment" in path and "comments" == path.split("/")[-1] else "GET")
-        s, r = req(method, path, {} if method != "GET" else None, token=tok)
+        s, r = req(method, path, body, token=tok)
         check(name, s == 404, f"{s}")
+    rq = urllib.request.Request(BASE + f"/api/community/publications/{pub_id}/fork",
+                                data=b"{}", method="POST")
+    rq.add_header("Content-Type", "application/json")
+    rq.add_header("Authorization", "Bearer " + f_tok)
+    rq.add_header("Idempotency-Key", f"c3-{run}-fork-ineligible")
+    try:
+        with urllib.request.urlopen(rq, timeout=30) as resp:
+            check("fork 404", False, f"{resp.status}")
+    except urllib.error.HTTPError as e:
+        check("fork 404", e.code == 404, f"{e.code}")
     req("POST", f"/api/community/publications/{pub_id}/publish", token=a_tok)
 
     print("== unlike + rating delete ==")
