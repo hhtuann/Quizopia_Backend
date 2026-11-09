@@ -44,11 +44,14 @@ public class CommunityAliasService {
 
     private final CommunityMemberProfileRepository profiles;
     private final CommunityAuthorizationService auth;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     public CommunityAliasService(CommunityMemberProfileRepository profiles,
-            CommunityAuthorizationService auth) {
+            CommunityAuthorizationService auth,
+            org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.profiles = profiles;
         this.auth = auth;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -110,12 +113,26 @@ public class CommunityAliasService {
         if (alias.equalsIgnoreCase(account.email()) || alias.equalsIgnoreCase(account.username())) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID);
         }
-        if (profiles.anyUsernameMatchesIgnoreCase(alias)) {
+        if (exists("SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)", alias)) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID);
         }
-        if (profiles.anyPublicationAuthorAliasMatchesIgnoreCase(alias)) {
+        if (exists(
+                "SELECT 1 FROM community_publications WHERE LOWER(author_alias) = LOWER(?)",
+                alias)) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID);
         }
+    }
+
+    /**
+     * Ci probes on JdbcTemplate — deliberately NOT repository native
+     * queries: a native query auto-flushes a dirty persistence context
+     * (a publication PATCH validates the alias AFTER renaming the
+     * entity; the spurious flush would double-bump @Version); JDBC
+     * reads bypass the persistence context entirely.
+     */
+    private boolean exists(String sql, String alias) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (" + sql + ")", Boolean.class, alias));
     }
 
     /**
@@ -147,7 +164,9 @@ public class CommunityAliasService {
      * is not this check's concern.
      */
     public void assertAliasNotTakenByMember(String alias) {
-        if (alias != null && profiles.aliasExistsIgnoreCase(alias)) {
+        if (alias != null
+                && exists("SELECT 1 FROM community_member_profiles WHERE LOWER(alias) = LOWER(?)",
+                        alias)) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID,
                     "Author alias must not match a community member's public alias");
         }

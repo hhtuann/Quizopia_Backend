@@ -41,7 +41,8 @@ class CommunityModerationActionRepositorySurfaceTest {
                 .containsExactlyInAnyOrder(
                         "save",
                         "findByPublicationIdOrderByCreatedAtDescIdDesc",
-                        "findByReportIdOrderByCreatedAtDescIdDesc");
+                        "findByReportIdOrderByCreatedAtDescIdDesc",
+                        "findByCommentIdOrderByCreatedAtDescIdDesc");
 
         for (Method method : methods) {
             String name = method.getName().toLowerCase(Locale.ROOT);

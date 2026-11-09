@@ -62,18 +62,9 @@ public interface CommunityMemberProfileRepository
             + " SET alias = :alias, updated_at = now() WHERE user_id = :userId", nativeQuery = true)
     int updateAliasByUserId(@Param("userId") long userId, @Param("alias") String alias);
 
-    /** §4 reverse probe (publication side): is any member profile on this alias (ci)? */
-    @Query(value = "SELECT EXISTS (SELECT 1 FROM community_member_profiles"
-            + " WHERE LOWER(alias) = LOWER(:alias))", nativeQuery = true)
-    boolean aliasExistsIgnoreCase(@Param("alias") String alias);
-
-    /** §4 impersonation probe: does ANY users.username match this alias (ci)? */
-    @Query(value = "SELECT EXISTS (SELECT 1 FROM users WHERE LOWER(username) = LOWER(:alias))",
-            nativeQuery = true)
-    boolean anyUsernameMatchesIgnoreCase(@Param("alias") String alias);
-
-    /** §4 impersonation probe: does ANY publication author_alias match (ci)? */
-    @Query(value = "SELECT EXISTS (SELECT 1 FROM community_publications"
-            + " WHERE LOWER(author_alias) = LOWER(:alias))", nativeQuery = true)
-    boolean anyPublicationAuthorAliasMatchesIgnoreCase(@Param("alias") String alias);
+    // The §4 ci probes (member alias, any username, any publication
+    // author_alias) live in CommunityAliasService on JdbcTemplate: a
+    // repository native query would auto-flush a DIRTY persistence
+    // context (double version bump on a PATCH mid-mutation); JDBC reads
+    // bypass the persistence context entirely (visibility-store pattern).
 }

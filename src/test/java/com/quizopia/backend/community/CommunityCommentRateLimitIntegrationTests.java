@@ -221,4 +221,18 @@ class CommunityCommentRateLimitIntegrationTests {
     private long insert(String sql) {
         return jdbc.queryForObject(sql + " RETURNING id", Long.class);
     }
+
+    // Non-@Transactional suite: committed fixtures would leak into the
+    // shared container and break the exact-count catalog suites (which
+    // run earlier in the default run order). Only the rows this class
+    // created (created_at >= class load) are removed; publication
+    // children CASCADE along.
+    private static final java.time.Instant CLASS_START = java.time.Instant.now();
+
+    @org.junit.jupiter.api.AfterEach
+    void cleanCommittedFixtures() {
+        jdbc.update("DELETE FROM community_publications WHERE created_at >= CAST(? AS timestamptz)", CLASS_START);
+        jdbc.update("DELETE FROM community_member_profiles WHERE created_at >= CAST(? AS timestamptz)", CLASS_START);
+    }
+
 }
