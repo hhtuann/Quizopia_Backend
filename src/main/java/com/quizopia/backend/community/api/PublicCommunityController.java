@@ -5,6 +5,7 @@ import com.quizopia.backend.community.application.PublicCommunityService.PublicR
 import com.quizopia.backend.community.dto.PublicCategoryResponse;
 import com.quizopia.backend.community.dto.PublicPublicationCard;
 import com.quizopia.backend.community.dto.PublicPublicationDetail;
+import com.quizopia.backend.community.dto.PublicSocialSummaryResponse;
 import com.quizopia.backend.community.dto.PublicTagUsage;
 import com.quizopia.backend.question.dto.PageResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -62,6 +63,15 @@ public class PublicCommunityController {
             @AuthenticationPrincipal Jwt jwt,
             HttpServletRequest request) {
         return noStore(publicCommunityService.detail(caller(jwt, request), publicationId));
+    }
+
+    @GetMapping("/publications/{publicationId}/social-summary")
+    public ResponseEntity<PublicSocialSummaryResponse> socialSummary(
+            @PathVariable Long publicationId,
+            @AuthenticationPrincipal Jwt jwt,
+            HttpServletRequest request) {
+        return noStore(publicCommunityService.socialSummary(
+                caller(jwt, request), publicationId));
     }
 
     @GetMapping("/categories")

@@ -67,6 +67,8 @@ public class CommunityRateLimiter {
         REPORT_IP,
         BOOKMARK,
         FORK,
+        LIKE,
+        RATING,
         MODERATION,
         PUBLIC_READ_IP
     }
@@ -158,6 +160,8 @@ public class CommunityRateLimiter {
             case REPORT_IP -> properties.getReportIpLimit();
             case BOOKMARK -> properties.getBookmarkLimit();
             case FORK -> properties.getForkLimit();
+            case LIKE -> properties.getLikeLimit();
+            case RATING -> properties.getRatingLimit();
             case MODERATION -> properties.getModerationLimit();
             case PUBLIC_READ_IP -> properties.getPublicReadIpLimit();
         };

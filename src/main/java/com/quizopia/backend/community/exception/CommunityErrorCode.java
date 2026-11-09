@@ -30,6 +30,8 @@ public enum CommunityErrorCode {
     COMMUNITY_MODERATION_HIDDEN(HttpStatus.CONFLICT, "The publication is hidden by moderation"),
     COMMUNITY_PUBLISH_INELIGIBLE(HttpStatus.CONFLICT, "The exam is not eligible for community publication"),
     COMMUNITY_ALIAS_REQUIRED(HttpStatus.CONFLICT, "A public author alias is required before publishing"),
+    COMMUNITY_SELF_RATING_NOT_ALLOWED(HttpStatus.CONFLICT,
+            "Publishers cannot rate their own publication"),
     COMMUNITY_REPORT_NOT_OPEN(HttpStatus.CONFLICT, "The report is no longer open"),
     COMMUNITY_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT,
             "The Idempotency-Key was already used for a different publication"),

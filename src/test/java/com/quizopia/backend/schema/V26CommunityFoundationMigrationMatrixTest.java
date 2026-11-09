@@ -72,8 +72,8 @@ class V26CommunityFoundationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                .as("migration chain passed through V26 (head is now V29)")
-                .containsExactly("30");
+                .as("migration chain passed through V26 (head is now V31)")
+                .containsExactly("31");
 
                 // The V24 catalog seeds every code per grade level — the
                 // seed dedup ran on this leg too.
@@ -157,8 +157,8 @@ class V26CommunityFoundationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                .as("migration chain passed through V26 (head is now V29)")
-                .containsExactly("30");
+                        .as("migration chain passed through V26 (head is now V31)")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);
@@ -339,9 +339,10 @@ class V26CommunityFoundationMigrationMatrixTest {
         assertThat(rows(st, """
                         SELECT p.code FROM permissions p WHERE p.code LIKE 'COMMUNITY_%' ORDER BY p.code
                         """))
-                .as("the five COMMUNITY_* permissions are seeded")
-                .containsExactly("COMMUNITY_BOOKMARK", "COMMUNITY_FORK", "COMMUNITY_MODERATION",
-                        "COMMUNITY_PUBLISH", "COMMUNITY_REPORT");
+                .as("COMMUNITY_* permissions: V26's five, extended by V31's LIKE/RATE/COMMENT")
+                .containsExactly("COMMUNITY_BOOKMARK", "COMMUNITY_COMMENT", "COMMUNITY_FORK",
+                        "COMMUNITY_LIKE", "COMMUNITY_MODERATION", "COMMUNITY_PUBLISH",
+                        "COMMUNITY_RATE", "COMMUNITY_REPORT");
         assertThat(rows(st, """
                         SELECT r.code || '→' || p.code
                         FROM role_permissions rp
@@ -350,14 +351,21 @@ class V26CommunityFoundationMigrationMatrixTest {
                         WHERE p.code LIKE 'COMMUNITY_%'
                         ORDER BY r.code, p.code
                         """))
-                .as("grants: PUBLISH/FORK→TEACHER, REPORT/BOOKMARK→STUDENT+TEACHER, MODERATION→COMMUNITY_MODERATOR")
+                .as("grants: PUBLISH/FORK→TEACHER, REPORT/BOOKMARK→STUDENT+TEACHER, "
+                        + "V31's LIKE/RATE/COMMENT→STUDENT+TEACHER, MODERATION→COMMUNITY_MODERATOR")
                 .containsExactly(
                         "COMMUNITY_MODERATOR→COMMUNITY_MODERATION",
                         "STUDENT→COMMUNITY_BOOKMARK",
+                        "STUDENT→COMMUNITY_COMMENT",
+                        "STUDENT→COMMUNITY_LIKE",
+                        "STUDENT→COMMUNITY_RATE",
                         "STUDENT→COMMUNITY_REPORT",
                         "TEACHER→COMMUNITY_BOOKMARK",
+                        "TEACHER→COMMUNITY_COMMENT",
                         "TEACHER→COMMUNITY_FORK",
+                        "TEACHER→COMMUNITY_LIKE",
                         "TEACHER→COMMUNITY_PUBLISH",
+                        "TEACHER→COMMUNITY_RATE",
                         "TEACHER→COMMUNITY_REPORT");
         assertThat(count(st, """
                         SELECT count(*) FROM user_roles ur

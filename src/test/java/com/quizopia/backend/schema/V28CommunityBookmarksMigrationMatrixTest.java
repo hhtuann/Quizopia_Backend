@@ -66,8 +66,8 @@ class V28CommunityBookmarksMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain reached V29")
-                        .containsExactly("30");
+                        .as("migration chain reached V31")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);
@@ -150,8 +150,8 @@ class V28CommunityBookmarksMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain reached V29")
-                        .containsExactly("30");
+                        .as("migration chain reached V31")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);

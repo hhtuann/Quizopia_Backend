@@ -68,8 +68,8 @@ class V27CommunityModerationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain passed through V27 (head is now V29)")
-                        .containsExactly("30");
+                        .as("migration chain passed through V27 (head is now V31)")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);
@@ -159,8 +159,8 @@ class V27CommunityModerationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain passed through V27 (head is now V29)")
-                        .containsExactly("30");
+                        .as("migration chain passed through V27 (head is now V31)")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);

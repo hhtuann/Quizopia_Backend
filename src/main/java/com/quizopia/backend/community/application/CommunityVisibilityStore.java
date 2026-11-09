@@ -158,6 +158,22 @@ public class CommunityVisibilityStore {
     }
 
     /**
+     * The §4 predicate plus the publisher id in one statement — the
+     * eligibility oracle for the #65 self-rating check (ADR-007 §5/§6):
+     * the caller learns the publisher only for a publication they can
+     * already see, so the probe is never an existence oracle. Empty for
+     * invisible/absent publications.
+     */
+    public Optional<Long> findVisiblePublisherId(long publicationId) {
+        List<Long> rows = jdbc.queryForList("""
+                SELECT p.publisher_user_id
+                %s
+                WHERE %s AND p.id = ?
+                """.formatted(VISIBLE_JOIN, VISIBILITY_PREDICATE), Long.class, publicationId);
+        return rows.stream().findFirst();
+    }
+
+    /**
      * Paged visible catalog. The WHERE (predicate + filters) is built once
      * and used identically by the COUNT (before LIMIT/OFFSET) and the page
      * query, so {@code totalElements}/{@code totalPages} describe exactly

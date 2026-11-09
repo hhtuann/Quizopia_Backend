@@ -44,6 +44,14 @@ public class CommunityRateLimitProperties {
     @Min(1)
     private int forkLimit = 5;
 
+    /** Likes + unlikes per user per window (#65). */
+    @Min(1)
+    private int likeLimit = 60;
+
+    /** Rating upserts + deletes per user per window (#65). */
+    @Min(1)
+    private int ratingLimit = 30;
+
     /** Moderation writes per user per window (#42): hide/restore/dismiss/resolve. */
     @Min(1)
     private int moderationLimit = 60;
@@ -115,6 +123,23 @@ public class CommunityRateLimitProperties {
 
     public void setForkLimit(int forkLimit) {
         this.forkLimit = forkLimit;
+    }
+
+
+    public int getLikeLimit() {
+        return likeLimit;
+    }
+
+    public void setLikeLimit(int likeLimit) {
+        this.likeLimit = likeLimit;
+    }
+
+    public int getRatingLimit() {
+        return ratingLimit;
+    }
+
+    public void setRatingLimit(int ratingLimit) {
+        this.ratingLimit = ratingLimit;
     }
 
     public int getModerationLimit() {
