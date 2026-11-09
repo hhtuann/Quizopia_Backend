@@ -250,6 +250,10 @@ class ClassroomSessionApiIntegrationTests {
         long sched = session(teacherA, examA, "VS" + tag, "SCHEDULED");
         mockMvc.perform(post("/api/classrooms/" + classA1 + "/sessions/" + sched).with(jwtFor(teacherA)))
                 .andExpect(status().isForbidden());
+        // A picker for archived classes must not advertise actions that always fail.
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/sessions/assignable")
+                        .with(jwtFor(teacherA)))
+                .andExpect(status().isForbidden());
         mockMvc.perform(delete("/api/classrooms/" + classA1 + "/sessions/" + preArchived)
                         .with(jwtFor(teacherA)))
                 .andExpect(status().isForbidden());
