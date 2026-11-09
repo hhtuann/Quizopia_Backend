@@ -16,12 +16,14 @@ import com.quizopia.backend.exam.dto.ClassroomSessionItem;
 import com.quizopia.backend.exam.dto.LearnerClassroomSessionItem;
 import com.quizopia.backend.exam.exception.ExamErrorCode;
 import com.quizopia.backend.exam.exception.ExamException;
+import com.quizopia.backend.exam.repository.ExamSessionRepository;
 import com.quizopia.backend.question.dto.PageResponse;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 
@@ -58,6 +60,7 @@ public class ClassroomSessionService {
     private final ExamAuthorizationService auth;
     private final ClassroomService classroomService;
     private final ExamSessionService examSessionService;
+    private final ExamSessionRepository sessionRepository;
     private final ClassroomRepository classroomRepository;
     private final ClassroomMemberRepository memberRepository;
     private final NamedParameterJdbcTemplate jdbc;
@@ -65,12 +68,14 @@ public class ClassroomSessionService {
     public ClassroomSessionService(ExamAuthorizationService auth,
             ClassroomService classroomService,
             ExamSessionService examSessionService,
+            ExamSessionRepository sessionRepository,
             ClassroomRepository classroomRepository,
             ClassroomMemberRepository memberRepository,
             NamedParameterJdbcTemplate jdbc) {
         this.auth = auth;
         this.classroomService = classroomService;
         this.examSessionService = examSessionService;
+        this.sessionRepository = sessionRepository;
         this.classroomRepository = classroomRepository;
         this.memberRepository = memberRepository;
         this.jdbc = jdbc;
@@ -86,11 +91,14 @@ public class ClassroomSessionService {
      * created_by filter is kept as defense-in-depth). SQL paging + count,
      * stable order startsAt desc, id desc.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public PageResponse<ClassroomSessionItem> listClassroomSessions(Long userId, Long classroomId,
             int page, int size, String status, String search) {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
         classroomService.requireOwnedClassroom(userId, classroomId);
+        // The canonical ExamSession list refreshes due SCHEDULED/OPEN transitions
+        // before status filtering. Class-scoped SQL reads must observe the same lifecycle.
+        sessionRepository.refreshLifecycleForCreator(userId, Instant.now());
         requireStatusFilter(status, TEACHER_STATUS_FILTER);
 
         String filter = filterClause(status, search);
@@ -129,11 +137,12 @@ public class ClassroomSessionService {
      * are NOT yet assigned to this classroom (the assign picker never offers
      * duplicates).
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public PageResponse<AssignableSessionItem> listAssignableSessions(Long userId, Long classroomId,
             int page, int size, String search) {
         auth.requireUserWithPermission(userId, "EXAM_SESSION_READ");
         classroomService.requireOwnedClassroom(userId, classroomId);
+        sessionRepository.refreshLifecycleForCreator(userId, Instant.now());
 
         String filter = searchFilter(search);
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -186,6 +195,12 @@ public class ClassroomSessionService {
                 && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
+        // SCHEDULED can still be persisted after startsAt until a lifecycle-aware
+        // endpoint lazy-opens it. Never mutate class assignments after the window begins.
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED
+                && !Instant.now().isBefore(session.getStartsAt())) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
         if (session.getVisibility() != SessionVisibility.CLASS_RESTRICTED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_ACCESS_DENIED);
         }
@@ -218,6 +233,12 @@ public class ClassroomSessionService {
                 && session.getStatus() != ExamSessionStatus.SCHEDULED) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
         }
+        // SCHEDULED can still be persisted after startsAt until a lifecycle-aware
+        // endpoint lazy-opens it. Never mutate class assignments after the window begins.
+        if (session.getStatus() == ExamSessionStatus.SCHEDULED
+                && !Instant.now().isBefore(session.getStartsAt())) {
+            throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
         jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid "
                         + "AND classroom_id = :cid",
                 new MapSqlParameterSource().addValue("sid", sessionId).addValue("cid", classroomId));
@@ -231,9 +252,10 @@ public class ClassroomSessionService {
      * Learner-safe detail of one JOINED classroom. Non-members (and
      * non-existent classrooms) get the same 404 — no existence oracle.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public JoinedClassroomDetail getJoinedClassroom(Long userId, Long classroomId) {
         Classroom classroom = requireJoinedClassroom(userId, classroomId);
+        sessionRepository.refreshLifecycleForCreator(classroom.getOwnerUserId(), Instant.now());
         List<Object[]> meta = jdbc.query(
                 "SELECT cm.added_at, u.display_name, "
                         + "(SELECT COUNT(*) FROM exam_session_classes esc "
@@ -264,10 +286,11 @@ public class ClassroomSessionService {
      * except DRAFT. Learner-safe metadata only; starting/resuming/results
      * are decided by the existing eligibility/attempt services.
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public PageResponse<LearnerClassroomSessionItem> listJoinedClassroomSessions(Long userId,
             Long classroomId, int page, int size, String status) {
-        requireJoinedClassroom(userId, classroomId);
+        Classroom classroom = requireJoinedClassroom(userId, classroomId);
+        sessionRepository.refreshLifecycleForCreator(classroom.getOwnerUserId(), Instant.now());
         requireStatusFilter(status, LEARNER_STATUS_FILTER);
 
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("cid", classroomId);
