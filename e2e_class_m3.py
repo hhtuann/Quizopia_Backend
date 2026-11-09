@@ -119,7 +119,7 @@ def publish_exam(token, run, tag):
     return exam["id"]
 
 
-def create_session(token, exam_id, title, max_attempts=1, future=False):
+def create_session(token, exam_id, title, max_attempts=1, future=False, schedule=False):
     if future:
         start_t = datetime.now(timezone.utc) + timedelta(minutes=30)
         end_t = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -132,6 +132,10 @@ def create_session(token, exam_id, title, max_attempts=1, future=False):
                    "maxAttempts": max_attempts, "durationMinutes": 15}, token=token)
     if s not in (200, 201):
         raise SystemExit(f"session create failed: {s} {sess}")
+    if schedule:
+        s2, _ = req("POST", f"/api/exam-sessions/{sess['id']}/schedule", {}, token)
+        if s2 not in (200, 201):
+            raise SystemExit(f"session schedule failed: {s2}")
     return sess["id"]
 
 
