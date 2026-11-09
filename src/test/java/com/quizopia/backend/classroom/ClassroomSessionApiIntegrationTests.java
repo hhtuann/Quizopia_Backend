@@ -310,6 +310,11 @@ class ClassroomSessionApiIntegrationTests {
         // A stale persisted SCHEDULED status must not permit mid-flight changes.
         jdbc.update("UPDATE exam_sessions SET starts_at=now() - interval '1 minute' "
                 + "WHERE id IN (" + assigned + "," + unassigned + ")");
+        // The prior assign() populated the test transaction's first-level
+        // persistence context. JDBC bypasses it; clear before another MockMvc
+        // request so findByIdForUpdate reads the UPDATED starts_at from DB,
+        // as it would in a fresh production HTTP transaction.
+        em.clear();
         mockMvc.perform(delete("/api/classrooms/" + classA1 + "/sessions/" + assigned)
                         .with(jwtFor(teacherA)))
                 .andExpect(status().isConflict());
