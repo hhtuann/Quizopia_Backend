@@ -299,7 +299,7 @@ class CommunityModerationApiIntegrationTests {
         // happens to assign publicationId == 50.
         List<Integer> visibleIds = com.jayway.jsonpath.JsonPath.read(
                 catalog.getResponse().getContentAsString(), "$.items[*].publicationId");
-        assertThat(visibleIds).doesNotContain(publicationId.intValue());
+        assertThat(visibleIds).doesNotContain((int) publicationId);
     }
 
     // ==================================================================
