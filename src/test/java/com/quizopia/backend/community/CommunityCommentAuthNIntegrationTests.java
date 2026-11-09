@@ -203,8 +203,8 @@ class CommunityCommentAuthNIntegrationTests extends AbstractAuthenticationIntegr
 
     @org.junit.jupiter.api.AfterEach
     void cleanCommittedFixtures() {
-        jdbc.update("DELETE FROM community_publications WHERE created_at >= CAST(? AS timestamptz)", CLASS_START);
-        jdbc.update("DELETE FROM community_member_profiles WHERE created_at >= CAST(? AS timestamptz)", CLASS_START);
+        jdbc.update("DELETE FROM community_publications WHERE created_at >= ?", java.sql.Timestamp.from(CLASS_START));
+        jdbc.update("DELETE FROM community_member_profiles WHERE created_at >= ?", java.sql.Timestamp.from(CLASS_START));
     }
 
 }
