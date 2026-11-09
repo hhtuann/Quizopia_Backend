@@ -119,7 +119,7 @@ public class ClassroomGradebookService {
     }
 
     /** Attempts/grades state of one (session, user). */
-    record AttemptState(long attempts, long inProgress, long submitted, long pendingGrading) {
+    record AttemptState(long attempts, long submitted) {
     }
 
     /** Best graded result of one (session, user) — SCORED cell payload. */
@@ -167,6 +167,11 @@ public class ClassroomGradebookService {
 
     private List<SessionMeta> assignedSessions(Long classroomId, Long ownerId, String status, String search,
             Integer limit) {
+        return assignedSessions(classroomId, ownerId, status, search, limit, null);
+    }
+
+    private List<SessionMeta> assignedSessions(Long classroomId, Long ownerId, String status, String search,
+            Integer limit, Long sessionId) {
         StringBuilder sql = new StringBuilder(
                 "SELECT s.id, s.code, s.title, s.status, s.starts_at, s.ends_at, "
                         + "s.opened_at, s.closed_at, s.exam_id, e.title AS exam_title "
@@ -176,6 +181,10 @@ public class ClassroomGradebookService {
                         + "WHERE esc.classroom_id = :cid AND s.created_by = :uid");
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("cid", classroomId).addValue("uid", ownerId);
+        if (sessionId != null) {
+            sql.append(" AND s.id = :sid");
+            params.addValue("sid", sessionId);
+        }
         if (status != null && !status.isBlank()) {
             if (!TEACHER_STATUS_FILTER.contains(status)) {
                 throw new ClassroomException(ClassroomErrorCode.CLASSROOM_GRADEBOOK_INVALID_QUERY);
@@ -271,20 +280,31 @@ public class ClassroomGradebookService {
         }
         String sql = "SELECT a.exam_session_id AS sid, a.user_id AS uid, "
                 + "COUNT(*) AS attempts, "
-                + "COUNT(*) FILTER (WHERE a.status = 'IN_PROGRESS') AS in_prog, "
-                + "COUNT(*) FILTER (WHERE a.status IN ('SUBMITTED','GRADED')) AS submitted, "
-                + "COUNT(*) FILTER (WHERE a.status IN ('SUBMITTED','GRADED') AND g.id IS NULL) AS pending "
-                + "FROM attempts a LEFT JOIN grades g ON g.attempt_id = a.id "
+                + "COUNT(*) FILTER (WHERE a.status IN ('SUBMITTED','GRADED')) AS submitted "
+                + "FROM attempts a "
                 + "WHERE a.exam_session_id IN (:sids) AND a.user_id IN (:uids) "
                 + "GROUP BY a.exam_session_id, a.user_id";
-        jdbc.query(sql, new MapSqlParameterSource().addValue("sids", sessionIds).addValue("uids", userIds),
-                rs -> {
-                    states.computeIfAbsent(rs.getLong("sid"), k -> new HashMap<>())
-                            .put(rs.getLong("uid"), new AttemptState(
-                                    rs.getLong("attempts"), rs.getLong("in_prog"),
-                                    rs.getLong("submitted"), rs.getLong("pending")));
-                });
+        // Chunked IN-lists (same convention as currentMembers/displayNames).
+        for (List<Long> sidChunk : chunked(sessionIds)) {
+            for (List<Long> uidChunk : chunked(userIds)) {
+                jdbc.query(sql, new MapSqlParameterSource().addValue("sids", sidChunk)
+                                .addValue("uids", uidChunk),
+                        (org.springframework.jdbc.core.RowCallbackHandler) rs -> states
+                                .computeIfAbsent(rs.getLong("sid"), k -> new HashMap<>())
+                                .put(rs.getLong("uid"), new AttemptState(
+                                        rs.getLong("attempts"), rs.getLong("submitted"))));
+            }
+        }
         return states;
+    }
+
+    private static <T> List<List<T>> chunked(java.util.Collection<T> items) {
+        List<List<T>> chunks = new ArrayList<>();
+        List<T> all = new ArrayList<>(items);
+        for (int i = 0; i < all.size(); i += 500) {
+            chunks.add(all.subList(i, Math.min(i + 500, all.size())));
+        }
+        return chunks;
     }
 
     /**
@@ -307,13 +327,18 @@ public class ClassroomGradebookService {
                 + "  WHERE a.exam_session_id IN (:sids) AND a.user_id IN (:uids) "
                 + "    AND a.status IN ('SUBMITTED','GRADED') "
                 + ") t WHERE rn = 1";
-        jdbc.query(sql, new MapSqlParameterSource().addValue("sids", sessionIds).addValue("uids", userIds),
-                (org.springframework.jdbc.core.RowCallbackHandler) rs -> best
-                        .computeIfAbsent(rs.getLong("sid"), k -> new HashMap<>())
-                        .put(rs.getLong("uid"), new BestResult(
-                                rs.getLong("attempt_id"), rs.getBigDecimal("final_score"),
-                                rs.getBigDecimal("max_score"), rs.getBigDecimal("percentage"),
-                                rs.getString("grade_status"))));
+        for (List<Long> sidChunk : chunked(sessionIds)) {
+            for (List<Long> uidChunk : chunked(userIds)) {
+                jdbc.query(sql, new MapSqlParameterSource().addValue("sids", sidChunk)
+                                .addValue("uids", uidChunk),
+                        (org.springframework.jdbc.core.RowCallbackHandler) rs -> best
+                                .computeIfAbsent(rs.getLong("sid"), k -> new HashMap<>())
+                                .put(rs.getLong("uid"), new BestResult(
+                                        rs.getLong("attempt_id"), rs.getBigDecimal("final_score"),
+                                        rs.getBigDecimal("max_score"), rs.getBigDecimal("percentage"),
+                                        rs.getString("grade_status"))));
+            }
+        }
         return best;
     }
 
@@ -475,10 +500,8 @@ public class ClassroomGradebookService {
         // Column selection: explicit bounded sessionIds, or the default slice.
         List<SessionMeta> metas = selectSessions(classroomId, userId, sessionIds);
         Instant now = Instant.now();
-        Map<Long, SessionMeta> metaById = new LinkedHashMap<>();
         Map<Long, SessionWindow> windows = new LinkedHashMap<>();
         for (SessionMeta m : metas) {
-            metaById.put(m.id(), m);
             windows.put(m.id(), windowOf(m, now));
         }
         Map<Long, Set<Long>> pairs = cohortPairs(classroomId, windows);
@@ -721,27 +744,27 @@ public class ClassroomGradebookService {
                     }
                 }
             }
-            sumSubmitted += submitted;
-            sumCohort += cohort.size();
+            boolean windowed = SessionWindow.WINDOW.equals(windows.get(m.id()).state());
+            // Design §1: upcoming sessions are prospective — never part of
+            // the completed-analytics denominator (review M3-Domain P2-1).
+            if (windowed) {
+                sumSubmitted += submitted;
+                sumCohort += cohort.size();
+            }
             trends.add(new ClassroomAnalyticsResponse.SessionAnalyticsTrend(m.id(), m.code(), m.title(),
-                    m.status(), m.startsAt(), cohort.size(), started, submitted, graded,
-                    ratio(submitted, cohort.size()), mean(pcts)));
+                    m.status(), windows.get(m.id()).state(), m.startsAt(), cohort.size(), started,
+                    submitted, graded,
+                    windowed ? ratio(submitted, cohort.size()) : null, mean(pcts)));
         }
-        return new ClassroomAnalyticsResponse(null, null, null, null, null, rosterSize,
+        return new ClassroomAnalyticsResponse(null, null, null, null, null, null, rosterSize,
                 assignedCount != null ? assignedCount : 0L, 0L, 0L, 0L, 0L, 0L, null, null, null,
                 null, null, null, ratio(sumSubmitted, sumCohort), trends, HISTORY_COVERAGE);
     }
 
     private ClassroomAnalyticsResponse sessionAnalytics(Long classroomId, Long ownerId, Long sessionId,
             long rosterSize, long assignedCount, Instant now) {
-        List<SessionMeta> all = assignedSessions(classroomId, ownerId, null, null, null);
-        SessionMeta meta = null;
-        for (SessionMeta m : all) {
-            if (m.id().equals(sessionId)) {
-                meta = m;
-                break;
-            }
-        }
+        List<SessionMeta> all = assignedSessions(classroomId, ownerId, null, null, null, sessionId);
+        SessionMeta meta = all.isEmpty() ? null : all.get(0);
         if (meta == null) {
             throw new ClassroomException(ClassroomErrorCode.CLASSROOM_GRADEBOOK_INVALID_QUERY);
         }
@@ -773,7 +796,8 @@ public class ClassroomGradebookService {
         sorted.sort(BigDecimal::compareTo);
         List<Long> buckets = distribution(sorted);
         return new ClassroomAnalyticsResponse(meta.id(), meta.title(), meta.code(), meta.status(),
-                meta.startsAt(), rosterSize, assignedCount, cohort.size(), started, submitted, graded,
+                w.state(), meta.startsAt(), rosterSize, assignedCount, cohort.size(), started,
+                submitted, graded,
                 cohort.size() - started, ratio(submitted, cohort.size()), mean(pcts),
                 sorted.isEmpty() ? null : sorted.get(0),
                 sorted.isEmpty() ? null : sorted.get(sorted.size() - 1),
@@ -879,13 +903,18 @@ public class ClassroomGradebookService {
         List<LearnerMyResultsItem> items = new ArrayList<>();
         for (SessionMeta m : metas) {
             SessionWindow w = windows.get(m.id());
+            AttemptState st = states.getOrDefault(m.id(), Map.of()).get(userId);
             GradebookCell cell = cellOf(w,
                     pairs.getOrDefault(m.id(), Set.of()).contains(userId), true,
-                    states.getOrDefault(m.id(), Map.of()).get(userId),
-                    best.getOrDefault(m.id(), Map.of()).get(userId));
+                    st, best.getOrDefault(m.id(), Map.of()).get(userId));
+            // Learner-facing attemptCount counts SUBMITTED/GRADED attempts —
+            // parity with /results/me/best and /attempts/my semantics
+            // (review M3-Domain P3-1); the teacher gradebook cell keeps the
+            // all-attempts count.
             items.add(new LearnerMyResultsItem(m.id(), m.code(), m.title(), m.status(),
                     m.startsAt(), m.endsAt(), m.examTitle(), cell.status(), cell.score(),
-                    cell.maxScore(), cell.percentage(), cell.bestAttemptId(), cell.attemptCount()));
+                    cell.maxScore(), cell.percentage(), cell.bestAttemptId(),
+                    st == null ? 0L : st.submitted()));
         }
         long totalElements = items.size();
         int totalPages = (int) ((totalElements + safeSize - 1) / safeSize);

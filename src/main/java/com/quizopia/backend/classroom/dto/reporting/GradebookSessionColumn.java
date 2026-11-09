@@ -13,7 +13,7 @@ import java.time.Instant;
  * cohort: {@code UPCOMING} (prospective — current roster, not a completed
  * denominator), {@code WINDOW} (window begun/ended — period-overlap cohort),
  * {@code NOT_HELD} (expired without ever opening — empty cohort),
- * {@code DANCELLED}/{@code DRAFT} as-is.</p>
+ * {@code CANCELLED}/{@code DRAFT} as-is.</p>
  */
 public record GradebookSessionColumn(
         Long id,

@@ -58,15 +58,14 @@ public class ClassroomGradebookExportService {
         return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public ExportFile export(Long userId, Long classroomId, List<Long> sessionIds, String search) {
         // Authorization + data via the SAME code path as the API (owner-only),
-        // with the export row bound instead of the API page cap.
+        // with the export row bound instead of the API page cap (the cohort
+        // bound is enforced inside gradebookForExport).
         GradebookResponse data = gradebookService.gradebookForExport(userId, classroomId,
                 sessionIds, search);
-        if (data.totalElements() > MAX_EXPORT_ROWS) {
-            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_GRADEBOOK_TOO_LARGE);
-        }
+
 
         SXSSFWorkbook wb = new SXSSFWorkbook(100);
         try {
@@ -76,7 +75,7 @@ public class ClassroomGradebookExportService {
             wb.write(out);
             return new ExportFile(out.toByteArray(), filename(classroomId));
         } catch (IOException ex) {
-            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_GRADEBOOK_INVALID_QUERY);
+            throw new ClassroomException(ClassroomErrorCode.CLASSROOM_GRADEBOOK_EXPORT_FAILED);
         } finally {
             wb.dispose(); // releases SXSSF temp files on success AND failure
             try {

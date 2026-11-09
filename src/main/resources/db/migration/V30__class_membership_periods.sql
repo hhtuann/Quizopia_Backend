@@ -36,9 +36,11 @@ CREATE TABLE classroom_membership_periods (
 CREATE UNIQUE INDEX uk_cmp_one_open
     ON classroom_membership_periods (classroom_id, user_id) WHERE left_at IS NULL;
 
--- Cohort lookups: members of a class over a time interval.
+-- Cohort lookups: only classroom_id is an equality predicate in the cohort
+-- overlap query; the INCLUDE columns let it run index-only.
 CREATE INDEX idx_cmp_cohort
-    ON classroom_membership_periods (classroom_id, user_id, joined_at);
+    ON classroom_membership_periods (classroom_id, joined_at)
+    INCLUDE (user_id, left_at);
 
 -- 2. BACKFILL — current members only (honest evidence; see header).
 INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at, left_at)
@@ -103,3 +105,55 @@ CREATE TRIGGER tg_classroom_members_hist_ins
 CREATE TRIGGER tg_classroom_members_hist_del
     AFTER DELETE ON classroom_members
     FOR EACH ROW EXECUTE FUNCTION classroom_membership_periods_write();
+
+-- 4. RECONCILIATION (DB review P2-1): the backfill snapshot can race live
+--    membership DML that holds its locks past the snapshot (rolling deploys).
+--    Running AFTER the triggers exist closes the remaining window: a DELETE
+--    committed between the passes has fired the close trigger; a member row
+--    that vanished before the triggers existed gets its ghost open period
+--    closed here; a member inserted between the snapshot and commit has
+--    fired the open trigger. Idempotent by construction.
+
+-- 4a. Members with no open period (missed by the snapshot, inserted before
+--     the triggers existed): open one anchored at added_at.
+INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at, left_at)
+SELECT cm.classroom_id, cm.user_id, cm.added_at, NULL
+FROM classroom_members cm
+WHERE NOT EXISTS (SELECT 1 FROM classroom_membership_periods p
+                  WHERE p.classroom_id = cm.classroom_id
+                    AND p.user_id = cm.user_id
+                    AND p.left_at IS NULL);
+
+-- 4b. Ghost open periods whose member row is gone (departed after the
+--     backfill snapshot, before the triggers existed): close them at the
+--     migration instant — the honest boundary of what we can know.
+UPDATE classroom_membership_periods p
+   SET left_at = GREATEST(now(), p.joined_at + '1 microsecond'::interval)
+ WHERE p.left_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM classroom_members cm
+                   WHERE cm.classroom_id = p.classroom_id
+                     AND cm.user_id = p.user_id);
+
+-- 5. FAIL-FAST VERIFICATION (V12/V24/V25 convention): every live member
+--    has exactly one open period, and every open period belongs to a live
+--    member — abort the migration rather than ship a broken history.
+DO $verify$
+DECLARE
+    v_missing BIGINT;
+    v_ghosts BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO v_missing FROM classroom_members cm
+     WHERE NOT EXISTS (SELECT 1 FROM classroom_membership_periods p
+                       WHERE p.classroom_id = cm.classroom_id
+                         AND p.user_id = cm.user_id AND p.left_at IS NULL);
+    SELECT COUNT(*) INTO v_ghosts FROM classroom_membership_periods p
+     WHERE p.left_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM classroom_members cm
+                       WHERE cm.classroom_id = p.classroom_id
+                         AND cm.user_id = p.user_id);
+    IF v_missing <> 0 OR v_ghosts <> 0 THEN
+        RAISE EXCEPTION 'V30 backfill verification failed: % members without open periods, % ghost open periods',
+            v_missing, v_ghosts;
+    END IF;
+END;
+$verify$;

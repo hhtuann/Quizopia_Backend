@@ -49,7 +49,8 @@ class ClassroomGradebookApiIntegrationTests {
     private JdbcTemplate jdbc;
     @Autowired
     private ObjectMapper objectMapper;
-
+    @Autowired
+    private jakarta.persistence.EntityManager em;
     private String tag;
     private long teacherA;
     private long teacherB;
@@ -462,6 +463,172 @@ class ClassroomGradebookApiIntegrationTests {
         // Only the assigned junction drives columns (no PUBLIC/unassigned sessions).
         JsonNode gradebook = gradebook(classA1, teacherA, null);
         assertThat(gradebook.get("sessions").size()).isEqualTo(1);
+    }
+
+    // ============================================================
+    // Review round-1 additions (issue #54 gate items + fixes)
+    // ============================================================
+
+    @Test
+    void mixedMaxScoresAcrossSessionsKeepPercentagesComparable() throws Exception {
+        long sA = windowedSession(teacherA, classA1, examA, "MXA" + tag, "-2 hours", "-1 hours");
+        long sB = windowedSession(teacherA, classA1, examA, "MXB" + tag, "-4 hours", "-3 hours");
+        member(classA1, s1, "-5 hours", null);
+        grade(attempt(sA, s1, 1, "GRADED"), "18.00", "20.00", "90.0000"); // out of 20
+        grade(attempt(sB, s1, 1, "GRADED"), "5.00", "10.00", "50.0000");  // out of 10
+
+        JsonNode gradebook = gradebook(classA1, teacherA, null);
+        JsonNode cellA = cellOf(gradebook.get("students"), s1, "MXA" + tag, gradebook);
+        JsonNode cellB = cellOf(gradebook.get("students"), s1, "MXB" + tag, gradebook);
+        assertThat(cellA.get("score").asDouble()).isEqualTo(18.0);
+        assertThat(cellA.get("maxScore").asDouble()).isEqualTo(20.0);
+        assertThat(cellB.get("score").asDouble()).isEqualTo(5.0);
+        assertThat(cellB.get("maxScore").asDouble()).isEqualTo(10.0);
+        // Mean over PERCENTAGES of incommensurable scales — never raw scores.
+        assertThat(rowByUser(gradebook.get("students"), s1).get("meanPercentage").asDouble())
+                .isEqualTo(70.0);
+    }
+
+    @Test
+    void exportWorkbookMatchesApiAndSanitizesFormulas() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "FX" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        // Display name that would execute as a formula if unsanitized.
+        long evil = jdbc.queryForObject("INSERT INTO users (username, email, password_hash, "
+                + "display_name) VALUES ('ev" + tag + "','ev" + tag + "@t.com','h',"
+                + "'=HYPERLINK(\"http://evil\",\"x\")') RETURNING id", Long.class);
+        member(classA1, evil, "-3 hours", null);
+        member(classA1, s1, "-3 hours", null);
+        grade(attempt(sess, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+
+        JsonNode gradebook = gradebook(classA1, teacherA, null);
+        MvcResult result = mockMvc.perform(get("/api/classrooms/" + classA1 + "/gradebook/export")
+                        .with(jwtFor(teacherA))).andExpect(status().isOk()).andReturn();
+        byte[] body = result.getResponse().getContentAsByteArray();
+
+        try (java.io.ByteArrayInputStream in = new java.io.ByteArrayInputStream(body);
+                org.apache.poi.xssf.usermodel.XSSFWorkbook wb =
+                        new org.apache.poi.xssf.usermodel.XSSFWorkbook(in)) {
+            org.apache.poi.ss.usermodel.Sheet sheet = wb.getSheet("Gradebook");
+            assertThat(sheet).isNotNull();
+            // Row order: displayName asc → evil ("=HYP…") sorts before "Student One".
+            String evilCell = sheet.getRow(1).getCell(1).getStringCellValue();
+            assertThat(evilCell)
+                    .as("formula-like display name is sanitized with a leading apostrophe")
+                    .startsWith("'");
+            // The API's SCORED row matches the exported numeric cells.
+            JsonNode row1 = rowByUser(gradebook.get("students"), s1);
+            org.apache.poi.ss.usermodel.Row exported = sheet.getRow(2);
+            assertThat(exported.getCell(1).getStringCellValue()).isEqualTo("Student One " + tag);
+            assertThat(exported.getCell(3).getNumericCellValue()).isEqualTo(
+                    row1.get("cells").get(0).get("score").asDouble());
+            assertThat(exported.getCell(4).getNumericCellValue()).isEqualTo(
+                    row1.get("cells").get(0).get("percentage").asDouble());
+            // Summary sheet carries the same cohort counters.
+            org.apache.poi.ss.usermodel.Sheet summary = wb.getSheet("Session Summary");
+            assertThat(summary.getRow(1).getCell(4).getNumericCellValue())
+                    .isEqualTo(gradebook.get("sessions").get(0).get("cohortSize").asDouble());
+        }
+    }
+
+    @Test
+    void sortTiesBreakByUserIdAscending() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "TB" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        member(classA1, s1, "-3 hours", null);
+        member(classA1, s2, "-3 hours", null);
+        member(classA1, s3, "-3 hours", null);
+        // No attempts → all meanPercentage NULL → pure userId tie-break.
+        JsonNode sorted = gradebook(classA1, teacherA, null, "sort", "meanPercentage",
+                "direction", "asc");
+        JsonNode students = sorted.get("students");
+        assertThat(students.get(0).get("userId").asLong()).isEqualTo(s1);
+        assertThat(students.get(1).get("userId").asLong()).isEqualTo(s2);
+        assertThat(students.get(2).get("userId").asLong()).isEqualTo(s3);
+        JsonNode desc = gradebook(classA1, teacherA, null, "sort", "meanPercentage",
+                "direction", "desc");
+        // Nulls stay LAST in desc; userId tie-break still ASC.
+        assertThat(desc.get("students").get(0).get("userId").asLong()).isEqualTo(s1);
+    }
+
+    @Test
+    void zeroCohortWindowSessionReportsNullMetricsNotZero() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "ZC" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        // No membership periods at all → empty cohort.
+        MvcResult result = mockMvc.perform(get("/api/classrooms/" + classA1
+                        + "/gradebook/sessions").with(jwtFor(teacherA)))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode col = objectMapper.readTree(result.getResponse().getContentAsString())
+                .get("items").get(0);
+        assertThat(col.get("cohortSize").asLong()).isZero();
+        assertThat(col.get("completionPercentage").isNull()).isTrue();
+        assertThat(col.get("averagePercentage").isNull()).isTrue();
+        JsonNode detail = analytics(classA1, teacherA, sess);
+        assertThat(detail.get("completionPercentage").isNull()).isTrue();
+        assertThat(detail.get("averagePercentage").isNull()).isTrue();
+    }
+
+    @Test
+    void exactWindowBoundaryInstantsAreHalfOpen() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "BD" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        // joined_at == window end exactly → OUT (half-open [) interval).
+        jdbc.update("INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at) "
+                + "SELECT " + classA1 + ", " + s1 + ", closed_at FROM exam_sessions WHERE id = "
+                + sess);
+        // left_at == window start exactly → OUT.
+        jdbc.update("INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at, "
+                + "left_at) SELECT " + classA1 + ", " + s2 + ", now() - interval '10 hours', "
+                + "starts_at FROM exam_sessions WHERE id = " + sess);
+        // joined_at == window start exactly → IN.
+        jdbc.update("INSERT INTO classroom_membership_periods (classroom_id, user_id, joined_at) "
+                + "SELECT " + classA1 + ", " + s3 + ", greatest(starts_at, opened_at) "
+                + "FROM exam_sessions WHERE id = " + sess);
+
+        JsonNode gradebook = gradebook(classA1, teacherA, null);
+        JsonNode students = gradebook.get("students");
+        assertThat(hasRow(students, s1)).isFalse();
+        assertThat(hasRow(students, s2)).isFalse();
+        assertThat(statusOfCell(students, s3, gradebook, "BD" + tag)).isEqualTo("NOT_ATTEMPTED");
+        assertThat(gradebook.get("sessions").get(0).get("cohortSize").asLong()).isEqualTo(1);
+    }
+
+    @Test
+    void archivedClassroomRemainsReportableReadOnly() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "AR" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        member(classA1, s1, "-3 hours", null);
+        jdbc.update("UPDATE classrooms SET status='ARCHIVED' WHERE id = " + classA1);
+        em.clear(); // same-persistence-context staleness (M2 lesson)
+
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/gradebook").with(jwtFor(teacherA)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/analytics").with(jwtFor(teacherA)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/classrooms/" + classA1 + "/gradebook/export")
+                        .with(jwtFor(teacherA))).andExpect(status().isOk());
+    }
+
+    @Test
+    void upcomingSessionsAreExcludedFromOverallCompletion() throws Exception {
+        // One completed windowed session (cohort 1, submitted 1 → 100%)…
+        long done = windowedSession(teacherA, classA1, examA, "OC1" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, done);
+        member(classA1, s1, "-3 hours", null);
+        grade(attempt(done, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+        // …and one UPCOMING session with the same prospective roster.
+        long upcoming = session(teacherA, examA, "OC2" + tag, "SCHEDULED");
+        assign(teacherA, classA1, upcoming);
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        // Review M3-Domain P2-1: prospective cohorts never dilute the KPI.
+        assertThat(overview.get("overallCompletionPercentage").asDouble()).isEqualTo(100.0);
+        JsonNode trendDone = overview.get("sessions").get(0);
+        JsonNode trendUpcoming = overview.get("sessions").get(1);
+        assertThat(trendDone.get("completionPercentage").asDouble()).isEqualTo(100.0);
+        assertThat(trendUpcoming.get("windowState").asText()).isEqualTo("UPCOMING");
+        assertThat(trendUpcoming.get("completionPercentage").isNull()).isTrue();
     }
 
     // ============================================================
