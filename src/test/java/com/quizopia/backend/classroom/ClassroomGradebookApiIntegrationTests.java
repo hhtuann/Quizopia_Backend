@@ -812,6 +812,27 @@ class ClassroomGradebookApiIntegrationTests {
         assertThat(overviewA2.get("overallCompletionPercentage").asDouble()).isEqualTo(100.0);
     }
 
+    @Test
+    void multiEpochMembershipCountsOncePerSessionInOverallPairs() throws Exception {
+        long sess = windowedSession(teacherA, classA1, examA, "FGE" + tag, "-2 hours", "-1 hours");
+        assign(teacherA, classA1, sess);
+        // TWO epochs of s1 overlapping the same window (left + rejoined) —
+        // COUNT(DISTINCT (session, user)) must dedupe them (P3-3 pin).
+        member(classA1, s1, "-5 hours", "-90 minutes");
+        member(classA1, s1, "-80 minutes", null);
+        grade(attempt(sess, s1, 1, "GRADED"), "7.00", "10.00", "70.0000");
+
+        JsonNode overview = analytics(classA1, teacherA, null);
+        assertThat(overview.get("eligiblePairs").asLong())
+                .as("two epochs of one learner = ONE pair")
+                .isEqualTo(1);
+        assertThat(overview.get("completedPairs").asLong()).isEqualTo(1);
+        assertThat(overview.get("overallCompletionPercentage").asDouble()).isEqualTo(100.0);
+        // Column-level cohort agrees (Set-based dedup on the same data).
+        assertThat(columnByCode(gradebook(classA1, teacherA, null)
+                .get("sessions"), "FGE" + tag).get("cohortSize").asLong()).isEqualTo(1);
+    }
+
     // ============================================================
     // Helpers
     // ============================================================

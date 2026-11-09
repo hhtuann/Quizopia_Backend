@@ -101,6 +101,27 @@ Missing results are NULL — never zero. SUBMITTED without grade = "pending
 grading" (distinct cell state). Per-student mean% and completion use the
 same primitives over the student's cohort-visible sessions.
 
+**Nullability (Final Gate P2-01).** `notAttempted` and per-session
+`completion%` are COMPLETED-session metrics: non-null only when the
+session's window has begun (`WINDOW`); NULL for UPCOMING (a prospective
+roster is not a denominator and nobody has "not attempted" an unopened
+assignment), DRAFT, CANCELLED and NOT_HELD — on every surface (gradebook
+columns, matrix footer, trend, single-session detail). Raw
+started/submitted/graded counters remain exact everywhere.
+
+**Class overall completion (Final Gate P2-02).**
+`overallCompletionPercentage = completedPairs / eligiblePairs` where the
+pairs are DISTINCT (session, learner) cohort memberships over **ALL**
+eligible WINDOW sessions of the class — aggregated in SQL, never sampled
+by the ≤20-session trend bound; a learner counts once per session
+(multi-epoch membership deduped) and correctly across sessions. Both pair
+counts are returned (`eligiblePairs`, `completedPairs`; NULL when no
+eligible pairs). Known cosmetic divergence (accepted): a session whose
+`startsAt` falls between the lifecycle refresh instant and the analytics
+read may appear on the trend while contributing nothing to the overall
+pairs for that request (sub-second window; nobody can have completed a
+session that started milliseconds ago).
+
 **BEST selection** reuses the existing SQL ordering verbatim
 (`percentage DESC NULLS LAST, final_score DESC, submitted_at ASC, attempt_id
 ASC` — identical to `BestResultComparator`); the CTE is extracted into a

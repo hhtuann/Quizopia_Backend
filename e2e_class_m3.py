@@ -408,7 +408,7 @@ def main():
     # Final Gate P2-01/P2-02: UPCOMING sessions must not distort analytics.
     # A1 state here: S1 window still OPEN, cohort {L1 (left mid-window,
     # submitted), L2 (rejoined member, no attempt)} = 2 eligible / 1 completed.
-    up = create_session(tok_a, exam_a, f"M3 Upcoming {run}", future=True)
+    up = create_session(tok_a, exam_a, f"M3 Upcoming {run}", future=True, schedule=True)
     s, _ = req("POST", f"/api/classrooms/{a1}/sessions/{up}", {}, tok_a)
     check("assign upcoming session to A1", s == 204, str(s))
     code, upd = req("GET", f"/api/classrooms/{a1}/analytics?sessionId={up}", None, tok_a)
