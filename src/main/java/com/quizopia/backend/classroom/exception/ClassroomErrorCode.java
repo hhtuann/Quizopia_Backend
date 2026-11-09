@@ -25,7 +25,7 @@ public enum ClassroomErrorCode {
 
     // ---------- CLASS-M3 gradebook & analytics (issue #54) ----------
     CLASSROOM_GRADEBOOK_INVALID_QUERY(HttpStatus.BAD_REQUEST, "Invalid gradebook query parameters"),
-    CLASSROOM_GRADEBOOK_TOO_LARGE(HttpStatus.BAD_REQUEST, "Gradebook cohort exceeds the supported size");
+    CLASSROOM_GRADEBOOK_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "Gradebook cohort exceeds the supported size");
 
     private final HttpStatusCode status;
     private final String defaultMessage;
