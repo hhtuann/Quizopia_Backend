@@ -354,7 +354,9 @@ def main():
           str(row2_re)[:120])
 
     # Scenario 13: joining AFTER closure must not fabricate non-submitters.
-    s_late = create_session(tok_b, exam_b, f"M3 Late {run}", future=True)
+    # Window already begun (starts -1m) so it can be opened and closed now;
+    # assignment happened while DRAFT (no window guard for DRAFT).
+    s_late = create_session(tok_b, exam_b, f"M3 Late {run}", future=False)
     s, _ = req("POST", f"/api/classrooms/{cb}/sessions/{s_late}", {}, tok_b)
     check("assign late session to B", s == 204, str(s))
     s, _ = req("POST", f"/api/exam-sessions/{s_late}/schedule", {}, tok_b)
@@ -373,7 +375,9 @@ def main():
     code, gb_b = gradebook(tok_b, cb)
     col_late = next((c for c in gb_b.get("sessions", []) if c["id"] == s_late), None)
     check("late joiner NOT in closed session cohort (no fabricated non-submitter)",
-          col_late and col_late["cohortSize"] == 0 and col_late["completionPercentage"] is None,
+          col_late and col_late["cohortSize"] == 1 and
+          col_late["completionPercentage"] == 0 and
+          row_for(gb_b.get("students", []), l4) is None,
           str(col_late)[:200])
     row_l3 = row_for(gb_b.get("students", []), l3)
     check("L3 (pre-closure member) in cohort as NOT_ATTEMPTED", row_l3 and
@@ -393,7 +397,7 @@ def main():
     code, joined = req("GET", "/api/classrooms/joined", None, tok_2)
     joined_items = joined.get("items", []) if isinstance(joined, dict) else []
     check("M1: joined list still works", code == 200 and
-          any(c["id"] == a1 for c in joined_items), f"{code}")
+          any(c["classroomId"] == a1 for c in joined_items), f"{code}")
     code, picker = req("GET", f"/api/classrooms/{a1}/sessions/assignable?size=50", None, tok_a)
     picker_items = picker.get("items", []) if isinstance(picker, dict) else []
     check("M2: assignable picker excludes assigned S1", code == 200 and
