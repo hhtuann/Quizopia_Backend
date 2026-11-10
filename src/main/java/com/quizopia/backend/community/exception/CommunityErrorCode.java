@@ -37,7 +37,6 @@ public enum CommunityErrorCode {
     COMMUNITY_SELF_RATING_NOT_ALLOWED(HttpStatus.CONFLICT,
             "Publishers cannot rate their own publication"),
     COMMUNITY_REPORT_NOT_OPEN(HttpStatus.CONFLICT, "The report is no longer open"),
-    COMMUNITY_ALIAS_TAKEN(HttpStatus.CONFLICT, "That public alias is already taken"),
     COMMUNITY_COMMENT_STATE_INVALID(HttpStatus.CONFLICT,
             "The comment is not in a state that allows this action"),
     COMMUNITY_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT,

@@ -84,6 +84,7 @@ public class CommunityModerationService {
     private final CommunityRateLimiter rateLimiter;
     private final CommunityCommentRepository comments;
     private final CommunityCommentReportRepository commentReports;
+    private final CommunityCommentAuthorStore authorStore;
     private final Clock clock;
 
     public CommunityModerationService(CommunityPublicationRepository publications,
@@ -95,6 +96,7 @@ public class CommunityModerationService {
             CommunityRateLimiter rateLimiter,
             CommunityCommentRepository comments,
             CommunityCommentReportRepository commentReports,
+            CommunityCommentAuthorStore authorStore,
             Clock clock) {
         this.publications = publications;
         this.reports = reports;
@@ -105,6 +107,7 @@ public class CommunityModerationService {
         this.rateLimiter = rateLimiter;
         this.comments = comments;
         this.commentReports = commentReports;
+        this.authorStore = authorStore;
         this.clock = clock;
     }
 
@@ -305,10 +308,14 @@ public class CommunityModerationService {
         Map<Long, ModerationPublicationSummary> summaries = publicationSummaries(
                 commentById.values().stream().map(CommunityComment::getPublicationId)
                         .distinct().toList());
+        Map<Long, String> authorNames = authorStore.displayNamesOf(
+                commentById.values().stream().map(CommunityComment::getAuthorUserId)
+                        .distinct().toList());
 
         return new PageResponse<>(
                 result.getContent().stream()
-                        .map(report -> toCommentQueueEntry(report, commentById, summaries))
+                        .map(report -> toCommentQueueEntry(report, commentById, authorNames,
+                                summaries))
                         .toList(),
                 result.getNumber(), result.getSize(), result.getTotalElements(),
                 result.getTotalPages(), pageable.getSort().toString());
@@ -601,7 +608,10 @@ public class CommunityModerationService {
         Map<Long, CommunityComment> commentById = comment == null
                 ? Map.of()
                 : Map.of(comment.getId(), comment);
-        return toCommentQueueEntry(report, commentById,
+        Map<Long, String> authorNames = comment == null
+                ? Map.of()
+                : authorStore.displayNamesOf(List.of(comment.getAuthorUserId()));
+        return toCommentQueueEntry(report, commentById, authorNames,
                 publicationSummaries(comment == null
                         ? List.of()
                         : List.of(comment.getPublicationId())));
@@ -609,13 +619,17 @@ public class CommunityModerationService {
 
     private static ModerationCommentReportEntry toCommentQueueEntry(
             CommunityCommentReport report, Map<Long, CommunityComment> commentById,
+            Map<Long, String> authorNames,
             Map<Long, ModerationPublicationSummary> summaries) {
         CommunityComment comment = commentById.get(report.getCommentId());
         return new ModerationCommentReportEntry(
                 report.getId(),
                 report.getCommentId(),
                 comment == null ? null : new ModerationCommentSummary(
-                        comment.getBody(), comment.getAuthorAlias(), comment.getCreatedAt()),
+                        comment.getBody(),
+                        authorNames.getOrDefault(comment.getAuthorUserId(),
+                                CommunityCommentAuthorStore.FALLBACK_AUTHOR_NAME),
+                        comment.getCreatedAt()),
                 comment == null ? null : summaries.get(comment.getPublicationId()),
                 report.getReporterUserId(),
                 report.getReasonCode().name(),
@@ -627,11 +641,12 @@ public class CommunityModerationService {
                 report.getCreatedAt());
     }
 
-    private static ModerationCommentEntry toCommentEntry(CommunityComment comment) {
+    /** {@code authorName} = the author's CURRENT display name (Rev 4 / #72). */
+    private ModerationCommentEntry toCommentEntry(CommunityComment comment) {
         return new ModerationCommentEntry(
                 comment.getId(),
                 comment.getPublicationId(),
-                comment.getAuthorAlias(),
+                authorStore.displayNameOf(comment.getAuthorUserId()),
                 comment.getBody(),
                 comment.getState().name(),
                 comment.getCreatedAt(),

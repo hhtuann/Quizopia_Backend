@@ -30,13 +30,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * §6 race behavior of the #66 comment paths (ADR-007) at the service
- * level: concurrent same-user FIRST comments collapse onto ONE
- * identity (the ON CONFLICT (user_id) DO NOTHING profile upsert + the
- * post-upsert re-select — every comment snapshots the same stored
- * alias); a two-user ci-unique alias race yields exactly one 201 and
- * one 409 COMMUNITY_ALIAS_TAKEN with ZERO comment rows for the loser;
- * the same-reporter comment-report dedupe race — two concurrent
+ * §6 race behavior of the #66 comment paths (ADR-007, Rev 4 / #72) at
+ * the service level: concurrent same-user comments all succeed and
+ * carry the SAME server-derived display name (no alias identity to
+ * collapse — the V31 profile upsert is gone); two racing users with
+ * IDENTICAL display names BOTH succeed (duplicate names are legal —
+ * the old one-winner 409 ALIAS_TAKEN contract is retired); the
+ * same-reporter comment-report dedupe race — two concurrent
  * reportComment calls collapse onto ONE OPEN row (one 201 + one 200
  * carrying the SAME report id); and the delete-then-edit tombstone
  * race — a PATCH that raced a committed DELETE gets 409
@@ -80,79 +80,60 @@ class CommunityCommentConcurrencyIntegrationTests {
     }
 
     // ==================================================================
-    // concurrent same-user first comments → one identity
+    // concurrent same-user comments → all succeed, one shared name
     // ==================================================================
 
     @Test
-    void eightConcurrentFirstCommentsFromOneUserShareOneStoredIdentity() throws Exception {
-        String alias = "Solo-" + System.nanoTime();
+    void eightConcurrentCommentsFromOneUserAllCarryTheSameDisplayName() throws Exception {
         Callable<String> task = () -> commentService.createComment(
-                studentId, publicationId, new CreateCommentRequest("hello", alias))
-                .getAuthorAlias();
+                studentId, publicationId, new CreateCommentRequest("hello"))
+                .authorName();
 
-        List<String> snapshots = runConcurrently(task, 8);
+        List<String> names = runConcurrently(task, 8);
 
-        // ONE profile row; EVERY comment snapshotted the SAME stored alias.
-        assertThat(snapshots).hasSize(8).containsOnly(alias);
+        // Every comment succeeded with the SAME server-derived name; the
+        // retired alias machinery (member profiles) stays untouched.
+        assertThat(names).hasSize(8).containsOnly("CC");
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
-                Integer.class, studentId)).isEqualTo(1);
+                Integer.class, studentId)).isZero();
         assertThat(jdbc.queryForObject(
-                "SELECT count(DISTINCT author_alias) FROM community_comments WHERE author_user_id = ?",
-                Integer.class, studentId)).isEqualTo(1);
+                "SELECT count(*) FROM community_comments WHERE author_user_id = ?",
+                Integer.class, studentId)).isEqualTo(8);
     }
 
     // ==================================================================
-    // two-user ci collision race → one 201, one 409, zero loser rows
+    // two users with identical display names racing → BOTH succeed
     // ==================================================================
 
     @Test
-    void twoRacingUsersOnOneAliasYieldExactlyOne201AndOne409() throws Exception {
-        String alias = "Clash-" + System.nanoTime();
+    void twoRacingUsersWithIdenticalDisplayNamesBothCreateTheirComments() throws Exception {
         long otherUser = newUser("cco", "STUDENT");
+        jdbc.update("UPDATE users SET display_name = 'CC' WHERE id IN (?, ?)",
+                studentId, otherUser);
 
         AtomicInteger created = new AtomicInteger();
-        AtomicInteger taken = new AtomicInteger();
         java.util.function.Consumer<Long> racer = userId -> {
-            try {
-                commentService.createComment(
-                        userId, publicationId, new CreateCommentRequest("race", alias));
-                created.incrementAndGet();
-            } catch (CommunityException ex) {
-                if (ex.getErrorCode() == CommunityErrorCode.COMMUNITY_ALIAS_TAKEN) {
-                    taken.incrementAndGet();
-                } else {
-                    throw ex;
-                }
-            }
+            commentService.createComment(userId, publicationId, new CreateCommentRequest("race"));
+            created.incrementAndGet();
         };
         // The two pool threads race for DIFFERENT users from a shared
-        // barrier; the assertions below never depend on which won.
+        // barrier; duplicate display names are legal — no loser, no 409.
         runMixed(() -> racer.accept(studentId), () -> racer.accept(otherUser));
 
-        assertThat(created.get()).as("exactly one racer created the profile + comment").isEqualTo(1);
-        assertThat(taken.get()).as("exactly one racer got 409 ALIAS_TAKEN").isEqualTo(1);
-
-        // Exactly one profile row on the ci-unique alias; the loser left
-        // NOTHING behind — no comment row, no profile row (§4 atomic).
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_member_profiles WHERE alias = ?",
-                Integer.class, alias)).isEqualTo(1);
+        assertThat(created.get()).as("both racers created their comment").isEqualTo(2);
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM community_comments WHERE publication_id = ?",
-                Integer.class, publicationId)).isEqualTo(1);
-        long winner = jdbc.queryForObject(
-                "SELECT user_id FROM community_member_profiles WHERE alias = ?",
-                Long.class, alias);
-        long loser = winner == studentId ? otherUser : studentId;
+                Integer.class, publicationId)).isEqualTo(2);
         assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_comments WHERE author_user_id = ?",
-                Integer.class, loser))
-                .as("the 409 loser's comment POST failed atomically")
+                "SELECT count(DISTINCT author_user_id) FROM community_comments WHERE publication_id = ?",
+                Integer.class, publicationId))
+                .as("each racing user authored exactly their own row")
+                .isEqualTo(2);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM community_member_profiles", Integer.class))
+                .as("the retired alias surface receives no writes")
                 .isZero();
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
-                Integer.class, loser)).isZero();
     }
 
 
@@ -164,8 +145,8 @@ class CommunityCommentConcurrencyIntegrationTests {
     void patchRacingACommittedDeleteGets409AndTheBodyStaysCleared() {
         long commentId = commentService.createComment(
                 studentId, publicationId,
-                new CreateCommentRequest("to delete", "Racer-" + System.nanoTime()))
-                .getId();
+                new CreateCommentRequest("to delete"))
+                .commentId();
 
         // Deterministic interleaving of "PATCH loaded VISIBLE, DELETE
         // committed, PATCH UPDATE fires": the tombstone commits first
@@ -193,8 +174,8 @@ class CommunityCommentConcurrencyIntegrationTests {
         for (int round = 0; round < 5; round++) {
             long commentId = commentService.createComment(
                     studentId, publicationId,
-                    new CreateCommentRequest("round " + round, "Racer-" + System.nanoTime()))
-                    .getId();
+                    new CreateCommentRequest("round " + round))
+                    .commentId();
 
             // PATCH and DELETE released from a shared barrier: whichever
             // order they land in, the PATCH is 200 (won the race BEFORE the
@@ -254,8 +235,8 @@ class CommunityCommentConcurrencyIntegrationTests {
     void concurrentSameReporterCommentReportsYieldExactlyOneOpenRow() throws Exception {
         long commentId = commentService.createComment(
                 studentId, publicationId,
-                new CreateCommentRequest("report race target", "Racer-" + System.nanoTime()))
-                .getId();
+                new CreateCommentRequest("report race target"))
+                .commentId();
         long reporterId = newUser("ccr", "STUDENT");
 
         Callable<String> task = () -> {

@@ -103,6 +103,14 @@ class MarkdownQuestionImportApiIntegrationTests {
 
     @AfterEach
     void cleanupCommittedTestData() {
+        // Same order-independence guard as QuestionImportApiIntegrationTests:
+        // exam_questions rows committed by earlier non-transactional suites
+        // reference the question_versions deleted wholesale below (RESTRICT).
+        jdbc.update("""
+                        DELETE FROM exam_questions eq
+                        WHERE NOT EXISTS (SELECT 1 FROM attempt_questions aq
+                                          WHERE aq.exam_question_id = eq.id)
+                        """);
         jdbc.update("DELETE FROM question_options");
         jdbc.update("DELETE FROM question_versions");
         jdbc.update("DELETE FROM questions");

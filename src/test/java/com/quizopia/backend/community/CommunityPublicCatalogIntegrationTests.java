@@ -103,6 +103,22 @@ class CommunityPublicCatalogIntegrationTests {
 
     @BeforeEach
     void setUp() {
+        // Order-independence guard: these tests assert EXACT counts on the
+        // global visible catalog, so the suite must own the whole
+        // publication set no matter which suites ran before it (the class
+        // historically relied on running EARLY in surefire's filesystem
+        // order — fragile: any rename/addition in this package can move it
+        // after a non-transactional suite and its committed fixtures then
+        // break the counts). Earlier suites' rows are finished-test
+        // garbage: clear the RESTRICT-parented audit tables first, then
+        // every publication (comments/likes/ratings/bookmarks/tags/
+        // comment-reports/fork-records CASCADE). This class is
+        // @Transactional, so the sweep rolls back with each test and is
+        // re-run per test — always the same deterministic starting catalog.
+        jdbc.update("DELETE FROM community_moderation_actions");
+        jdbc.update("DELETE FROM community_reports");
+        jdbc.update("DELETE FROM community_publications");
+
         long raw = insertUser("pct");
         teacherId = raw;
         teacherUsername = "pct" + (seq - 1);

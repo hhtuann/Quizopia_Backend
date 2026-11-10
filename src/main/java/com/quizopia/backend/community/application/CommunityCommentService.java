@@ -1,9 +1,11 @@
 package com.quizopia.backend.community.application;
 
+import com.quizopia.backend.community.application.CommunityCommentAuthorStore.VisibleCommentRow;
 import com.quizopia.backend.community.domain.model.CommunityComment;
 import com.quizopia.backend.community.domain.model.CommunityCommentReport;
 import com.quizopia.backend.community.domain.model.CommunityCommentState;
 import com.quizopia.backend.community.domain.model.CommunityReportReason;
+import com.quizopia.backend.community.dto.CommentResponse;
 import com.quizopia.backend.community.dto.CommunityCommentReportResponse;
 import com.quizopia.backend.community.dto.CreateCommentRequest;
 import com.quizopia.backend.community.dto.PublicCommentEntry;
@@ -14,38 +16,41 @@ import com.quizopia.backend.community.exception.CommunityException;
 import com.quizopia.backend.community.repository.CommunityCommentReportRepository;
 import com.quizopia.backend.community.repository.CommunityCommentRepository;
 import com.quizopia.backend.question.dto.PageResponse;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
 
 /**
- * Comment application service (ADR-007 §5/§6, issue #66): create,
- * public page, owner PATCH/DELETE and comment reports. Every write
- * runs rate admission then the permission gate inside the write
- * transaction, but semantic validation is placed per route, not in
- * one fixed module-wide order: {@code reportComment} validates the
+ * Comment application service (ADR-007 §5/§6, issue #66; ADR-007 Rev 4
+ * / #72): create, public page, owner PATCH/DELETE and comment reports.
+ * Every write runs rate admission then the permission gate inside the
+ * write transaction, but semantic validation is placed per route, not
+ * in one fixed module-wide order: {@code reportComment} validates the
  * bounded reason/details shape FIRST — garbage never admits, the
- * rating-PUT precedent — before the COMMENT_REPORT 5/h user + 20/h
- * IP admission pair and the ACTIVE + COMMUNITY_REPORT gate;
+ * rating-PUT precedent — before the COMMENT_REPORT 5/h user + 20/h IP
+ * admission pair and the ACTIVE + COMMUNITY_REPORT gate;
  * {@code createComment} admits (COMMENT_CREATE 10/h), gates (ACTIVE +
  * effective COMMUNITY_COMMENT), runs the §4 visibility predicate →
  * anti-enumeration 404 and only THEN validates the body, before the
- * §4 alias flow (validate, upsert the member profile, snapshot the
- * post-upsert STORED alias; a different-user ci-collision aborts
- * atomically → 409 COMMUNITY_ALIAS_TAKEN — constraint-name mapping
- * of the DataIntegrityViolationException, fork-precedent recovery:
- * the transaction is already doomed, the mapping only renames the
- * failure, never a 500) and the insert; {@code updateComment} admits
- * (COMMENT_EDIT 20/h) and gates before validating the body and firing
- * the §6 CAS, while {@code deleteComment} (COMMENT_DELETE 30/h) has
- * no body at all. The comment buckets stay separate from the
- * publication REPORT_* policies — the policy segment in the HMAC key
- * exists for exactly this.
+ * insert; {@code updateComment} admits (COMMENT_EDIT 20/h) and gates
+ * before validating the body and firing the §6 CAS, while
+ * {@code deleteComment} (COMMENT_DELETE 30/h) has no body at all. The
+ * comment buckets stay separate from the publication REPORT_* policies
+ * — the policy segment in the HMAC key exists for exactly this.
+ *
+ * <p><b>Author identity (Rev 4, #72)</b>: the comment author is the
+ * authenticated user, full stop. The request carries the body only; a
+ * legacy {@code alias} field is ignored by deserialization and can
+ * never override the displayed name. The PUBLIC author name is the
+ * author's CURRENT {@code users.display_name}, resolved server-side at
+ * read time by {@link CommunityCommentAuthorStore} (duplicates
+ * allowed; profile renames are reflected immediately; a privacy-safe
+ * generic fallback replaces a missing name). The V31 alias consent
+ * lifecycle (member profiles, alias validation, alias-taken 409) is
+ * retired — see V32 and ADR-007 Rev 4.
  *
  * <p>Owner PATCH/DELETE check existence + ownership ONLY (§5 — users
  * keep control of their own UGC even on hidden publications; a hidden
@@ -59,9 +64,14 @@ import java.time.Instant;
  * state, clearing the body and preserving {@code edited_at}.
  *
  * <p>The public page is VISIBLE-only, newest-first
- * ({@code created_at DESC, id DESC}), size 1..50 default 20, from the
- * frozen single-table index scan — page + count, no N+1 (the alias is
- * denormalized on the comment row).
+ * ({@code created_at DESC, id DESC}), size 1..50 default 20, served by
+ * the two-statement {@link CommunityCommentAuthorStore} projection
+ * (count + JOIN page — no per-comment user lookup, no N+1). Item
+ * ownership is the server-computed {@code isMine} flag: the OPTIONAL
+ * authenticated caller id (present when a valid JWT accompanies the
+ * otherwise anonymous public GET) compared against
+ * {@code author_user_id} — never name-text equality, and anonymous
+ * callers see {@code false} on every item.
  */
 @Service
 public class CommunityCommentService {
@@ -74,16 +84,9 @@ public class CommunityCommentService {
     static final int MAX_PAGE_SIZE = 50;
     static final int DEFAULT_PAGE_SIZE = 20;
 
-    /**
-     * The §4 ci-unique member alias index — the only constraint whose
-     * violation maps to 409 COMMUNITY_ALIAS_TAKEN.
-     */
-    private static final String ALIAS_CI_UNIQUE_CONSTRAINT =
-            "uk_community_member_profiles_alias_ci";
-
     private final CommunityCommentRepository comments;
     private final CommunityCommentReportRepository commentReports;
-    private final CommunityAliasService aliasService;
+    private final CommunityCommentAuthorStore authorStore;
     private final CommunityAuthorizationService auth;
     private final CommunityRateLimiter rateLimiter;
     private final CommunityVisibilityStore visibilityStore;
@@ -91,14 +94,14 @@ public class CommunityCommentService {
 
     public CommunityCommentService(CommunityCommentRepository comments,
             CommunityCommentReportRepository commentReports,
-            CommunityAliasService aliasService,
+            CommunityCommentAuthorStore authorStore,
             CommunityAuthorizationService auth,
             CommunityRateLimiter rateLimiter,
             CommunityVisibilityStore visibilityStore,
             Clock clock) {
         this.comments = comments;
         this.commentReports = commentReports;
-        this.aliasService = aliasService;
+        this.authorStore = authorStore;
         this.auth = auth;
         this.rateLimiter = rateLimiter;
         this.visibilityStore = visibilityStore;
@@ -114,7 +117,7 @@ public class CommunityCommentService {
     // ============================================================
 
     @Transactional
-    public CommunityComment createComment(Long userId, Long publicationId,
+    public CommentResponse createComment(Long userId, Long publicationId,
             CreateCommentRequest request) {
         // (1) §5 admission — first statement of the write transaction.
         rateLimiter.admitUser(CommunityRateLimiter.Policy.COMMENT_CREATE, userId);
@@ -130,18 +133,10 @@ public class CommunityCommentService {
         // (4) Body bounds — after admission/permission/visibility.
         String body = validateBody(request.body());
 
-        // (5) §4 alias flow + (6) insert, one transaction: a different-user
-        // alias collision aborts BOTH atomically → 409 ALIAS_TAKEN.
-        String storedAlias;
-        try {
-            storedAlias = aliasService.resolveAliasForNewComment(userId, request.alias());
-        } catch (DataIntegrityViolationException ex) {
-            if (isAliasCiViolation(ex)) {
-                throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_TAKEN);
-            }
-            throw ex;
-        }
-        return comments.save(new CommunityComment(publicationId, userId, storedAlias, body));
+        // (5) Insert — author identity is the authenticated user; no
+        // client-supplied name, no alias snapshot (V32: NULL).
+        CommunityComment comment = comments.save(new CommunityComment(publicationId, userId, body));
+        return toResponse(comment, authorStore.displayNameOf(userId));
     }
 
     // ============================================================
@@ -155,19 +150,28 @@ public class CommunityCommentService {
      * method only enforces the predicate and pages. No tombstone
      * placeholders (§3 deviation) — {@code totalElements} counts
      * VISIBLE only, the same predicate as the summary's commentCount.
+     *
+     * <p>{@code callerUserId} is the OPTIONAL authenticated caller
+     * (null when anonymous): it ONLY computes the per-item
+     * {@code isMine} flag — true exactly when the caller authored the
+     * comment — and never changes filtering or shape. Anonymous calls
+     * get {@code isMine:false} on every item.
      */
-    public PageResponse<PublicCommentEntry> publicPage(long publicationId, int page, int size) {
+    public PageResponse<PublicCommentEntry> publicPage(
+            long publicationId, int page, int size, Long callerUserId) {
         if (!visibilityStore.isVisible(publicationId)) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_NOT_FOUND);
         }
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
         int safePage = Math.max(page, 0);
-        Page<CommunityComment> result = comments.findByPublicationIdAndStateOrderByCreatedAtDescIdDesc(
-                publicationId, CommunityCommentState.VISIBLE, PageRequest.of(safePage, safeSize));
-        return new PageResponse<>(
-                result.getContent().stream().map(CommunityCommentService::toPublicEntry).toList(),
-                result.getNumber(), result.getSize(), result.getTotalElements(), result.getTotalPages(),
-                "createdAt DESC, id DESC");
+        CommunityCommentAuthorStore.VisibleCommentPage result =
+                authorStore.visiblePage(publicationId, safePage, safeSize);
+        List<PublicCommentEntry> items = result.rows().stream()
+                .map(row -> toPublicEntry(row, callerUserId))
+                .toList();
+        int totalPages = (int) ((result.totalElements() + safeSize - 1) / safeSize);
+        return new PageResponse<>(items, safePage, safeSize,
+                result.totalElements(), totalPages, "createdAt DESC, id DESC");
     }
 
     // ============================================================
@@ -182,7 +186,7 @@ public class CommunityCommentService {
      * byte-identical comment 404.
      */
     @Transactional
-    public CommunityComment updateComment(Long userId, Long commentId,
+    public CommentResponse updateComment(Long userId, Long commentId,
             UpdateCommentRequest request) {
         rateLimiter.admitUser(CommunityRateLimiter.Policy.COMMENT_EDIT, userId);
         auth.requireActiveUserWithPermission(userId, PERMISSION_COMMENT);
@@ -196,8 +200,9 @@ public class CommunityCommentService {
             }
             throw new CommunityException(CommunityErrorCode.COMMUNITY_COMMENT_NOT_FOUND);
         }
-        return comments.findById(commentId)
+        CommunityComment comment = comments.findById(commentId)
                 .orElseThrow(() -> new CommunityException(CommunityErrorCode.COMMUNITY_COMMENT_NOT_FOUND));
+        return toResponse(comment, authorStore.displayNameOf(userId));
     }
 
     // ============================================================
@@ -316,37 +321,25 @@ public class CommunityCommentService {
         }
     }
 
-    /**
-     * Exact-match walk of the exception cause chain for the §4 alias
-     * ci-unique index (fork-precedent {@code isIdempotencyConflict}
-     * shape — tolerating a schema-qualified prefix only, so a
-     * different constraint whose name merely contains this one is
-     * never mistaken for the collision).
-     */
-    private static boolean isAliasCiViolation(DataIntegrityViolationException ex) {
-        Throwable cause = ex;
-        while (cause != null) {
-            if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
-                String name = cve.getConstraintName();
-                if (name != null
-                        && ALIAS_CI_UNIQUE_CONSTRAINT.equals(lastIdentifierToken(name))) {
-                    return true;
-                }
-            }
-            cause = cause.getCause();
-        }
-        return false;
+    /** Server-computed ownership: caller id vs author id — never name text. */
+    private static PublicCommentEntry toPublicEntry(VisibleCommentRow row, Long callerUserId) {
+        return new PublicCommentEntry(
+                row.commentId(),
+                row.authorName(),
+                row.body(),
+                row.createdAt(),
+                row.editedAt(),
+                callerUserId != null && callerUserId.equals(row.authorUserId()));
     }
 
-    private static String lastIdentifierToken(String constraintName) {
-        String trimmed = constraintName.trim();
-        int dot = trimmed.lastIndexOf('.');
-        return dot < 0 ? trimmed : trimmed.substring(dot + 1);
-    }
-
-    private static PublicCommentEntry toPublicEntry(CommunityComment comment) {
-        return new PublicCommentEntry(comment.getId(), comment.getAuthorAlias(),
-                comment.getBody(), comment.getCreatedAt(), comment.getEditedAt());
+    static CommentResponse toResponse(CommunityComment comment, String authorName) {
+        return new CommentResponse(
+                comment.getId(),
+                comment.getPublicationId(),
+                authorName,
+                comment.getBody(),
+                comment.getCreatedAt(),
+                comment.getEditedAt());
     }
 
     static CommunityCommentReportResponse toResponse(CommunityCommentReport report) {

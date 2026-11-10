@@ -1,7 +1,6 @@
 package com.quizopia.backend.community.api;
 
 import com.quizopia.backend.community.application.CommunityCommentService;
-import com.quizopia.backend.community.domain.model.CommunityComment;
 import com.quizopia.backend.community.dto.CommentResponse;
 import com.quizopia.backend.community.dto.CommunityCommentReportResponse;
 import com.quizopia.backend.community.dto.CreateCommentRequest;
@@ -23,13 +22,17 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Comment API (ADR-007 §5, issue #66): create on a publication, owner
- * PATCH/DELETE, comment reports. Authorization is service-layer
- * (deny-by-default DB checks); the security chain only authenticates.
- * Every response carries {@code Cache-Control: no-store} (§7).
+ * Comment API (ADR-007 §5, issue #66; Rev 4 / #72): create on a
+ * publication, owner PATCH/DELETE, comment reports. Authorization is
+ * service-layer (deny-by-default DB checks); the security chain only
+ * authenticates. Every response carries {@code Cache-Control: no-store}
+ * (§7).
  *
- * <p>Create: 201 with the comment DTO (alias §4; 409
- * COMMUNITY_ALIAS_TAKEN on a different-user ci collision). PATCH:
+ * <p>Create: 201 with the comment DTO — the request carries the body
+ * ONLY; the author identity and the public {@code authorName} (the
+ * account's current display name) are derived exclusively from the
+ * authenticated {@code jwt} subject, never from client payload (a
+ * legacy {@code alias} field is ignored at deserialization). PATCH:
  * owner-only via the §6 state-guarded CAS — foreign/absent 404s are
  * byte-identical, own-but-not-VISIBLE is 409
  * COMMUNITY_COMMENT_STATE_INVALID. DELETE: idempotent 200 over any own
@@ -51,13 +54,12 @@ public class CommunityCommentController {
             @PathVariable Long publicationId,
             @RequestBody(required = false) CreateCommentRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        CreateCommentRequest safe = request == null
-                ? new CreateCommentRequest(null, null) : request;
-        CommunityComment comment = commentService.createComment(
+        CreateCommentRequest safe = request == null ? new CreateCommentRequest(null) : request;
+        CommentResponse comment = commentService.createComment(
                 Long.valueOf(jwt.getSubject()), publicationId, safe);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .cacheControl(CacheControl.noStore())
-                .body(toResponse(comment));
+                .body(comment);
     }
 
     @PatchMapping("/comments/{commentId}")
@@ -66,10 +68,10 @@ public class CommunityCommentController {
             @RequestBody(required = false) UpdateCommentRequest request,
             @AuthenticationPrincipal Jwt jwt) {
         UpdateCommentRequest safe = request == null ? new UpdateCommentRequest(null) : request;
-        CommunityComment comment = commentService.updateComment(
+        CommentResponse comment = commentService.updateComment(
                 Long.valueOf(jwt.getSubject()), commentId, safe);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(toResponse(comment));
+                .body(comment);
     }
 
     /** Idempotent owner soft-delete (§5): 200 always once owned, no body. */
@@ -93,15 +95,5 @@ public class CommunityCommentController {
         return ResponseEntity.status(submitted.created() ? HttpStatus.CREATED : HttpStatus.OK)
                 .cacheControl(CacheControl.noStore())
                 .body(submitted.report());
-    }
-
-    private static CommentResponse toResponse(CommunityComment comment) {
-        return new CommentResponse(
-                comment.getId(),
-                comment.getPublicationId(),
-                comment.getAuthorAlias(),
-                comment.getBody(),
-                comment.getCreatedAt(),
-                comment.getEditedAt());
     }
 }

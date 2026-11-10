@@ -2,12 +2,13 @@
 """Quizopia P3-C Community Social E2E (#69 gate) against the dockerized stack.
 
 Journeys: guest aggregates + comments read -> login-gated actions -> like
-toggle -> rating (self-rating 409, alias collision 409, impersonation 400) ->
-comment create/edit/delete + foreign-deny -> comment report -> moderator
-hide/restore + tombstone -> ineligible publication exposes nothing -> fork +
-bookmark regression.
+toggle -> rating (self-rating 409) -> comment create/edit/delete with the
+Rev 4 display-name contract (server-derived authorName, duplicate names,
+rename reflection, server-computed isMine, foreign-deny) -> comment report
+-> moderator hide/restore + tombstone -> ineligible publication exposes
+nothing -> fork + bookmark regression.
 
-Run AFTER rebuilding the backend container on feature/p3-c-social:
+Run AFTER rebuilding the backend container on feature/72-comment-display-name:
 python e2e_community_social.py   (stack on localhost:8080, Mailpit :8025)
 Exit 0 = all checks passed.
 """
@@ -156,25 +157,37 @@ def main():
     check("rating 201 avg 4.0", s == 201 and r.get("average") == 4.0 and r.get("myRating") == 4, f"{s} {r}")
     s, r = req("PUT", f"/api/community/publications/{pub_id}/rating", {"rating": 5}, token=s_tok)
     check("rating update 200 avg 5.0", s == 200 and r.get("average") == 5.0 and r.get("ratingCount") == 1, f"{s} {r}")
-    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "Great quiz!", "alias": f"Stu{run}"}, token=s_tok)
-    check("comment 201 with alias", s == 201 and r.get("authorAlias") == f"Stu{run}", f"{s} {r}")
+    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "Great quiz!"}, token=s_tok)
+    check("comment 201 shows account displayName", s == 201 and r.get("authorName") == student.title(), f"{s} {r}")
     c1 = r.get("commentId")
     s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "second without alias"}, token=s_tok)
-    check("second comment reuses alias", s == 201 and r.get("authorAlias") == f"Stu{run}", f"{s} {r}")
+    check("second comment same server-derived name", s == 201 and r.get("authorName") == student.title(), f"{s} {r}")
     c2 = r.get("commentId")
+    s, comments = req("GET", f"/api/public/community/publications/{pub_id}/comments", token=s_tok)
+    mine = {i["commentId"]: i.get("isMine") for i in comments.get("items", [])}
+    check("authenticated isMine flags own comments", mine.get(c1) is True and mine.get(c2) is True, f"{mine}")
+    check("comments page no identity keys", not forbidden_keys(comments), str(forbidden_keys(comments)))
     s, r = req("PATCH", f"/api/community/comments/{c1}", {"body": "Edited!"}, token=s_tok)
     check("own edit 200 + editedAt", s == 200 and r.get("editedAt") is not None, f"{s} {r}")
 
-    print("== self-rating + alias contract ==")
+    print("== self-rating + display-name contract ==")
     s, r = req("PUT", f"/api/community/publications/{pub_id}/rating", {"rating": 5}, token=a_tok)
     check("author self-rating 409", s == 409 and isinstance(r, dict) and r.get("code") == "COMMUNITY_SELF_RATING_NOT_ALLOWED", f"{s} {r}")
-    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "x", "alias": f"c3author{run}"}, token=f_tok)
-    check("alias == username rejected 400", s == 400, f"{s} {r}")
-    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "x", "alias": f"Prof{run}"}, token=f_tok)
-    check("alias == publication author rejected 400", s == 400, f"{s} {r}")
-    s, r = req("POST", f"/api/community/publications/{pub_id}/comments", {"body": "Forker was here", "alias": f"Twins{run}"}, token=f_tok)
-    check("forker alias ok 201", s == 201, f"{s} {r}")
+    # Duplicate display names are legal; a spoofed alias field is ignored.
+    sql(f"UPDATE users SET display_name = '{student.title()}' WHERE username = '{forker}'")
+    s, r = req("POST", f"/api/community/publications/{pub_id}/comments",
+               {"body": "Forker was here", "alias": "Impostor Name"}, token=f_tok)
+    check("duplicate displayName + spoofed alias ignored", s == 201 and r.get("authorName") == student.title(), f"{s} {r}")
     c3 = r.get("commentId")
+    s, comments = req("GET", f"/api/public/community/publications/{pub_id}/comments", token=s_tok)
+    twins = [i for i in comments.get("items", []) if i.get("commentId") in (c1, c2, c3)]
+    check("identical names, ownership still server-side",
+          all(i.get("isMine") == (i.get("commentId") != c3) for i in twins), f"{twins}")
+    # Profile rename reflects on existing comments immediately (read-time JOIN).
+    sql(f"UPDATE users SET display_name = 'Renamed {run}' WHERE username = '{forker}'")
+    s, comments = req("GET", f"/api/public/community/publications/{pub_id}/comments")
+    renamed = next((i for i in comments.get("items", []) if i.get("commentId") == c3), {})
+    check("rename reflected on existing comment", renamed.get("authorName") == f"Renamed {run}", f"{renamed}")
 
     print("== fork + bookmark regression ==")
     key = f"c3-{run}-fork-1"
