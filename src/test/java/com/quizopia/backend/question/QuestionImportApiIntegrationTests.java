@@ -113,6 +113,18 @@ class QuestionImportApiIntegrationTests {
                 // @Transactional rolls back most tests; this guards against any
                 // committed setup (non-transactional collaborators) and keeps the DB
                 // pristine. All test data uses well-known prefixes.
+                // exam_questions rows left behind by earlier non-transactional
+                // suites (the community fixture families build published exams
+                // through raw SQL) reference the question_versions deleted
+                // wholesale below (fk_exam_questions_source_pair, RESTRICT) —
+                // clear those dependents first. attempt_questions also references
+                // exam_questions (RESTRICT) but never the community residue, so
+                // only attempt-less rows are removed.
+                jdbc.update("""
+                                DELETE FROM exam_questions eq
+                                WHERE NOT EXISTS (SELECT 1 FROM attempt_questions aq
+                                                  WHERE aq.exam_question_id = eq.id)
+                                """);
                 jdbc.update("DELETE FROM question_options");
                 jdbc.update("DELETE FROM question_versions");
                 jdbc.update("DELETE FROM questions");
