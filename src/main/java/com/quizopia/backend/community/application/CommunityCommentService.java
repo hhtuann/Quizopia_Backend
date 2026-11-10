@@ -169,7 +169,7 @@ public class CommunityCommentService {
         List<PublicCommentEntry> items = result.rows().stream()
                 .map(row -> toPublicEntry(row, callerUserId))
                 .toList();
-        int totalPages = safeSize == 0 ? 0 : (int) ((result.totalElements() + safeSize - 1) / safeSize);
+        int totalPages = (int) ((result.totalElements() + safeSize - 1) / safeSize);
         return new PageResponse<>(items, safePage, safeSize,
                 result.totalElements(), totalPages, "createdAt DESC, id DESC");
     }

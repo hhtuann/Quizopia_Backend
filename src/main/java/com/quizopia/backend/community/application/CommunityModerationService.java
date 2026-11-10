@@ -626,7 +626,9 @@ public class CommunityModerationService {
                 report.getId(),
                 report.getCommentId(),
                 comment == null ? null : new ModerationCommentSummary(
-                        comment.getBody(), authorNames.get(comment.getAuthorUserId()),
+                        comment.getBody(),
+                        authorNames.getOrDefault(comment.getAuthorUserId(),
+                                CommunityCommentAuthorStore.FALLBACK_AUTHOR_NAME),
                         comment.getCreatedAt()),
                 comment == null ? null : summaries.get(comment.getPublicationId()),
                 report.getReporterUserId(),

@@ -106,10 +106,6 @@ public class CommunityComment {
         return authorUserId;
     }
 
-    public String getAuthorAlias() {
-        return authorAlias;
-    }
-
     public String getBody() {
         return body;
     }
