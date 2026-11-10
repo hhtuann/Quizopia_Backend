@@ -128,13 +128,16 @@ public class PublicCommunityService {
 
     /**
      * GET /api/public/community/publications/{id}/comments (ADR-007
-     * §5, issue #66): anonymous-readable, VISIBLE-only, newest-first;
-     * invisible publication = 404 anti-enumeration.
+     * §5, issue #66; Rev 4 / #72): anonymous-readable, VISIBLE-only,
+     * newest-first; invisible publication = 404 anti-enumeration. A
+     * valid JWT on this permitAll route ALSO yields the server-computed
+     * per-item {@code isMine} ownership flag; anonymous callers get
+     * {@code false} everywhere (no viewer state leak).
      */
     public PageResponse<PublicCommentEntry> commentsPage(PublicReadCaller caller,
             long publicationId, int page, int size) {
         admit(caller);
-        return commentService.publicPage(publicationId, page, size);
+        return commentService.publicPage(publicationId, page, size, caller.userId());
     }
 
     // ============================================================

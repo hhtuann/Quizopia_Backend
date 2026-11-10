@@ -1,6 +1,6 @@
 # ADR-007: Community social interaction — likes, ratings, comments (#64)
 
-- Status: PROPOSED (P3-C0 architecture gate for Epic #63; no production code before acceptance) — **Rev 3** (R1 review findings closed in Rev 2, 3× GATE-PASS; cosmetic wording/allocation fixes in Rev 3; see §12)
+- Status: PROPOSED (P3-C0 architecture gate for Epic #63; no production code before acceptance) — **Rev 4** (owner-approved comment display-name policy change, #72, supersedes the §4 alias consent lifecycle for comments — see §13; R1 review findings closed in Rev 2, 3× GATE-PASS in Rev 3, cosmetic fixes in Rev 3; see §12)
 - Date: 2026-11-09
 - Deciders: autonomous engineering team; human approval required before merge
 - Builds on ADR-005 (user-centric), ADR-006 (community publication/discovery/reuse). Extends the `community` bounded context; changes no P3-A/P3-B behavior (one narrow, security-justified addition: publication alias validation gains a cross-namespace check, §4).
@@ -125,3 +125,28 @@ No renumbering; V1–V30 untouched.
 ## 12. Review record
 
 - **R1 (2026-11-09, this revision)**: three independent reviewers (architecture, security, DB). Verdicts 3× GATE-FAIL, 1 BLOCKER + 8 HIGH + 12 MEDIUM — all closed in Rev 2: public social-summary twin (BLOCKER/ARCH-1/SEC-3/DB-2); alias collision contract + `COMMUNITY_ALIAS_TAKEN` + atomic failure + race recovery (SEC-1/DB-1/ARCH-3d); alias impersonation namespace checks both directions + charset policy (SEC-2/SEC-10); comment-report eligibility oracle + §3 contradiction (SEC-4); owner-route vs visibility semantics pinned (SEC-5); complete policy table incl. named constants + separate comment-report buckets + summary/list read policy (SEC-6/ARCH-6/DB-5); state-guarded comment CAS + rating `RETURNING (xmax=0)` mechanism (SEC-7/DB-4/DB-10); `comment_report_id` audit linkage + scoped retention claim (SEC-8/DB-7); tombstone deviation documented (ARCH-2/SEC-9); aggregate edges pinned (`average:null`, VISIBLE-only `commentCount`) + covering index (DB-8/DB-12); composite-PK deviation note + `@IdClass` pin (DB-3/DB-13); FK policy aligned to CASCADE precedent with rationale (ARCH-8/DB-6); state CHECKs not widened — VISIBLE↔HIDDEN only (ARCH-5); PageResponse `sort` field (ARCH-9); security-chain matchers in the deliverable list (ARCH-7); DELETE idempotency pinned (DB-11); abuse-index tiebreak (DB-9); alias-change re-consent (SEC-13/ARCH-10); alias recycling recorded (DB-14). R1 evidence on issue #64.
+
+## 13. Rev 4 (2026-11-10, issue #72): comment author display-name policy — alias consent retired
+
+**Owner-approved product decision (Epic #70 F6).** After Phase 3-C shipped, the owner explicitly decided that public comments display the author's **account profile `displayName` (`users.display_name`) by default**, with **no Community Alias entry and no first-comment public-name confirmation**. This Rev supersedes the pseudonym guarantees this ADR originally established for the COMMENT surface. It does NOT change likes, ratings, publication `authorAlias` attribution, moderation rights, visibility predicates, rate limits, tombstone semantics or anti-enumeration behavior.
+
+### 13.1 What changed
+
+- **Create**: `POST /api/community/publications/{id}/comments` accepts `{body}` only. Author identity is the authenticated JWT subject; the author name is resolved server-side. A legacy client still sending `alias` is ignored at deserialization (Spring Boot's default `FAIL_ON_UNKNOWN_PROPERTIES=false`) — it can never override the displayed name or impersonate anyone. `CreateCommentRequest` lost its `alias` component.
+- **Public page**: `PublicCommentEntry` is now `{commentId, authorName, body, createdAt, editedAt, isMine}`. `authorName` = the author's CURRENT `users.display_name` read via JOIN at query time (`CommunityCommentAuthorStore`, two statements — count + page, no N+1). Profile renames are reflected on existing comments immediately; duplicate display names are allowed (the column was never unique). A missing/blank name falls back to the generic `Community member` (defense-in-depth: V2's `LENGTH(TRIM(display_name)) > 0` CHECK already makes blank names unreachable).
+- **Ownership (`isMine`)**: computed server-side by comparing the OPTIONAL authenticated caller id (a valid JWT on the otherwise anonymous public GET — the existing `PublicReadCaller` pattern) against `author_user_id`. Anonymous callers get `false` on every item: no viewer state, no internal author ids. The FE's former alias-set equality heuristic is deleted.
+- **Owner routes**: unchanged §6 CAS shapes — server-authorized by `author_user_id` alone; identical display names never grant cross-user control.
+- **Moderation queue / hide-restore DTOs**: `authorAlias` → `authorName` (current display name; moderator privilege). The moderation queue batches display-name lookups (one statement per page).
+- **Error codes**: `COMMUNITY_ALIAS_TAKEN` removed (no alias writes remain to collide). `COMMUNITY_ALIAS_INVALID` and `COMMUNITY_ALIAS_REQUIRED` survive — they serve the PUBLICATION `authorAlias` surface, which is unchanged.
+
+### 13.2 Data model (forward-only V32)
+
+`V32__community_comment_display_name.sql`: `community_comments.author_alias DROP NOT NULL` — new rows store NULL; the column and all legacy snapshots are RETAINED (historical data; never deleted). `community_member_profiles` is RETAINED unchanged as a deprecated read-only legacy surface: no API path writes it, and the publication publish/PATCH reverse impersonation probe (`assertAliasNotTakenByMember`) keeps reading it, closing the publisher credit namespace against every alias a member ever took. Likes, ratings, reports and audit tables are untouched. No backfill: display names are read-time JOINed.
+
+### 13.3 Privacy statement (accurate as of Rev 4)
+
+`users.display_name` — historically non-public — is now **intentionally public on exactly one surface: the community comment author name** (public page, owner create/PATCH response `authorName`, moderator queue). This is a deliberate narrowing of the original pseudonym policy, approved by the owner. No other public DTO exposes it; username, email, phone, internal user ids and token data remain non-public everywhere, including comments. The FE renders a small informative note (posted name is public) without any consent gate.
+
+### 13.4 Superseded provisions
+
+The following original provisions are OBSOLETE for comments (kept above for history): §4 alias consent lifecycle (first-comment capture, defaults, change + re-consent, `COMMUNITY_ALIAS_TAKEN` collision mapping, member-direction impersonation probes); §3's `author_alias NOT NULL` snapshot semantics for new rows; §5's `CreateCommentRequest {body, alias}` and `PublicCommentEntry {… authorAlias …}` shapes; §8's alias contract test list. The §4 reverse check on publication `authorAlias` (a publication author may not take a member alias) REMAINS in force against the legacy table.

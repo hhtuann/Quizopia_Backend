@@ -72,8 +72,8 @@ class V26CommunityFoundationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                .as("migration chain passed through V26 (head is now V31)")
-                .containsExactly("31");
+                .as("migration chain passed through V26 (head is now V32)")
+                .containsExactly("32");
 
                 // The V24 catalog seeds every code per grade level — the
                 // seed dedup ran on this leg too.
@@ -157,8 +157,8 @@ class V26CommunityFoundationMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain passed through V26 (head is now V31)")
-                        .containsExactly("31");
+                        .as("migration chain passed through V26 (head is now V32)")
+                        .containsExactly("32");
             }
         } finally {
             dropDatabase(dbName);

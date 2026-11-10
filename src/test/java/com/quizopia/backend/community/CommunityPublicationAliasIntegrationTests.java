@@ -14,7 +14,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
-import org.springframework.test.annotation.DirtiesContext;
 import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,28 +24,24 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The §4 alias consent contract (ADR-007, #66) over HTTP: first-comment
- * capture (profile created, snapshot = stored), defaulting and
- * forward-only changes (snapshots stable), impersonation rejections
- * (own email/username, ANY username, ANY publication author_alias —
- * all ci — plus '@', zero-width/bidi/control charset and the 1..80
- * bounds), the publication reverse-check (publish/PATCH authorAlias
- * rejected when ci-equal to a member alias — the single
- * ADR-sanctioned P3-A touch), and the plain (non-race) ci collision →
- * 409 COMMUNITY_ALIAS_TAKEN with an atomic failure (no comment row, no
- * profile row for the loser). The RACE variants live in
- * {@code CommunityCommentConcurrencyIntegrationTests}.
+ * The publication authorAlias / legacy member-alias cross-namespace
+ * probe (ADR-007 §4, #66; surviving unchanged under Rev 4 / #72):
+ * publish/PATCH {@code authorAlias} is rejected ci-equal to any
+ * {@code community_member_profiles.alias} row. After the Rev 4
+ * display-name policy retired the member alias lifecycle, that table is
+ * a retained read-only legacy surface (V32) — the probe keeps the
+ * publisher credit namespace closed against every alias a member ever
+ * took historically. The former comment-side alias consent tests
+ * (capture, change, impersonation, collision 409) were removed with
+ * the lifecycle itself: comments now derive their author name
+ * server-side from {@code users.display_name} (see
+ * {@code CommunityCommentIntegrationTests}).
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(PostgresTestContainerConfiguration.class)
-// NOT @Transactional: the 409 alias-collision path must map a real
-// DataIntegrityViolationException out of its own committed transaction
-// (a joined test transaction would be aborted by PostgreSQL, 25P02).
-// @DirtiesContext keeps the committed fixtures off the shared database.
-@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-class CommunityCommentAliasIntegrationTests {
+class CommunityPublicationAliasIntegrationTests {
 
     @Autowired
     private MockMvc mockMvc;
@@ -69,105 +64,17 @@ class CommunityCommentAliasIntegrationTests {
     }
 
     // ==================================================================
-    // first-comment capture + defaults + forward-only changes
-    // ==================================================================
-
-    @Test
-    void firstCommentCapturesAliasAndLaterCommentsDefaultToStored() throws Exception {
-        mockMvc.perform(postComment(studentId, "hello", "First-Alias-" + seq))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.authorAlias").value("First-Alias-" + seq));
-        assertThat(storedAlias(studentId)).isEqualTo("First-Alias-" + seq);
-
-        // Subsequent comment without alias defaults to the stored one.
-        MvcResult second = mockMvc.perform(postComment(studentId, "second", null))
-                .andExpect(status().isCreated()).andReturn();
-        assertThat(readTree(second).get("authorAlias").asString()).isEqualTo("First-Alias-" + seq);
-    }
-
-    @Test
-    void aliasChangeAppliesForwardOnlySnapshotsAreStable() throws Exception {
-        long first = createCommentRaw(studentId, "before change", "Old-Alias-" + seq);
-        long second = createCommentRaw(studentId, "after change", "New-Alias-" + seq);
-
-        assertThat(storedAlias(studentId)).isEqualTo("New-Alias-" + seq);
-        assertThat(snapshot(first)).isEqualTo("Old-Alias-" + seq);
-        assertThat(snapshot(second)).isEqualTo("New-Alias-" + seq);
-
-        // Re-submitting the stored alias is not a change (no error, no write).
-        mockMvc.perform(postComment(studentId, "same again", "New-Alias-" + seq))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.authorAlias").value("New-Alias-" + seq));
-    }
-
-    // ==================================================================
-    // impersonation + charset rejections (§4)
-    // ==================================================================
-
-    @Test
-    void impersonationAndCharsetRejectionsAre400AliasInvalid() throws Exception {
-        // ANY users.username, ci — including a foreign teacher's and the
-        // caller's own (trimmed + case-flipped on purpose).
-        String teacherUsername = jdbc.queryForObject(
-                "SELECT username FROM users WHERE id = ?", String.class, teacherId);
-        expectAliasInvalid(teacherUsername.toUpperCase());
-        String ownUsername = jdbc.queryForObject(
-                "SELECT username FROM users WHERE id = ?", String.class, studentId);
-        expectAliasInvalid(" " + ownUsername.toLowerCase() + " ");
-
-        // Own email, ci.
-        String ownEmail = jdbc.queryForObject(
-                "SELECT email FROM users WHERE id = ?", String.class, studentId);
-        expectAliasInvalid(ownEmail);
-
-        // ANY publication author_alias, ci (the fixture's "Al-Alias").
-        expectAliasInvalid("al-alias");
-
-        // '@' anywhere.
-        expectAliasInvalid("someone@example.com");
-        expectAliasInvalid("a@b");
-
-        // Zero-width + bidi + control + line/paragraph separator
-        // characters (never allowed in an alias; U+2028/U+2029 are NOT
-        // ISO control — rejected on their own category).
-        expectAliasInvalid("Ghost\u200BName");
-        expectAliasInvalid("Rtl\u202EName");
-        expectAliasInvalid("Iso\u2060l");
-        expectAliasInvalid("Tab\tName");
-        expectAliasInvalid("New\nline");
-        expectAliasInvalid("Sep\u2028Arated");
-        expectAliasInvalid("Para\u2029Graphed");
-
-        // Nothing landed: no comment, no profile for the caller.
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
-                Integer.class, studentId)).isZero();
-        assertThat(commentCountFor(studentId)).isZero();
-    }
-
-    @Test
-    void aliasBoundsAre400ValidationError() throws Exception {
-        expectValidation("x".repeat(81));
-        expectValidation("   ");
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
-                Integer.class, studentId)).isZero();
-
-        // 80 chars exactly is fine.
-        mockMvc.perform(postComment(studentId, "at the bound", "y".repeat(80)))
-                .andExpect(status().isCreated());
-    }
-
-    // ==================================================================
     // publication reverse-check (§4, the single P3-A touch)
     // ==================================================================
 
     @Test
     void publicationAuthorAliasRejectedWhenEqualToAnyMemberAliasCi() throws Exception {
-        // A member (the student) now owns this alias (captured ONCE — the
-        // static seq advances inside the exam fixtures below).
+        // A LEGACY member-profile row owns this alias (seeded directly —
+        // after Rev 4 no API path writes member profiles; V32 keeps the
+        // table read-only for exactly this cross-check).
         String memberAlias = "Taken-Alias-" + seq;
-        createCommentRaw(studentId, "claiming my alias", memberAlias);
+        jdbc.update("INSERT INTO community_member_profiles (user_id, alias) VALUES (?, ?)",
+                studentId, memberAlias);
 
         // PATCH of the fixture publication's authorAlias → 400 (the
         // current optimistic version read from the row, not guessed).
@@ -214,54 +121,11 @@ class CommunityCommentAliasIntegrationTests {
     }
 
     // ==================================================================
-    // plain ci collision → 409, atomic failure
-    // ==================================================================
-
-    @Test
-    void secondUserTakingAnExistingAliasCiGets409AndNothingLands() throws Exception {
-        createCommentRaw(studentId, "winner comment", "Clash-Alias-" + seq);
-
-        mockMvc.perform(postComment(otherStudentId, "loser comment", "clash-alias-" + seq))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("COMMUNITY_ALIAS_TAKEN"));
-
-        assertThat(commentCountFor(otherStudentId))
-                .as("the loser's comment POST failed atomically")
-                .isZero();
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
-                Integer.class, otherStudentId))
-                .as("no profile row for the loser")
-                .isZero();
-        assertThat(storedAlias(studentId)).isEqualTo("Clash-Alias-" + seq);
-    }
-
-    // ==================================================================
     // fixtures
     // ==================================================================
 
-    private void expectAliasInvalid(String alias) throws Exception {
-        mockMvc.perform(postComment(studentId, "probe body", alias))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMUNITY_ALIAS_INVALID"));
-    }
-
-    private void expectValidation(String alias) throws Exception {
-        mockMvc.perform(postComment(studentId, "probe body", alias))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMUNITY_VALIDATION_ERROR"));
-    }
-
     private static RequestPostProcessor jwtSubject(long userId) {
         return jwt().jwt(j -> j.subject(String.valueOf(userId)));
-    }
-
-    private RequestBuilder postComment(long userId, String body, String alias) {
-        String aliasJson = alias == null ? "null" : jsonString(alias);
-        return post("/api/community/publications/" + publicationId + "/comments")
-                .with(jwtSubject(userId))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"body\":" + jsonString(body) + ",\"alias\":" + aliasJson + "}");
     }
 
     /** JSON string literal with control/format characters escaped. */
@@ -284,34 +148,6 @@ class CommunityCommentAliasIntegrationTests {
             }
         }
         return out.append('"').toString();
-    }
-
-    private long createCommentRaw(long userId, String body, String alias) {
-        try {
-            MvcResult result = mockMvc.perform(postComment(userId, body, alias))
-                    .andExpect(status().isCreated()).andReturn();
-            return readTree(result).get("commentId").asLong();
-        } catch (Exception ex) {
-            throw new IllegalStateException("fixture comment failed", ex);
-        }
-    }
-
-    private String storedAlias(long userId) {
-        return jdbc.queryForObject(
-                "SELECT alias FROM community_member_profiles WHERE user_id = ?",
-                String.class, userId);
-    }
-
-    private String snapshot(long commentId) {
-        return jdbc.queryForObject(
-                "SELECT author_alias FROM community_comments WHERE id = ?",
-                String.class, commentId);
-    }
-
-    private int commentCountFor(long userId) {
-        return jdbc.queryForObject(
-                "SELECT count(*) FROM community_comments WHERE author_user_id = ?",
-                Integer.class, userId);
     }
 
     private long newUser(String prefix, String role) {

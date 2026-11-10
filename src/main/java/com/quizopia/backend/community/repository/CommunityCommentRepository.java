@@ -1,10 +1,7 @@
 package com.quizopia.backend.community.repository;
 
 import com.quizopia.backend.community.domain.model.CommunityComment;
-import com.quizopia.backend.community.domain.model.CommunityCommentState;
 import jakarta.persistence.LockModeType;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -22,16 +19,12 @@ import org.springframework.data.repository.query.Param;
  * {@code edited_at} preserved). No separate row lock is needed for
  * either — the guarded UPDATE is the serialization point.
  *
- * <p>The public page scan is the single-table
- * {@link #findByPublicationIdAndStateOrderByCreatedAtDescIdDesc} on the
- * frozen {@code (publication_id, state, created_at DESC, id DESC)}
- * index — page + count, no N+1 (the alias is denormalized on the row).
+ * <p>The public page scan moved to {@code CommunityCommentAuthorStore}
+ * (Rev 4 / #72): the JOIN with {@code users} resolves each author's
+ * CURRENT display name in the same two statements (count + page), so
+ * this repository no longer pages entities for the public route.
  */
 public interface CommunityCommentRepository extends JpaRepository<CommunityComment, Long> {
-
-    /** Public page: VISIBLE rows of one publication, newest-first, deterministic id tiebreak. */
-    Page<CommunityComment> findByPublicationIdAndStateOrderByCreatedAtDescIdDesc(
-            Long publicationId, CommunityCommentState state, Pageable pageable);
 
     /**
      * The §6 owner PATCH CAS: rewrites the body and stamps

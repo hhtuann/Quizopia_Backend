@@ -35,8 +35,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * (409 COMMUNITY_REPORT_NOT_OPEN when handled) and audit with
  * comment_report_id, per-comment history is newest-first with
  * VISIBLE↔HIDDEN states and NULL statuses, and the queue DTO's nested
- * comment block carries exactly {body, authorAlias, createdAt} — no
- * author user id, no email.
+ * comment block carries exactly {body, authorName, createdAt} — the
+ * author's CURRENT display name (Rev 4 / #72), no author user id, no
+ * email.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -64,7 +65,7 @@ class CommunityCommentModerationIntegrationTests {
         studentId = newUser("mms", "STUDENT");
         moderatorId = newModerator();
         publicationId = createPublished();
-        commentId = createCommentRaw(studentId, "moderation target", "Mod-Alias-" + seq);
+        commentId = createCommentRaw(studentId, "moderation target");
     }
 
     // ==================================================================
@@ -196,12 +197,13 @@ class CommunityCommentModerationIntegrationTests {
         JsonNode entry = readTree(queue).get("items").get(0);
         assertThat(entry.get("id").asLong()).isEqualTo(reportId);
         assertThat(entry.get("commentId").asLong()).isEqualTo(commentId);
-        // Nested comment block: exactly {body, authorAlias, createdAt}.
+        // Nested comment block: exactly {body, authorName, createdAt} —
+        // the comment author's CURRENT account display name ("MM").
         assertThat(entry.get("comment").get("body").asString()).isEqualTo("moderation target");
-        assertThat(entry.get("comment").get("authorAlias").asString()).isEqualTo("Mod-Alias-" + seq);
+        assertThat(entry.get("comment").get("authorName").asString()).isEqualTo("MM");
         assertThat(entry.get("comment").hasNonNull("createdAt")).isTrue();
         assertThat(keySet(entry.get("comment")))
-                .containsExactlyInAnyOrder("body", "authorAlias", "createdAt");
+                .containsExactlyInAnyOrder("body", "authorName", "createdAt");
         // Publication card summary reused.
         assertThat(entry.get("publication").get("publicationId").asLong()).isEqualTo(publicationId);
         assertThat(entry.get("publication").get("authorName").asString()).isEqualTo("Mm-Alias");
@@ -225,7 +227,7 @@ class CommunityCommentModerationIntegrationTests {
     @Test
     void dismissAndResolveTransitionWithAuditAndRejectHandledReports() throws Exception {
         long reportId = reportCommentRaw(commentId, studentId, "SPAM", null);
-        long secondComment = createCommentRaw(studentId, "second", "Mod-Alias-" + seq);
+        long secondComment = createCommentRaw(studentId, "second");
         long reportId2 = reportCommentRaw(secondComment, studentId, "OTHER", null);
 
         mockMvc.perform(post("/api/community/moderation/comment-reports/" + reportId + "/dismiss")
@@ -288,7 +290,7 @@ class CommunityCommentModerationIntegrationTests {
     @Test
     void commentHistoryIsNewestFirstWithStatePairsOnly() throws Exception {
         mockMvc.perform(hide(commentId, "first action")).andExpect(status().isOk());
-        long secondComment = createCommentRaw(studentId, "unrelated", "Mod-Alias-" + seq);
+        long secondComment = createCommentRaw(studentId, "unrelated");
         mockMvc.perform(restore(commentId, "second action")).andExpect(status().isOk());
         mockMvc.perform(hide(secondComment, "other comment")).andExpect(status().isOk());
 
@@ -360,13 +362,12 @@ class CommunityCommentModerationIntegrationTests {
                 .delete("/api/community/comments/" + commentId).with(jwtSubject(userId));
     }
 
-    private long createCommentRaw(long userId, String body, String alias) throws Exception {
+    private long createCommentRaw(long userId, String body) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/community/publications/"
                         + publicationId + "/comments")
                         .with(jwtSubject(userId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"body\":" + jsonString(body) + ",\"alias\":"
-                                + jsonString(alias) + "}"))
+                        .content("{\"body\":" + jsonString(body) + "}"))
                 .andExpect(status().isCreated()).andReturn();
         return readTree(result).get("commentId").asLong();
     }

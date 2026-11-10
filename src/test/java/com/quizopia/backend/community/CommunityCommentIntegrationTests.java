@@ -1,11 +1,11 @@
 package com.quizopia.backend.community;
 
+import com.quizopia.backend.community.application.CommunityCommentAuthorStore;
 import com.quizopia.backend.community.application.CommunityRateLimiter;
-import com.quizopia.backend.community.domain.model.CommunityCommentState;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
-import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -23,6 +23,10 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.times;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -34,16 +38,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * HTTP-layer tests for the #66 comment CRUD + public page (ADR-007
- * §5/§6) on PostgreSQL 17 Testcontainers: create (alias snapshot =
- * post-upsert stored profile alias), body bounds, the §4 visibility
- * 404 with admission still consumed, the VISIBLE-only newest-first
- * public page (size clamp, empty, beyond-end), owner PATCH (CAS,
- * edited_at) and the idempotent tombstone DELETE (body cleared,
- * gone from the list), byte-identical 404s for absent/foreign
- * comments, 409 STATE_INVALID on own non-VISIBLE PATCH with the
- * tombstone body never resurrected, recursive redaction of the public
- * page (no user ids/emails), and the no-N+1 page query (exactly count
- * + select).
+ * §5/§6) on PostgreSQL 17 Testcontainers, updated for the Rev 4 / #72
+ * display-name policy: create derives the author identity (and the
+ * public {@code authorName}) exclusively from the authenticated user —
+ * a legacy client {@code alias} field is ignored, never honored; the
+ * public page resolves each author's CURRENT
+ * {@code users.display_name} (renames reflected, duplicates allowed,
+ * privacy-safe fallback) with the server-computed {@code isMine}
+ * ownership flag (anonymous callers get false everywhere); body
+ * bounds, the §4 visibility 404 with admission still consumed, the
+ * VISIBLE-only newest-first public page (size clamp, empty,
+ * beyond-end), owner PATCH (CAS, edited_at), the idempotent tombstone
+ * DELETE, byte-identical 404s for absent/foreign comments, 409
+ * STATE_INVALID on own non-VISIBLE PATCH, recursive redaction of the
+ * public page (no user ids/emails/usernames), and the no-N+1 page
+ * projection (exactly count + select, regardless of row count).
  *
  * <p>Publications are seeded through the real {@code CommunityService}
  * (POST/PATCH/publish over HTTP) on real published exams — the #41
@@ -70,57 +79,81 @@ class CommunityCommentIntegrationTests {
     private long publicationId;
 
     @Autowired
-    private com.quizopia.backend.community.repository.CommunityCommentRepository commentRepo;
-    @Autowired
     private jakarta.persistence.EntityManagerFactory emf;
 
     @BeforeEach
     void setUp() {
-        teacherId = newUser("cmt", "TEACHER");
-        studentId = newUser("cms", "STUDENT");
+        teacherId = newUser("cmt", "TEACHER", "Cm Teacher");
+        studentId = newUser("cms", "STUDENT", "Cm Student");
         publicationId = createPublished("Comment fixture publication");
     }
 
     // ==================================================================
-    // create: 201, alias captured, snapshot == stored profile alias
+    // create: 201, server-derived identity, legacy alias ignored
     // ==================================================================
 
     @Test
-    void createCapturesAliasAndSnapshotsStoredProfileAlias() throws Exception {
-        MvcResult created = mockMvc.perform(postComment(publicationId, studentId,
-                        "First!", "Snap-" + seq))
+    void createDerivesAuthorNameFromAccountAndNeverStoresAnAlias() throws Exception {
+        MvcResult created = mockMvc.perform(postComment(publicationId, studentId, "First!"))
                 .andExpect(status().isCreated())
                 .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(jsonPath("$.authorAlias").value("Snap-" + seq))
+                .andExpect(jsonPath("$.authorName").value("Cm Student"))
                 .andExpect(jsonPath("$.publicationId").value((int) publicationId))
                 .andExpect(jsonPath("$.editedAt").doesNotExist())
                 .andReturn();
         long commentId = readTree(created).get("commentId").asLong();
         assertThat(commentId).isPositive();
 
-        // §4: the snapshot equals the STORED profile alias (post-upsert).
-        String storedAlias = jdbc.queryForObject(
-                "SELECT alias FROM community_member_profiles WHERE user_id = ?",
-                String.class, studentId);
-        String snapshot = jdbc.queryForObject(
+        // Rev 4: no alias snapshot, no member-profile write, ever.
+        assertThat(jdbc.queryForObject(
                 "SELECT author_alias FROM community_comments WHERE id = ?",
-                String.class, commentId);
-        assertThat(storedAlias).isEqualTo("Snap-" + seq);
-        assertThat(snapshot).isEqualTo(storedAlias);
-    }
-
-    @Test
-    void createWithoutAliasOnFirstCommentIs400AndWithoutProfileRow() throws Exception {
-        mockMvc.perform(post("/api/community/publications/" + publicationId + "/comments")
-                        .with(jwtSubject(studentId))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"body\":\"no alias yet\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("COMMUNITY_VALIDATION_ERROR"));
+                String.class, commentId)).isNull();
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM community_member_profiles WHERE user_id = ?",
                 Integer.class, studentId)).isZero();
-        assertThat(commentCount()).isZero();
+
+        // A legacy client still sending an alias is safely ignored — the
+        // field can never override the displayed author name.
+        mockMvc.perform(post("/api/community/publications/" + publicationId + "/comments")
+                        .with(jwtSubject(studentId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"body\":\"legacy alias payload\",\"alias\":\"Impostor Name\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.authorName").value("Cm Student"));
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM community_member_profiles", Integer.class)).isZero();
+    }
+
+    @Test
+    void twoUsersWithIdenticalDisplayNamesCanBothComment() throws Exception {
+        long twin = newUser("cmt", "STUDENT", "Cm Student");
+        MvcResult mine = mockMvc.perform(postComment(publicationId, studentId, "mine"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.authorName").value("Cm Student"))
+                .andReturn();
+        MvcResult theirs = mockMvc.perform(postComment(publicationId, twin, "theirs"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.authorName").value("Cm Student"))
+                .andReturn();
+        long mineId = readTree(mine).get("commentId").asLong();
+        long theirsId = readTree(theirs).get("commentId").asLong();
+        assertThat(mineId).isNotEqualTo(theirsId);
+        // Ownership is NOT name-text: the twin cannot PATCH or DELETE the
+        // other's comment even with an identical display name.
+        mockMvc.perform(patch("/api/community/comments/" + theirsId)
+                        .with(jwtSubject(studentId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"body\":\"hijack\"}"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(delete("/api/community/comments/" + theirsId)
+                        .with(jwtSubject(studentId)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(patch("/api/community/comments/" + mineId)
+                        .with(jwtSubject(studentId))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"body\":\"own edit\"}"))
+                .andExpect(status().isOk());
+        assertThat(bodyOf(theirsId)).isEqualTo("theirs");
     }
 
     // ==================================================================
@@ -139,14 +172,14 @@ class CommunityCommentIntegrationTests {
         mockMvc.perform(post("/api/community/publications/" + publicationId + "/comments")
                         .with(jwtSubject(studentId))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"alias\":\"Bound-" + seq + "\"}"))
+                        .content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_VALIDATION_ERROR"));
         assertThat(commentCount()).isZero();
 
         // 2000 exactly, and \n/\t inside, are fine; body stored trimmed.
         mockMvc.perform(postComment(publicationId, studentId,
-                        "  ".repeat(1) + "x".repeat(2000), "Bound2-" + seq))
+                        "  ".repeat(1) + "x".repeat(2000)))
                 .andExpect(status().isCreated());
         String stored = jdbc.queryForObject(
                 "SELECT body FROM community_comments WHERE publication_id = ?",
@@ -155,7 +188,7 @@ class CommunityCommentIntegrationTests {
     }
 
     private void postBodyExpect400(long userId, String body) throws Exception {
-        mockMvc.perform(postComment(publicationId, userId, body, "Bound-" + seq))
+        mockMvc.perform(postComment(publicationId, userId, body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_VALIDATION_ERROR"));
     }
@@ -169,18 +202,18 @@ class CommunityCommentIntegrationTests {
         long hidden = createPublished("Hidden source");
         jdbc.update("UPDATE community_publications SET moderation_state = 'HIDDEN' WHERE id = ?",
                 hidden);
-        mockMvc.perform(postComment(hidden, studentId, "nope", "Vis-" + seq))
+        mockMvc.perform(postComment(hidden, studentId, "nope"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_NOT_FOUND"));
 
         long unpublished = createPublished("Unpublished source");
         jdbc.update("UPDATE community_publications SET status = 'UNPUBLISHED' WHERE id = ?",
                 unpublished);
-        mockMvc.perform(postComment(unpublished, studentId, "nope", "Vis-" + seq))
+        mockMvc.perform(postComment(unpublished, studentId, "nope"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_NOT_FOUND"));
 
-        mockMvc.perform(postComment(9_999_999L, studentId, "nope", "Vis-" + seq))
+        mockMvc.perform(postComment(9_999_999L, studentId, "nope"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COMMUNITY_NOT_FOUND"));
 
@@ -199,12 +232,12 @@ class CommunityCommentIntegrationTests {
 
     @Test
     void publicPageIsNewestFirstVisibleOnlyAndClamped() throws Exception {
-        long other = newUser("cmo", "STUDENT");
-        long c1 = createCommentRaw(publicationId, studentId, "first comment", "Pager-" + seq);
+        long other = newUser("cmo", "STUDENT", "Cm Other");
+        long c1 = createCommentRaw(publicationId, studentId, "first comment");
         bumpCreated(c1, 3);
-        long c2 = createCommentRaw(publicationId, other, "second comment", "Pager2-" + seq);
+        long c2 = createCommentRaw(publicationId, other, "second comment");
         bumpCreated(c2, 2);
-        long c3 = createCommentRaw(publicationId, studentId, "third comment", "Pager-" + seq);
+        long c3 = createCommentRaw(publicationId, studentId, "third comment");
         bumpCreated(c3, 1);
 
         // newest-first: c3, c2, c1 — deterministic id tiebreak not needed here.
@@ -222,10 +255,17 @@ class CommunityCommentIntegrationTests {
         assertThat(items.get(0).get("commentId").asLong()).isEqualTo(c3);
         assertThat(items.get(1).get("commentId").asLong()).isEqualTo(c2);
         assertThat(items.get(2).get("commentId").asLong()).isEqualTo(c1);
-        // The §5 item shape exactly.
+        // The §5 item shape exactly (Rev 4: authorName + isMine).
         assertThat(keySet(items.get(0)))
-                .containsExactlyInAnyOrder("commentId", "authorAlias", "body", "createdAt",
-                        "editedAt");
+                .containsExactlyInAnyOrder("commentId", "authorName", "body", "createdAt",
+                        "editedAt", "isMine");
+        // The display name is the author's CURRENT account name.
+        assertThat(items.get(0).get("authorName").asString()).isEqualTo("Cm Student");
+        assertThat(items.get(1).get("authorName").asString()).isEqualTo("Cm Other");
+        // Anonymous read: isMine is false everywhere (no viewer state).
+        assertThat(items.get(0).get("isMine").isBoolean()).isTrue();
+        assertThat(items.get(0).get("isMine").asBoolean()).isFalse();
+        assertThat(items.get(1).get("isMine").asBoolean()).isFalse();
 
         // HIDDEN and DELETED never appear; totals follow (§3 opacity).
         jdbc.update("UPDATE community_comments SET state = 'HIDDEN' WHERE id = ?", c2);
@@ -256,6 +296,57 @@ class CommunityCommentIntegrationTests {
     }
 
     @Test
+    void publicPageComputesIsMineFromTheAuthenticatedCallerOnly() throws Exception {
+        long other = newUser("cmo", "STUDENT", "Cm Other");
+        long mine = createCommentRaw(publicationId, studentId, "mine");
+        long theirs = createCommentRaw(publicationId, other, "theirs");
+
+        // Authenticated author: own comment flagged, foreign not — even
+        // when both share the same display name (ownership ≠ name text).
+        jdbc.update("UPDATE users SET display_name = 'Same Name' WHERE id IN (?, ?)",
+                studentId, other);
+        MvcResult authed = mockMvc.perform(get(publicCommentsPath(publicationId, 0, 50))
+                        .with(jwtSubject(studentId)))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode items = readTree(authed).get("items");
+        assertThat(items.size()).isEqualTo(2);
+        for (JsonNode item : items) {
+            if (item.get("commentId").asLong() == mine) {
+                assertThat(item.get("isMine").asBoolean()).isTrue();
+            } else {
+                assertThat(item.get("commentId").asLong()).isEqualTo(theirs);
+                assertThat(item.get("isMine").asBoolean()).isFalse();
+            }
+            assertThat(item.get("authorName").asString()).isEqualTo("Same Name");
+        }
+
+        // A third, unrelated authenticated viewer: false everywhere.
+        long stranger = newUser("cmx", "STUDENT", "Cm Stranger");
+        MvcResult strangerPage = mockMvc.perform(get(publicCommentsPath(publicationId, 0, 50))
+                        .with(jwtSubject(stranger)))
+                .andExpect(status().isOk())
+                .andReturn();
+        for (JsonNode item : readTree(strangerPage).get("items")) {
+            assertThat(item.get("isMine").asBoolean()).isFalse();
+        }
+    }
+
+    @Test
+    void profileRenameIsReflectedOnExistingCommentsImmediately() throws Exception {
+        createCommentRaw(publicationId, studentId, "before rename");
+        mockMvc.perform(get(publicCommentsPath(publicationId, 0, 50)))
+                .andExpect(jsonPath("$.items[0].authorName").value("Cm Student"));
+
+        jdbc.update("UPDATE users SET display_name = ? WHERE id = ?", "Renamed Author", studentId);
+
+        mockMvc.perform(get(publicCommentsPath(publicationId, 0, 50)))
+                .andExpect(jsonPath("$.items[0].authorName").value("Renamed Author"));
+        // The rename is read-time: the comment row itself never changed.
+        assertThat(commentCount()).isEqualTo(1);
+    }
+
+    @Test
     void publicPageOnInvisiblePublicationIs404PublicationNotFound() throws Exception {
         jdbc.update("UPDATE community_publications SET moderation_state = 'HIDDEN' WHERE id = ?",
                 publicationId);
@@ -273,7 +364,7 @@ class CommunityCommentIntegrationTests {
 
     @Test
     void ownerPatchSetsEditedAtAndRepatchIsIdempotentContent() throws Exception {
-        long commentId = createCommentRaw(publicationId, studentId, "original", "Ed-" + seq);
+        long commentId = createCommentRaw(publicationId, studentId, "original");
         assertThat(editedAt(commentId)).isNull();
 
         mockMvc.perform(patch("/api/community/comments/" + commentId)
@@ -282,6 +373,7 @@ class CommunityCommentIntegrationTests {
                         .content("{\"body\":\"edited once\"}"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.authorName").value("Cm Student"))
                 .andExpect(jsonPath("$.body").value("edited once"))
                 .andExpect(jsonPath("$.editedAt").exists());
         assertThat(editedAt(commentId)).isNotNull();
@@ -299,7 +391,7 @@ class CommunityCommentIntegrationTests {
 
     @Test
     void patchOwnHiddenOrDeletedCommentIs409AndNeverResurrectsTheTombstone() throws Exception {
-        long commentId = createCommentRaw(publicationId, studentId, "to hide", "St-" + seq);
+        long commentId = createCommentRaw(publicationId, studentId, "to hide");
         jdbc.update("UPDATE community_comments SET state = 'HIDDEN' WHERE id = ?", commentId);
         mockMvc.perform(patch("/api/community/comments/" + commentId)
                         .with(jwtSubject(studentId))
@@ -328,7 +420,7 @@ class CommunityCommentIntegrationTests {
 
     @Test
     void ownerDeleteTombstonesClearsBodyAndIsIdempotent() throws Exception {
-        long commentId = createCommentRaw(publicationId, studentId, "delete me", "Del-" + seq);
+        long commentId = createCommentRaw(publicationId, studentId, "delete me");
         mockMvc.perform(delete("/api/community/comments/" + commentId)
                         .with(jwtSubject(studentId)))
                 .andExpect(status().isOk())
@@ -348,7 +440,7 @@ class CommunityCommentIntegrationTests {
 
         // DELETE works on a hidden publication too (§5 — ownership only).
         long hiddenPub = createPublished("Hidden pub delete");
-        long hiddenPubComment = createCommentRaw(hiddenPub, studentId, "on hidden", "Del2-" + seq);
+        long hiddenPubComment = createCommentRaw(hiddenPub, studentId, "on hidden");
         jdbc.update("UPDATE community_publications SET moderation_state = 'HIDDEN' WHERE id = ?",
                 hiddenPub);
         mockMvc.perform(delete("/api/community/comments/" + hiddenPubComment)
@@ -365,8 +457,8 @@ class CommunityCommentIntegrationTests {
 
     @Test
     void foreignAndAbsentPatchAndDeleteAreByteIdentical404s() throws Exception {
-        long foreignComment = createCommentRaw(publicationId, newUser("cmf", "STUDENT"),
-                "not yours", "Foreign-" + seq);
+        long foreignComment = createCommentRaw(publicationId, newUser("cmf", "STUDENT", "Cm Foreign"),
+                "not yours");
 
         String absentPatch = errorEnvelope(patchAbsent(foreignComment));
         String foreignPatch = errorEnvelope(patchForeign(foreignComment));
@@ -386,15 +478,24 @@ class CommunityCommentIntegrationTests {
     }
 
     // ==================================================================
-    // redaction: the public page never carries user ids/emails
+    // redaction: the public page never carries user ids/emails/usernames
     // ==================================================================
 
     @Test
-    void publicPageJsonCarriesNoUserIdOrEmailKeysAnywhere() throws Exception {
-        createCommentRaw(publicationId, studentId, "redact me", "Red-" + seq);
+    void publicPageJsonCarriesNoIdentityKeysAnywhere() throws Exception {
+        createCommentRaw(publicationId, studentId, "redact me");
         MvcResult page = mockMvc.perform(get(publicCommentsPath(publicationId, 0, 50)))
                 .andExpect(status().isOk()).andReturn();
         assertNoIdentityKeys(readTree(page));
+        // The displayed name is the display_name value — never the login
+        // username or email of the fixture account.
+        JsonNode item = readTree(page).get("items").get(0);
+        String username = jdbc.queryForObject(
+                "SELECT username FROM users WHERE id = ?", String.class, studentId);
+        String email = jdbc.queryForObject(
+                "SELECT email FROM users WHERE id = ?", String.class, studentId);
+        assertThat(item.get("authorName").asString())
+                .isNotEqualTo(username).isNotEqualTo(email);
     }
 
     private static void assertNoIdentityKeys(JsonNode node) {
@@ -402,7 +503,7 @@ class CommunityCommentIntegrationTests {
             node.properties().forEach(property -> {
                 assertThat(property.getKey().toLowerCase())
                         .as("public comment JSON must not carry identity keys")
-                        .doesNotContain("userid", "authoruser", "email", "username");
+                        .doesNotContain("userid", "authoruser", "email", "username", "alias");
                 assertNoIdentityKeys(property.getValue());
             });
         } else if (node.isArray()) {
@@ -411,28 +512,35 @@ class CommunityCommentIntegrationTests {
     }
 
     // ==================================================================
-    // no N+1: the page query is exactly count + select
+    // no N+1: the page projection is exactly count + select
     // ==================================================================
 
     @Test
-    void publicPageRepositoryQueryIsExactlyCountPlusSelect() {
-        createCommentRaw(publicationId, studentId, "n+1 probe a", "Noq-" + seq);
-        createCommentRaw(publicationId, studentId, "n+1 probe b", "Noq-" + seq);
-        createCommentRaw(publicationId, studentId, "n+1 probe c", "Noq-" + seq);
-        Statistics stats = emf.unwrap(org.hibernate.SessionFactory.class).getStatistics();
-        commentRepo.flush(); // push the fixture INSERTs out of the measurement window
-        stats.clear();
-        stats.setStatisticsEnabled(true);
-        try {
-            commentRepo.findByPublicationIdAndStateOrderByCreatedAtDescIdDesc(
-                    publicationId, CommunityCommentState.VISIBLE,
-                    org.springframework.data.domain.PageRequest.of(0, 20));
-            assertThat(stats.getPrepareStatementCount())
-                    .as("paged read = COUNT + SELECT only — 3 rows, no per-row query (no N+1)")
-                    .isLessThanOrEqualTo(2);
-        } finally {
-            stats.setStatisticsEnabled(false);
-        }
+    void publicPageProjectionIsExactlyCountPlusSelectRegardlessOfRows() {
+        createCommentRaw(publicationId, studentId, "n+1 probe a");
+        createCommentRaw(publicationId, studentId, "n+1 probe b");
+        createCommentRaw(publicationId, studentId, "n+1 probe c");
+
+        // Spy over the REAL JdbcTemplate: every statement runs against
+        // PostgreSQL; the invocation count pins the two-statement shape
+        // (count + JOIN page) no matter how many rows exist.
+        JdbcTemplate spy = Mockito.spy(jdbc);
+        Mockito.doCallRealMethod().when(spy)
+                .queryForObject(anyString(), any(Class.class), any(Object[].class));
+        Mockito.doCallRealMethod().when(spy)
+                .query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                        any(Object[].class));
+        CommunityCommentAuthorStore store = new CommunityCommentAuthorStore(spy);
+        CommunityCommentAuthorStore.VisibleCommentPage result =
+                store.visiblePage(publicationId, 0, 20);
+
+        assertThat(result.totalElements()).isEqualTo(3);
+        assertThat(result.rows()).hasSize(3);
+        org.mockito.Mockito.verify(spy, times(1))
+                .queryForObject(anyString(), any(Class.class), any(Object[].class));
+        org.mockito.Mockito.verify(spy, times(1))
+                .query(anyString(), any(org.springframework.jdbc.core.RowMapper.class),
+                        any(Object[].class));
     }
 
     // ==================================================================
@@ -471,12 +579,11 @@ class CommunityCommentIntegrationTests {
         return jwt().jwt(j -> j.subject(String.valueOf(userId)));
     }
 
-    private static RequestBuilder postComment(long publicationId, long userId, String body,
-            String alias) {
+    private static RequestBuilder postComment(long publicationId, long userId, String body) {
         return post("/api/community/publications/" + publicationId + "/comments")
                 .with(jwtSubject(userId))
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"body\":" + jsonString(body) + ",\"alias\":" + jsonString(alias) + "}");
+                .content("{\"body\":" + jsonString(body) + "}");
     }
 
     private static String jsonString(String value) {
@@ -506,9 +613,9 @@ class CommunityCommentIntegrationTests {
     }
 
     /** Creates a comment through the real route, returning the id. */
-    private long createCommentRaw(long publicationId, long userId, String body, String alias) {
+    private long createCommentRaw(long publicationId, long userId, String body) {
         try {
-            MvcResult result = mockMvc.perform(postComment(publicationId, userId, body, alias))
+            MvcResult result = mockMvc.perform(postComment(publicationId, userId, body))
                     .andExpect(status().isCreated()).andReturn();
             return readTree(result).get("commentId").asLong();
         } catch (Exception ex) {
@@ -538,20 +645,20 @@ class CommunityCommentIntegrationTests {
                 java.sql.Timestamp.class, commentId);
     }
 
-    private long newUser(String prefix, String role) {
-        long userId = insertUser(prefix);
+    private long newUser(String prefix, String role, String displayName) {
+        long userId = insertUser(prefix, displayName);
         jdbc.update("INSERT INTO user_roles (user_id, role_id) SELECT ?, id FROM roles WHERE code = ?",
                 userId, role);
         return userId;
     }
 
-    private long insertUser(String prefix) {
+    private long insertUser(String prefix, String displayName) {
         return insert("""
                 INSERT INTO users (username, email, password_hash, display_name, status,
                                    email_verified_at, token_version, failed_login_attempts,
                                    password_changed_at)
-                VALUES ('%s%s', '%s%s@t.example.com', 'h', 'CM', 'ACTIVE', now(), 0, 0, now())
-                """.formatted(prefix, seq, prefix, seq++));
+                VALUES ('%s%s', '%s%s@t.example.com', 'h', '%s', 'ACTIVE', now(), 0, 0, now())
+                """.formatted(prefix, seq, prefix, seq++, displayName));
     }
 
     /** A fresh PUBLISHED exam with 2 sections / 3 questions. */

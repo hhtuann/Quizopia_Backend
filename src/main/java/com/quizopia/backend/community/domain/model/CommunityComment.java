@@ -16,10 +16,12 @@ import java.util.Objects;
 
 /**
  * JPA entity mapping {@code community_comments} (ADR-007 §3/§5/§6,
- * V31, issue #66). IDENTITY id (single-column PK — no {@code @IdClass});
- * {@code author_alias} is the immutable snapshot of the post-upsert
- * STORED member-profile alias taken at create time (§4 — never the raw
- * request value, never retro-updated).
+ * V31, issue #66; ADR-007 Rev 4 / #72). IDENTITY id (single-column PK
+ * — no {@code @IdClass}). {@code author_alias} is the RETIRED V31
+ * alias snapshot: legacy rows keep their historical value (audit),
+ * new rows store NULL (V32 dropped the NOT NULL) and the public
+ * author name is resolved from the author's CURRENT
+ * {@code users.display_name} at read time.
  *
  * <p>Writes go through the repository's state-guarded CAS statements
  * (§6): owner PATCH is {@code UPDATE … WHERE state='VISIBLE'} (0 rows
@@ -43,7 +45,7 @@ public class CommunityComment {
     @Column(name = "author_user_id", nullable = false, updatable = false)
     private Long authorUserId;
 
-    @Column(name = "author_alias", nullable = false, length = 80, updatable = false)
+    @Column(name = "author_alias", length = 80, updatable = false)
     private String authorAlias;
 
     @Column(nullable = false, length = 2000)
@@ -67,11 +69,9 @@ public class CommunityComment {
     protected CommunityComment() {
     }
 
-    public CommunityComment(Long publicationId, Long authorUserId, String authorAlias,
-            String body) {
+    public CommunityComment(Long publicationId, Long authorUserId, String body) {
         this.publicationId = Objects.requireNonNull(publicationId, "publicationId must not be null");
         this.authorUserId = Objects.requireNonNull(authorUserId, "authorUserId must not be null");
-        this.authorAlias = Objects.requireNonNull(authorAlias, "authorAlias must not be null");
         this.body = Objects.requireNonNull(body, "body must not be null");
     }
 
