@@ -44,6 +44,33 @@ public class CommunityRateLimitProperties {
     @Min(1)
     private int forkLimit = 5;
 
+    /** Likes + unlikes per user per window (#65). */
+    @Min(1)
+    private int likeLimit = 60;
+
+    /** Rating upserts + deletes per user per window (#65). */
+    @Min(1)
+    private int ratingLimit = 30;
+
+    /** Comment creates per user per window (#66, ADR-007 §5). */
+    @Min(1)
+    private int commentCreateLimit = 10;
+
+    /** Comment edits per user per window (#66). */
+    @Min(1)
+    private int commentEditLimit = 20;
+
+    /** Comment deletes per user per window (#66). */
+    @Min(1)
+    private int commentDeleteLimit = 30;
+
+    /** Comment report submissions per user / per IP per window (#66) —
+     *  separate buckets from the publication REPORT_* policies. */
+    @Min(1)
+    private int commentReportUserLimit = 5;
+    @Min(1)
+    private int commentReportIpLimit = 20;
+
     /** Moderation writes per user per window (#42): hide/restore/dismiss/resolve. */
     @Min(1)
     private int moderationLimit = 60;
@@ -115,6 +142,62 @@ public class CommunityRateLimitProperties {
 
     public void setForkLimit(int forkLimit) {
         this.forkLimit = forkLimit;
+    }
+
+    public int getCommentCreateLimit() {
+        return commentCreateLimit;
+    }
+
+    public void setCommentCreateLimit(int commentCreateLimit) {
+        this.commentCreateLimit = commentCreateLimit;
+    }
+
+    public int getCommentEditLimit() {
+        return commentEditLimit;
+    }
+
+    public void setCommentEditLimit(int commentEditLimit) {
+        this.commentEditLimit = commentEditLimit;
+    }
+
+    public int getCommentDeleteLimit() {
+        return commentDeleteLimit;
+    }
+
+    public void setCommentDeleteLimit(int commentDeleteLimit) {
+        this.commentDeleteLimit = commentDeleteLimit;
+    }
+
+    public int getCommentReportUserLimit() {
+        return commentReportUserLimit;
+    }
+
+    public void setCommentReportUserLimit(int commentReportUserLimit) {
+        this.commentReportUserLimit = commentReportUserLimit;
+    }
+
+    public int getCommentReportIpLimit() {
+        return commentReportIpLimit;
+    }
+
+    public void setCommentReportIpLimit(int commentReportIpLimit) {
+        this.commentReportIpLimit = commentReportIpLimit;
+    }
+
+    public int getLikeLimit() {
+        return likeLimit;
+    }
+
+    public void setLikeLimit(int likeLimit) {
+        this.likeLimit = likeLimit;
+    }
+
+    public int getRatingLimit() {
+        return ratingLimit;
+    }
+
+    public void setRatingLimit(int ratingLimit) {
+        this.ratingLimit = ratingLimit;
     }
 
     public int getModerationLimit() {

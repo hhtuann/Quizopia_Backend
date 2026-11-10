@@ -69,6 +69,7 @@ public class CommunityService {
     private final CommunityCategoryRepository categories;
     private final CommunityReportRepository reports;
     private final CommunityAuthorizationService auth;
+    private final CommunityAliasService aliasService;
     private final CommunityRateLimiter rateLimiter;
     private final ExamCommunityPort examCommunityPort;
     private final Clock clock;
@@ -80,6 +81,7 @@ public class CommunityService {
             CommunityCategoryRepository categories,
             CommunityReportRepository reports,
             CommunityAuthorizationService auth,
+            CommunityAliasService aliasService,
             CommunityRateLimiter rateLimiter,
             ExamCommunityPort examCommunityPort,
             Clock clock,
@@ -90,6 +92,7 @@ public class CommunityService {
         this.categories = categories;
         this.reports = reports;
         this.auth = auth;
+        this.aliasService = aliasService;
         this.rateLimiter = rateLimiter;
         this.examCommunityPort = examCommunityPort;
         this.clock = clock;
@@ -433,7 +436,12 @@ public class CommunityService {
         }
     }
 
-    /** §7: the public alias must not equal the account email or username (ci). */
+    /**
+     * §7: the public alias must not equal the account email or username
+     * (ci), and — ADR-007 §4, the single P3-A touch — not equal any
+     * community member's stored alias (ci; publication-author
+     * impersonation defense, checked on BOTH sides of the namespace).
+     */
     private void validateAlias(String alias, CommunityAuthorizationService.PublisherAccount account) {
         if (alias == null) {
             return;
@@ -441,6 +449,7 @@ public class CommunityService {
         if (alias.equalsIgnoreCase(account.email()) || alias.equalsIgnoreCase(account.username())) {
             throw new CommunityException(CommunityErrorCode.COMMUNITY_ALIAS_INVALID);
         }
+        aliasService.assertAliasNotTakenByMember(alias);
     }
 
     private Set<String> normalizeTags(List<String> rawTags) {

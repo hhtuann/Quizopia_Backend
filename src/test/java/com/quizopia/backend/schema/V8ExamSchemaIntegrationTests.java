@@ -75,7 +75,7 @@ class V8ExamSchemaIntegrationTests {
         String current = jdbc.queryForObject(
                 "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",
                 String.class);
-        assertThat(current).isEqualTo("30");
+        assertThat(current).isEqualTo("31");
     }
 
     @Test
@@ -177,7 +177,9 @@ class V8ExamSchemaIntegrationTests {
                 "SELECT count(*) FROM exam_purposes WHERE code IN ('MIDTERM','FINAL','QUIZ','PRACTICE')",
                 Integer.class);
         assertThat(gl).isEqualTo(3);
-        assertThat(subjects).isEqualTo(45);
+        // at-least bound per the documented seed-not-totals strategy above
+        // (attempt suites insert extra subjects on the shared container).
+        assertThat(subjects).isGreaterThanOrEqualTo(45);
         assertThat(purposes).isEqualTo(4);
     }
     @Test

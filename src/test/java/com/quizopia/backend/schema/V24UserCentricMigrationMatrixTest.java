@@ -219,8 +219,8 @@ class V24UserCentricMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain passed through V24/V25 (head is now V29)")
-                        .containsExactly("30");
+                        .as("migration chain passed through V24/V25 (head is now V31)")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);
@@ -385,8 +385,8 @@ class V24UserCentricMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("fresh migration reaches the current head (V29)")
-                        .containsExactly("30");
+                        .as("fresh migration reaches the current head (V31)")
+                        .containsExactly("31");
             }
         } finally {
             dropDatabase(dbName);

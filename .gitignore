@@ -44,3 +44,4 @@ build-docker/
 Dockerfile.e2e*
 *.log
 nohup.out
+__pycache__/

@@ -116,14 +116,15 @@ class V17UserBasedParticipantsStagedFlywayTest {
                 }
                 assertThat(dup).as("duplicate (session,user) participant must be rejected").isTrue();
 
-                // Latest version is 28 (the user-centric contract V24/V25
+                // Latest version is 31 (the user-centric contract V24/V25
                 // ran after V17 and dropped the school/profile provenance
                 // but kept the user-based participant rows untouched; the
-                // community era V26–V29 followed).
+                // community V26–V29, membership-periods V30 and community
+                // social V31 migrations followed).
                 try (ResultSet rs = st.executeQuery("SELECT version FROM flyway_schema_history WHERE success "
                         + "ORDER BY installed_rank DESC LIMIT 1")) {
                     rs.next();
-                    assertThat(rs.getString(1)).isEqualTo("30");
+                    assertThat(rs.getString(1)).isEqualTo("31");
                 }
             }
         }

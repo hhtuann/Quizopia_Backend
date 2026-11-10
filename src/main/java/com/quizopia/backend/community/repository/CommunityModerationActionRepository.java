@@ -28,4 +28,8 @@ public interface CommunityModerationActionRepository
 
     /** Audit rows written against one report (dismiss/resolve journal). */
     List<CommunityModerationAction> findByReportIdOrderByCreatedAtDescIdDesc(Long reportId);
+
+    /** Per-comment history, newest-first (created_at DESC, id DESC, ADR-007 §5). */
+    java.util.List<CommunityModerationAction> findByCommentIdOrderByCreatedAtDescIdDesc(
+            Long commentId);
 }

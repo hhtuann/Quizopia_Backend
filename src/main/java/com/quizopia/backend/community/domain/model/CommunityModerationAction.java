@@ -43,6 +43,12 @@ public class CommunityModerationAction {
     @Column(name = "report_id", updatable = false)
     private Long reportId;
 
+    @Column(name = "comment_id", updatable = false)
+    private Long commentId;
+
+    @Column(name = "comment_report_id", updatable = false)
+    private Long commentReportId;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "action", nullable = false, length = 40, updatable = false)
     private CommunityModerationActionType action;
@@ -91,6 +97,28 @@ public class CommunityModerationAction {
         this.correlationId = correlationId;
     }
 
+    /**
+     * Comment-scoped row (ADR-007 §3 V31, #66): {@code publication_id},
+     * {@code report_id} and the status pair stay NULL; comment
+     * hide/restore link {@code commentId} with the VISIBLE↔HIDDEN state
+     * pair, comment-report dismiss/resolve link {@code commentReportId}
+     * with no states at all.
+     */
+    public CommunityModerationAction(Long actorUserId, CommunityModerationActionType action,
+            Long commentId, Long commentReportId, String fromModerationState,
+            String toModerationState, String reason) {
+        this.actorUserId = Objects.requireNonNull(actorUserId, "actorUserId must not be null");
+        this.commentId = commentId;
+        this.commentReportId = commentReportId;
+        this.action = Objects.requireNonNull(action, "action must not be null");
+        this.reason = Objects.requireNonNull(reason, "reason must not be null");
+        if (reason.isBlank()) {
+            throw new IllegalArgumentException("audit reason must not be blank");
+        }
+        this.fromModerationState = fromModerationState;
+        this.toModerationState = toModerationState;
+    }
+
     public Long getId() {
         return id;
     }
@@ -105,6 +133,14 @@ public class CommunityModerationAction {
 
     public Long getReportId() {
         return reportId;
+    }
+
+    public Long getCommentId() {
+        return commentId;
+    }
+
+    public Long getCommentReportId() {
+        return commentReportId;
     }
 
     public CommunityModerationActionType getAction() {

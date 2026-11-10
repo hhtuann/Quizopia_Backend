@@ -30,6 +30,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
@@ -153,6 +154,18 @@ public class GlobalExceptionHandler implements ResponseBodyAdvice<Object> {
     public ResponseEntity<ApiError> handleValidation(Exception ex, HttpServletRequest request) {
         ApiError body = apiErrorWriter.build(AuthErrorCode.AUTH_VALIDATION_ERROR, request);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    /**
+     * Wrong-method requests on mapped paths (e.g. PUT on a POST-only route)
+     * must answer 405, not fall through to the 500 catch-all — found by the
+     * P3-C live E2E (#69): a mistyped client verb surfaced as INTERNAL_ERROR.
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiError> handleMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
+        ApiError body = apiErrorWriter.build(AuthErrorCode.AUTH_VALIDATION_ERROR, request);
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).body(body);
     }
 
     @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)

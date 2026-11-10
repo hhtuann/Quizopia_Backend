@@ -294,8 +294,12 @@ class CommunityModerationApiIntegrationTests {
                 .andExpect(jsonPath("$.code").value("COMMUNITY_NOT_FOUND"));
         MvcResult catalog = mockMvc.perform(get("/api/public/community/publications?size=50"))
                 .andExpect(status().isOk()).andReturn();
-        assertThat(catalog.getResponse().getContentAsString())
-                .doesNotContain(String.valueOf(publicationId));
+        // Item-level check: a substring scan of the raw envelope would
+        // collide with "size":50 whenever the shared-container sequence
+        // happens to assign publicationId == 50.
+        List<Integer> visibleIds = com.jayway.jsonpath.JsonPath.read(
+                catalog.getResponse().getContentAsString(), "$.items[*].publicationId");
+        assertThat(visibleIds).doesNotContain((int) publicationId);
     }
 
     // ==================================================================

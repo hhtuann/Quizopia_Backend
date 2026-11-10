@@ -3,8 +3,10 @@ package com.quizopia.backend.community.application;
 import com.quizopia.backend.community.application.CommunityVisibilityStore.CatalogFilter;
 import com.quizopia.backend.community.application.CommunityVisibilityStore.CatalogPage;
 import com.quizopia.backend.community.dto.PublicCategoryResponse;
+import com.quizopia.backend.community.dto.PublicCommentEntry;
 import com.quizopia.backend.community.dto.PublicPublicationCard;
 import com.quizopia.backend.community.dto.PublicPublicationDetail;
+import com.quizopia.backend.community.dto.PublicSocialSummaryResponse;
 import com.quizopia.backend.community.dto.PublicTagUsage;
 import com.quizopia.backend.community.exception.CommunityErrorCode;
 import com.quizopia.backend.community.exception.CommunityException;
@@ -55,13 +57,19 @@ public class PublicCommunityService {
     private final CommunityVisibilityStore visibilityStore;
     private final CommunityCategoryRepository categories;
     private final CommunityRateLimiter rateLimiter;
+    private final CommunitySocialService socialService;
+    private final CommunityCommentService commentService;
 
     public PublicCommunityService(CommunityVisibilityStore visibilityStore,
             CommunityCategoryRepository categories,
-            CommunityRateLimiter rateLimiter) {
+            CommunityRateLimiter rateLimiter,
+            CommunitySocialService socialService,
+            CommunityCommentService commentService) {
         this.visibilityStore = visibilityStore;
         this.categories = categories;
         this.rateLimiter = rateLimiter;
+        this.socialService = socialService;
+        this.commentService = commentService;
     }
 
     /** GET /api/public/community/publications */
@@ -106,6 +114,27 @@ public class PublicCommunityService {
     public List<PublicTagUsage> tags(PublicReadCaller caller) {
         admit(caller);
         return visibilityStore.findVisibleTagUsage(TAG_USAGE_LIMIT);
+    }
+
+    /**
+     * GET /api/public/community/publications/{id}/social-summary — the
+     * fifth public GET (ADR-007 §5, issue #65): aggregates only, never
+     * caller state; invisible = 404 anti-enumeration.
+     */
+    public PublicSocialSummaryResponse socialSummary(PublicReadCaller caller, long publicationId) {
+        admit(caller);
+        return socialService.publicSummary(publicationId);
+    }
+
+    /**
+     * GET /api/public/community/publications/{id}/comments (ADR-007
+     * §5, issue #66): anonymous-readable, VISIBLE-only, newest-first;
+     * invisible publication = 404 anti-enumeration.
+     */
+    public PageResponse<PublicCommentEntry> commentsPage(PublicReadCaller caller,
+            long publicationId, int page, int size) {
+        admit(caller);
+        return commentService.publicPage(publicationId, page, size);
     }
 
     // ============================================================
