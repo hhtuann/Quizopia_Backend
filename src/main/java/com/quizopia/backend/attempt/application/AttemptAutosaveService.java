@@ -9,9 +9,12 @@ import com.quizopia.backend.attempt.dto.SaveAnswerRequest;
 import com.quizopia.backend.attempt.dto.SaveAnswerResponse;
 import com.quizopia.backend.attempt.exception.AttemptErrorCode;
 import com.quizopia.backend.attempt.exception.AttemptException;
+import com.quizopia.backend.attempt.repository.AttemptAnswerHistoryRepository;
 import com.quizopia.backend.attempt.repository.AttemptAnswerRepository;
 import com.quizopia.backend.attempt.repository.AttemptQuestionRepository;
 import com.quizopia.backend.attempt.repository.AttemptRepository;
+import com.quizopia.backend.monitoring.application.ActivityEventRecorder;
+import com.quizopia.backend.monitoring.domain.model.ActivityEventType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,7 +40,10 @@ import java.util.Objects;
  * against the deadline at the moment it acquired the lock, not the (stale) moment the request arrived.
  * <p><b>No mutation besides the answer:</b> only {@code attempts.last_saved_at} is touched (on accepted,
  * via a direct UPDATE, since {@code upsertIfNewer} clears the persistence context). Status, deadline,
- * submittedAt, and clientInstanceId of the attempt are never changed. No event, no grading.
+ * submittedAt, and clientInstanceId of the attempt are never changed. No grading. P4-A3 (#82) adds
+ * exactly two ACCEPTED-only writes in the same transaction: the answer-history row and the
+ * server-confirmed ANSWER_ACCEPTED activity event (STOMP fires only AFTER_COMMIT); no external I/O
+ * ever runs inside this transaction.
  */
 @Service
 public class AttemptAutosaveService {
@@ -46,6 +52,8 @@ public class AttemptAutosaveService {
     private final AttemptRepository attemptRepo;
     private final AttemptQuestionRepository aqRepo;
     private final AttemptAnswerRepository answerRepo;
+    private final AttemptAnswerHistoryRepository historyRepo;
+    private final ActivityEventRecorder activityRecorder;
     private final AnswerPayloadValidator validator;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbc;
@@ -53,12 +61,16 @@ public class AttemptAutosaveService {
 
     public AttemptAutosaveService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                   AttemptQuestionRepository aqRepo, AttemptAnswerRepository answerRepo,
+                                  AttemptAnswerHistoryRepository historyRepo,
+                                  ActivityEventRecorder activityRecorder,
                                   AnswerPayloadValidator validator, ObjectMapper objectMapper,
                                   JdbcTemplate jdbc, Clock clock) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.aqRepo = aqRepo;
         this.answerRepo = answerRepo;
+        this.historyRepo = historyRepo;
+        this.activityRecorder = activityRecorder;
         this.validator = validator;
         this.objectMapper = objectMapper;
         this.jdbc = jdbc;
@@ -118,14 +130,31 @@ public class AttemptAutosaveService {
                 .orElseThrow(() -> new IllegalStateException("answer row missing after upsert"));
 
         boolean accepted = (affected == 1);
+        // Capture the accepted fact BEFORE any persistence-context clears below.
+        long acceptedSequence = current.getSequenceNumber();
+        Instant savedAt = current.getSavedAt();
         if (accepted) {
+            // P4-A3 (issue #82, ADR-008 invariant 7): exactly ONE history row
+            // per accepted sequence, in the SAME transaction as the UPSERT. A
+            // stale save (affected=0) never reaches this block. A history
+            // failure propagates and rolls the whole autosave back — a
+            // partially committed accepted answer is impossible.
+            historyRepo.insertAccepted(attemptId, question.getId(), acceptedSequence,
+                    payloadJson, java.sql.Timestamp.from(savedAt));
+            // P4-A4 read model: server-confirmed ANSWER_ACCEPTED activity
+            // event (metadata carries ids only — never answer content) and,
+            // after commit, the teacher-topic STOMP delta ping.
+            activityRecorder.recordServerEvent(attemptId, attempt.getExamSessionId(),
+                    attempt.getUserId(), ActivityEventType.ANSWER_ACCEPTED, savedAt,
+                    "{\"attemptQuestionId\":" + question.getId()
+                            + ",\"acceptedSequence\":" + acceptedSequence + "}");
             // upsertIfNewer clears the persistence context, so update last_saved_at directly.
             // PG JDBC can't infer Instant → convert to Timestamp for the TIMESTAMPTZ column.
             jdbc.update("UPDATE attempts SET last_saved_at = ? WHERE id = ?",
-                    java.sql.Timestamp.from(current.getSavedAt()), attemptId);
+                    java.sql.Timestamp.from(savedAt), attemptId);
         }
         return new SaveAnswerResponse(accepted, accepted ? null : "STALE_SEQUENCE",
-                question.getId(), current.getSequenceNumber(), current.getSavedAt(), now);
+                question.getId(), acceptedSequence, savedAt, now);
     }
 
     private AttemptQuestion resolveQuestion(Long attemptId, SaveAnswerRequest request) {

@@ -27,6 +27,11 @@ public enum AttemptErrorCode {
     ATTEMPT_ALREADY_SUBMITTED(HttpStatus.CONFLICT, "ATTEMPT_ALREADY_SUBMITTED", "Attempt has already been submitted"),
     ATTEMPT_DUPLICATE_START(HttpStatus.CONFLICT, "ATTEMPT_DUPLICATE_START", "A concurrent start race was detected"),
     ATTEMPT_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "ATTEMPT_IDEMPOTENCY_CONFLICT", "Idempotency conflict"),
+    // P4-A (issue #80): fail-closed monitored-start gate — camera readiness
+    // verification (LiveKit room/track state, ADR-008 invariant 4) arrives in
+    // P4-B. Until then a NEW attempt on a monitored session cannot start.
+    ATTEMPT_MONITORING_START_UNAVAILABLE(HttpStatus.CONFLICT, "ATTEMPT_MONITORING_START_UNAVAILABLE",
+            "Monitored sessions require camera readiness verification, which is not available yet (P4-B)"),
     // Day 8 result/grading error codes
     ATTEMPT_NOT_SUBMITTED(HttpStatus.CONFLICT, "ATTEMPT_NOT_SUBMITTED", "Attempt has not been submitted"),
     ATTEMPT_NOT_GRADED(HttpStatus.CONFLICT, "ATTEMPT_NOT_GRADED", "Attempt has not been graded"),

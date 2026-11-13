@@ -24,6 +24,8 @@ public enum ExamErrorCode {
     EXAM_SESSION_ACCESS_DENIED(HttpStatus.FORBIDDEN, "Access denied to this exam session resource"),
     EXAM_SESSION_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam session not found"),
     EXAM_SESSION_INVALID_STATE(HttpStatus.CONFLICT, "Exam session state transition is invalid"),
+    EXAM_SESSION_MONITORING_INVALID(HttpStatus.BAD_REQUEST, "Exam session monitoring configuration is invalid"),
+    EXAM_SESSION_MONITORING_FROZEN(HttpStatus.CONFLICT, "Monitoring configuration is frozen for this session"),
     EXAM_PARTICIPANT_NOT_FOUND(HttpStatus.NOT_FOUND, "Exam session participant not found"),
     EXAM_PARTICIPANT_DUPLICATE(HttpStatus.CONFLICT, "Duplicate exam session participant");
 

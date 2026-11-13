@@ -40,7 +40,9 @@ public record SessionEligibilityResponse(
         Instant activeAttemptDeadlineAt,
         boolean canStartNow,
         boolean canResume,
-        Instant serverTime) {
+        Instant serverTime,
+        /** Monitoring policy notice for authorized students (P4-A1 #80). */
+        SessionMonitoringSummary monitoring) {
 
     /** Landing states (serialized by name). */
     public static final String STATE_CAN_START = "CAN_START";

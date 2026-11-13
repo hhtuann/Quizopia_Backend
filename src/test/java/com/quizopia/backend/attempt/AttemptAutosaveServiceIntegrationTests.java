@@ -284,6 +284,10 @@ class AttemptAutosaveServiceIntegrationTests {
 
     @Test void numericValidSamplesAccepted() {
         for (String v : new String[]{"1.25", "1,25", "2.50", "-1.2", "02.5"}) {
+            // Reset BOTH the answer and its accepted history — the P4-A3
+            // history UNIQUE (attempt, question, sequence) would otherwise
+            // reject the re-saved sequence 1 of this test-only reset loop.
+            jdbc.update("DELETE FROM attempt_answer_history WHERE attempt_question_id=?", aqNumericId);
             jdbc.update("DELETE FROM attempt_answers WHERE attempt_question_id=?", aqNumericId);
             assertThat(autosaveService.saveAnswer(studentUserId, attemptId, req(aqNumericId, json("{\"value\":\"" + v + "\"}"), 1)).accepted())
                     .as("numeric %s", v).isTrue();

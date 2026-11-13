@@ -10,6 +10,7 @@ import com.quizopia.backend.attempt.dto.AvailableSessionsResponse.AvailableSessi
 import com.quizopia.backend.attempt.dto.StartAttemptRequest;
 import com.quizopia.backend.attempt.dto.SessionEligibilityResponse;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse;
+import com.quizopia.backend.attempt.dto.SessionMonitoringSummary;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse.QuestionView;
 import com.quizopia.backend.attempt.dto.StartAttemptResponse.QuestionView.OptionView;
 import com.quizopia.backend.attempt.exception.AttemptErrorCode;
@@ -19,6 +20,7 @@ import com.quizopia.backend.attempt.repository.AttemptRepository;
 import com.quizopia.backend.exam.domain.model.ExamSession;
 import com.quizopia.backend.exam.domain.model.ExamSessionStatus;
 import com.quizopia.backend.exam.repository.ExamSessionRepository;
+import com.quizopia.backend.exam.repository.SessionMonitoringPolicyRepository;
 import com.quizopia.backend.realtime.event.AttemptRealtimeEvent;
 import com.quizopia.backend.realtime.event.RealtimeEventType;
 import jakarta.persistence.EntityManager;
@@ -67,23 +69,29 @@ public class AttemptService {
     private final AttemptRepository attemptRepo;
     private final AttemptQuestionRepository aqRepo;
     private final ExamSessionRepository sessionRepo;
+    private final SessionMonitoringPolicyRepository monitoringPolicyRepo;
     private final JdbcTemplate jdbc;
     private final EntityManager em;
     private final Clock clock;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder;
 
     public AttemptService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
             AttemptQuestionRepository aqRepo, ExamSessionRepository sessionRepo,
+            SessionMonitoringPolicyRepository monitoringPolicyRepo,
             JdbcTemplate jdbc, EntityManager em, Clock clock,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher,
+            com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.aqRepo = aqRepo;
         this.sessionRepo = sessionRepo;
+        this.monitoringPolicyRepo = monitoringPolicyRepo;
         this.jdbc = jdbc;
         this.em = em;
         this.clock = clock;
         this.eventPublisher = eventPublisher;
+        this.activityRecorder = activityRecorder;
     }
 
     // ============================================================
@@ -142,7 +150,14 @@ public class AttemptService {
         Instant activeDeadline = active.map(Attempt::getDeadlineAt).orElse(null);
 
         boolean canResume = activeId != null && activeDeadline != null && !now.isAfter(activeDeadline);
-        boolean canStartNow = activeId == null
+        // P4-A (#80): the student-facing policy block — monitoringEnabled and
+        // the DERIVED cameraRequired flag — is exposed to authorized
+        // (eligible) students only. A monitored session fails closed for NEW
+        // attempts until P4-B camera readiness exists, so canStartNow is
+        // force-false to keep the landing UI honest.
+        boolean monitoringEnabled = Boolean.TRUE
+                .equals(monitoringPolicyRepo.isMonitoringEnabled(sessionId));
+        boolean canStartNow = !monitoringEnabled && activeId == null
                 && (session.getStatus() == ExamSessionStatus.OPEN
                         || session.getStatus() == ExamSessionStatus.SCHEDULED)
                 && !now.isBefore(session.getStartsAt()) && !now.isAfter(session.getEndsAt())
@@ -173,7 +188,8 @@ public class AttemptService {
                 session.getTitle(), examTitle, session.getVisibility().name(),
                 session.getStartsAt(), session.getEndsAt(), session.getDurationMinutes(),
                 maxAttempts, attemptsUsed, remaining, activeId, activeDeadline,
-                canStartNow, canResume, now);
+                canStartNow, canResume, now,
+                new SessionMonitoringSummary(monitoringEnabled, monitoringEnabled));
     }
 
     /**
@@ -186,7 +202,12 @@ public class AttemptService {
                 + "e.id AS exam_id, e.title AS exam_title, subj.name AS subject_name, "
                 + "s.duration_minutes AS duration_minutes, "
                 + "(SELECT COUNT(*) FROM attempts a WHERE a.exam_session_id = s.id AND a.user_id = ?) AS used, "
-                + "act.id AS active_id, act.deadline_at AS active_deadline "
+                + "act.id AS active_id, act.deadline_at AS active_deadline, "
+                // P4-A (#80, review REV-3): monitored sessions fail closed for
+                // NEW attempts until P4-B — the discovery listing's canStartNow
+                // must agree with getSessionEligibility and the start gate.
+                + "EXISTS (SELECT 1 FROM session_monitoring_policies p "
+                + "        WHERE p.exam_session_id = s.id AND p.monitoring_enabled) AS monitored "
                 + "FROM exam_sessions s "
                 + "JOIN exams e ON e.id = s.exam_id "
                 + "LEFT JOIN subjects subj ON subj.id = e.subject_id "
@@ -216,8 +237,11 @@ public class AttemptService {
             String status = rs.getString("status");
             Instant startsAt = rs.getTimestamp("starts_at").toInstant();
             Instant endsAt = rs.getTimestamp("ends_at").toInstant();
+            boolean monitored = rs.getBoolean("monitored");
             boolean canResume = activeId != null && activeDeadline != null && !now.isAfter(activeDeadline);
-            boolean canStartNow = activeId == null
+            // Monitored sessions fail closed (#80, review REV-3): canStartNow
+            // must agree with the eligibility endpoint and the start gate.
+            boolean canStartNow = !monitored && activeId == null
                     && ("OPEN".equals(status) || "SCHEDULED".equals(status))
                     && !now.isBefore(startsAt) && !now.isAfter(endsAt) && remaining > 0;
             return new AvailableSessionItem(
@@ -312,7 +336,13 @@ public class AttemptService {
         if (now.isAfter(active.getDeadlineAt())) {
             throw new AttemptException(AttemptErrorCode.ATTEMPT_DEADLINE_EXCEEDED);
         }
-        // Resume: no new attempt, no new questions, no event.
+        // Resume: no new attempt, no new questions, no realtime envelope.
+        // P4-A2 (#81): a durable ATTEMPT_RESUMED server event IS recorded —
+        // reload/resume is a real, distinguishable lifecycle behavior.
+        activityRecorder.recordServerEvent(active.getId(), session.getId(),
+                active.getUserId(),
+                com.quizopia.backend.monitoring.domain.model.ActivityEventType.ATTEMPT_RESUMED,
+                now, null);
         List<AttemptQuestion> questions = aqRepo.findByAttemptIdOrderByDisplayOrderAsc(active.getId());
         List<QuestionView> qv = buildQuestionViews(questions);
         return new StartAttemptResponse(active.getId(), session.getId(), active.getAttemptNumber(),
@@ -322,6 +352,14 @@ public class AttemptService {
 
     private StartAttemptResponse createNewAttempt(Long userId, ExamSession session,
             Instant now, StartAttemptRequest request) {
+        // P4-A fail-closed gate (issue #80 / ADR-008 invariant 4): camera
+        // readiness is verified by the BACKEND via LiveKit room/track state,
+        // which arrives in P4-B. Until then a NEW attempt on a monitored
+        // session is refused — never a fake readiness pass-through. Resuming
+        // an existing IN_PROGRESS attempt is unaffected (ADR-008 D8).
+        if (Boolean.TRUE.equals(monitoringPolicyRepo.isMonitoringEnabled(session.getId()))) {
+            throw new AttemptException(AttemptErrorCode.ATTEMPT_MONITORING_START_UNAVAILABLE);
+        }
         // MAX+1 under session lock (user-based, issue #4 P0-1).
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), userId).orElse(0) + 1;
         // 0 = unlimited: no max-attempts check.
@@ -388,6 +426,11 @@ public class AttemptService {
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_STARTED, session.getId(), attempt.getId(),
                 userId, null, now));
+        // P4-A2 (#81): durable server-confirmed lifecycle record in the same
+        // transaction (timeline read model).
+        activityRecorder.recordServerEvent(attempt.getId(), session.getId(), userId,
+                com.quizopia.backend.monitoring.domain.model.ActivityEventType.ATTEMPT_STARTED,
+                now, null);
         return new StartAttemptResponse(attempt.getId(), session.getId(), nextNumber,
                 AttemptStatus.IN_PROGRESS.name(), now, deadline, now,
                 false, session.getMaxAttempts(), qv);

@@ -68,13 +68,15 @@ public class AttemptSubmitService {
     private final ApplicationEventPublisher eventPublisher;
     private final com.quizopia.backend.grading.AttemptGradingService gradingService;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder;
 
 
     public AttemptSubmitService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                 IdempotencyRecordRepository idempotencyRepo, ObjectMapper objectMapper,
                                 Clock clock, ApplicationEventPublisher eventPublisher,
                                 com.quizopia.backend.grading.AttemptGradingService gradingService,
-                                com.quizopia.backend.notification.application.NotificationService notificationService) {
+                                com.quizopia.backend.notification.application.NotificationService notificationService,
+                                com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder) {
         this.auth = auth;
         this.attemptRepo = attemptRepo;
         this.idempotencyRepo = idempotencyRepo;
@@ -83,7 +85,7 @@ public class AttemptSubmitService {
         this.eventPublisher = eventPublisher;
         this.gradingService = gradingService;
         this.notificationService = notificationService;
-
+        this.activityRecorder = activityRecorder;
     }
 
     @Transactional
@@ -175,6 +177,10 @@ public class AttemptSubmitService {
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
                 userId, null, now));
+        // P4-A2 (#81): durable server-confirmed lifecycle record (same tx).
+        activityRecorder.recordServerEvent(attemptId, attempt.getExamSessionId(), userId,
+                com.quizopia.backend.monitoring.domain.model.ActivityEventType.ATTEMPT_SUBMITTED,
+                now, null);
         // Notify the student that their result is graded.
         notificationService.create(userId,
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
@@ -235,6 +241,18 @@ public class AttemptSubmitService {
         eventPublisher.publishEvent(new AttemptRealtimeEvent(
                 RealtimeEventType.ATTEMPT_SUBMITTED, attempt.getExamSessionId(), attempt.getId(),
                 attempt.getUserId(), null, deadline));
+        // P4-A2 (#81): the sweep's terminal event is ATTEMPT_TIMED_OUT (a
+        // real, distinguishable terminal behavior — not a second submit).
+        // server_received_at MUST be the true receipt instant (review TL-1):
+        // a backdated `deadline` would sort BEFORE cursors that already
+        // passed it, permanently hiding the event from paginating readers.
+        // The business instant travels in metadata; submittedAt stays
+        // deadline-exact for grading semantics.
+        activityRecorder.recordServerEvent(attemptId, attempt.getExamSessionId(),
+                attempt.getUserId(),
+                com.quizopia.backend.monitoring.domain.model.ActivityEventType.ATTEMPT_TIMED_OUT,
+                Instant.now(clock),
+                "{\"deadlineAt\":\"" + deadline + "\"}");
         notificationService.create(attempt.getUserId(),
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,
                 "Result available",

@@ -31,6 +31,20 @@ public record CreateExamSessionRequest(
         /** PUBLIC = platform users; CLASS_RESTRICTED (default) = assigned classes only. */
         SessionVisibility visibility,
         /** Assigned classrooms (meaningful only when visibility = CLASS_RESTRICTED). */
-        List<Long> classroomIds
+        List<Long> classroomIds,
+        /**
+         * Monitoring configuration (P4-A1, issue #80). Null or absent = all
+         * OFF (legacy payloads unchanged). cameraRequired is NOT accepted
+         * here — it is derived server-side from monitoringEnabled.
+         */
+        MonitoringPolicyRequest monitoring
 ) {
+
+    /** Legacy 9-arg shape (pre-P4-A callers): monitoring stays absent (all OFF). */
+    public CreateExamSessionRequest(Long examId, String code, String title, Instant startsAt,
+            Instant endsAt, Integer maxAttempts, Integer durationMinutes,
+            SessionVisibility visibility, List<Long> classroomIds) {
+        this(examId, code, title, startsAt, endsAt, maxAttempts, durationMinutes, visibility,
+                classroomIds, null);
+    }
 }
