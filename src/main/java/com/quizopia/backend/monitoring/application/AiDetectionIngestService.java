@@ -328,6 +328,12 @@ public class AiDetectionIngestService {
             throw new MonitoringException(MonitoringErrorCode.MONITORING_VALIDATION_ERROR,
                     "modelId and modelVersion are required");
         }
+        // Length bound enforced here as well: the worker path's nested item
+        // must not overflow the VARCHAR columns with a 500 (P3-7 review).
+        if (item.modelId().length() > 40 || item.modelVersion().length() > 40) {
+            throw new MonitoringException(MonitoringErrorCode.MONITORING_VALIDATION_ERROR,
+                    "modelId/modelVersion exceed 40 characters");
+        }
         if (item.runtime() == null || !runtimes.contains(item.runtime())) {
             // A browser path can never claim the worker runtime and vice
             // versa — provenance is structural, not self-reported.

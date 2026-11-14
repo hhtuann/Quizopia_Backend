@@ -1,5 +1,6 @@
 package com.quizopia.backend.monitoring.dto;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.List;
@@ -24,6 +25,6 @@ public record AiWorkerDetectionBatchRequest(
     public record Item(
             @NotNull Long attemptId,
             @NotNull Long userId,
-            AiDetectionBatchRequest.Item detection) {
+            @Valid AiDetectionBatchRequest.Item detection) {
     }
 }

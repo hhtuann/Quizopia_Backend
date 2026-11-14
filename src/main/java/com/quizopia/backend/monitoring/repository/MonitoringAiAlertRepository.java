@@ -66,8 +66,11 @@ public interface MonitoringAiAlertRepository extends JpaRepository<MonitoringAiA
      * notification without a re-read race.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
+    // P2-4 (review): GREATEST keeps last_detected_at monotonic — an accepted
+    // out-of-order detection must not push it below first_detected_at
+    // (chk_ai_alerts_period) nor shorten the window.
     @Query(value = "UPDATE monitoring_ai_alerts SET "
-            + "last_detected_at = :observedAt, "
+            + "last_detected_at = GREATEST(last_detected_at, :observedAt), "
             + "detection_count = detection_count + 1, "
             + "max_confidence = (SELECT MAX(v) FROM (VALUES (max_confidence), "
             + "(CAST(:maxConfidence AS double precision))) AS t(v)), "

@@ -379,6 +379,65 @@ class AiDetectionIngestIntegrationTests {
     }
 
     @Test
+    void outOfOrderObservedAtNeverMovesLastDetectedAtBackwards() {
+        // P2-4 regression: an accepted out-of-order detection (still within
+        // the attempt window) must not push last_detected_at below
+        // first_detected_at (chk_ai_alerts_period → 500 rollback).
+        ingestService.ingestStudent(studentId, attemptId, batch(phoneDetection(base, 1, 0.9)));
+        clock.advance(Duration.ofSeconds(3));
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(phoneDetection(base.plusSeconds(2), 2, 0.6)));
+        clock.advance(Duration.ofSeconds(1));
+        // Out-of-order: observedAt BEFORE the window's first_detected_at
+        // (still ≥ startedAt-5s so it is ACCEPTED, not quarantined).
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(phoneDetection(base.minusSeconds(2), 3, 0.4)));
+
+        assertThat(alertCount()).isEqualTo(1);
+        Map<String, Object> alert = jdbc.queryForMap(
+                "SELECT detection_count, first_detected_at, last_detected_at "
+                        + "FROM monitoring_ai_alerts WHERE attempt_id=?", attemptId);
+        assertThat(((Number) alert.get("detection_count")).intValue()).isEqualTo(3);
+        assertThat(((java.sql.Timestamp) alert.get("first_detected_at")).toInstant())
+                .isEqualTo(base);
+        assertThat(((java.sql.Timestamp) alert.get("last_detected_at")).toInstant())
+                .isEqualTo(base.plusSeconds(2));
+    }
+
+    @Test
+    void raceLoserRecheckSeparatesIncidentsInsteadOfMerging() {
+        // P2-6 regression: simulate the open-race loser path — close the
+        // winner's OPEN window behind the finder used by the gap check, then
+        // aggregate a detection BEYOND the cooldown: it must close+reopen a
+        // NEW window, not extend the winner's.
+        ingestService.ingestStudent(studentId, attemptId, batch(phoneDetection(base, 1, 0.9)));
+        clock.advance(Duration.ofSeconds(30));
+        // Sneak a second window in as the "winner" of a concurrent race by
+        // driving the same gap flow: detection at +30s closes window 1 and
+        // opens window 2 — then simulate the loser by aggregating an OLD
+        // detection (base+1s, within window 1's cooldown but window 1 is
+        // CLOSED): it lands in window 2 via GREATEST-extend and never
+        // corrupts period ordering.
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(phoneDetection(base.plusSeconds(30), 2, 0.6)));
+        clock.advance(Duration.ofSeconds(1));
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(phoneDetection(base.plusSeconds(1), 3, 0.55)));
+
+        List<Map<String, Object>> windows = jdbc.queryForList(
+                "SELECT id, status, detection_count, first_detected_at, last_detected_at "
+                        + "FROM monitoring_ai_alerts WHERE attempt_id=? ORDER BY id", attemptId);
+        assertThat(windows).hasSize(2);
+        for (Map<String, Object> w : windows) {
+            // chk_ai_alerts_period holds on every window (no 500 rollback).
+            assertThat(((java.sql.Timestamp) w.get("last_detected_at")).toInstant()
+                    .isBefore(((java.sql.Timestamp) w.get("first_detected_at")).toInstant()))
+                    .as("window %s period invariant", w.get("id"))
+                    .isFalse();
+        }
+    }
+
+    @Test
     void personNotVisibleUsesLongerFortyFiveSecondCooldown() {
         ingestService.ingestStudent(studentId, attemptId,
                 batch(item("PERSON_NOT_OBSERVED", base, 1)));

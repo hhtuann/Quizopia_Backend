@@ -116,12 +116,38 @@ public class AiAlertAggregationService {
             }
             // Lost an open-race to a concurrent batch: extend the winner's
             // window instead (the partial unique index guarantees exactly
-            // one OPEN window per attempt+type).
+            // one OPEN window per attempt+type). P2-6 (review): the gap
+            // check above ran against the OLD window — re-check against the
+            // winner so two separated incidents never merge into one.
             open = alertRepo
                     .findFirstByAttemptIdAndAlertTypeAndStatusOrderByIdDesc(
                             attempt.getId(), alertType, MonitoringAiAlert.STATUS_OPEN)
                     .orElseThrow(() -> new IllegalStateException(
                             "AI alert OPEN window missing after open-race"));
+            if (detection.observedAt()
+                    .isAfter(open.getLastDetectedAt().plus(cooldownOf(alertType)))) {
+                alertRepo.closeOpenAlert(open.getId());
+                inserted = alertRepo.insertOpenIfAbsent(
+                        attempt.getId(), attempt.getExamSessionId(), attempt.getUserId(),
+                        alertType.name(), Timestamp.from(detection.observedAt()), maxConfidence,
+                        detection.payloadJson(), detection.modelId(), detection.modelVersion(),
+                        provenance.name());
+                if (inserted == 1) {
+                    MonitoringAiAlert reopened = alertRepo
+                            .findFirstByAttemptIdAndAlertTypeAndStatusOrderByIdDesc(
+                                    attempt.getId(), alertType, MonitoringAiAlert.STATUS_OPEN)
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "AI alert window missing right after re-open"));
+                    recordAlertEvent(reopened.getId(), attempt, ActivityEventType.AI_ALERT_RAISED,
+                            detection, provenance, maxConfidence, 1);
+                    return;
+                }
+                open = alertRepo
+                        .findFirstByAttemptIdAndAlertTypeAndStatusOrderByIdDesc(
+                                attempt.getId(), alertType, MonitoringAiAlert.STATUS_OPEN)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "AI alert OPEN window missing after re-open race"));
+            }
         }
 
         alertRepo.extendOpenAlert(open.getId(), Timestamp.from(detection.observedAt()),
