@@ -3,10 +3,12 @@ package com.quizopia.backend.monitoring.api;
 import com.quizopia.backend.monitoring.application.AnswerHistoryService;
 import com.quizopia.backend.monitoring.application.AttemptActivityIngestService;
 import com.quizopia.backend.monitoring.application.AttemptTimelineService;
+import com.quizopia.backend.monitoring.application.SessionAttemptsService;
 import com.quizopia.backend.monitoring.dto.ActivityEventBatchRequest;
 import com.quizopia.backend.monitoring.dto.ActivityEventBatchResponse;
 import com.quizopia.backend.monitoring.dto.AnswerHistoryResponse;
 import com.quizopia.backend.monitoring.dto.AttemptTimelineResponse;
+import com.quizopia.backend.monitoring.dto.SessionAttemptsResponse;
 import jakarta.validation.Valid;
 import java.time.Instant;
 import org.springframework.http.HttpStatus;
@@ -31,28 +33,33 @@ import org.springframework.web.bind.annotation.RestController;
  *       durable unified timeline (owner or session-owner teacher).</li>
  *   <li>{@code GET  /api/attempts/{attemptId}/answer-history} — accepted
  *       answer versions (owner or session-owner teacher).</li>
+ *   <li>{@code GET  /api/exam-sessions/{sessionId}/attempts} — every attempt
+ *       of a session incl. IN_PROGRESS (session-owner teacher; the Activity
+ *       panel picker — the graded results report misses live attempts).</li>
  * </ul>
  *
  * <p>All authorization is service-layer (permission codes + ownership), the
  * established deny-by-default pattern; errors map via the global handler.
  */
 @RestController
-@RequestMapping("/api/attempts/{attemptId}")
 public class AttemptActivityController {
 
     private final AttemptActivityIngestService ingestService;
     private final AttemptTimelineService timelineService;
     private final AnswerHistoryService historyService;
+    private final SessionAttemptsService sessionAttemptsService;
 
     public AttemptActivityController(AttemptActivityIngestService ingestService,
             AttemptTimelineService timelineService,
-            AnswerHistoryService historyService) {
+            AnswerHistoryService historyService,
+            SessionAttemptsService sessionAttemptsService) {
         this.ingestService = ingestService;
         this.timelineService = timelineService;
         this.historyService = historyService;
+        this.sessionAttemptsService = sessionAttemptsService;
     }
 
-    @PostMapping("/activity-events")
+    @PostMapping("/api/attempts/{attemptId}/activity-events")
     public ResponseEntity<ActivityEventBatchResponse> ingest(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long attemptId,
@@ -62,7 +69,7 @@ public class AttemptActivityController {
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
 
-    @GetMapping("/timeline")
+    @GetMapping("/api/attempts/{attemptId}/timeline")
     public AttemptTimelineResponse timeline(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long attemptId,
@@ -76,7 +83,7 @@ public class AttemptActivityController {
                 cursor, limit, types, source, from, to);
     }
 
-    @GetMapping("/answer-history")
+    @GetMapping("/api/attempts/{attemptId}/answer-history")
     public AnswerHistoryResponse answerHistory(
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long attemptId,
@@ -84,5 +91,12 @@ public class AttemptActivityController {
             @RequestParam(required = false) Integer limit) {
         return historyService.history(Long.valueOf(jwt.getSubject()), attemptId,
                 attemptQuestionId, limit);
+    }
+
+    @GetMapping("/api/exam-sessions/{sessionId}/attempts")
+    public SessionAttemptsResponse sessionAttempts(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long sessionId) {
+        return sessionAttemptsService.attempts(Long.valueOf(jwt.getSubject()), sessionId);
     }
 }
