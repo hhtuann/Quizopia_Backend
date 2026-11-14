@@ -102,6 +102,7 @@ public class CameraPreflightService {
     private final MonitoringPreflightRepository preflightRepo;
     private final MonitoringMediaBindingRepository bindingRepo;
     private final MonitoringMediaRoomRepository roomRepo;
+    private final com.quizopia.backend.monitoring.repository.MonitoringCameraConnectionRepository cameraConnections;
     private final AttemptRepository attemptRepo;
     private final ExamSessionRepository sessionRepo;
     private final SessionMonitoringPolicyRepository monitoringPolicyRepo;
@@ -119,6 +120,7 @@ public class CameraPreflightService {
     public CameraPreflightService(MonitoringPreflightRepository preflightRepo,
             MonitoringMediaBindingRepository bindingRepo,
             MonitoringMediaRoomRepository roomRepo,
+            com.quizopia.backend.monitoring.repository.MonitoringCameraConnectionRepository cameraConnections,
             AttemptRepository attemptRepo,
             ExamSessionRepository sessionRepo,
             SessionMonitoringPolicyRepository monitoringPolicyRepo,
@@ -135,6 +137,7 @@ public class CameraPreflightService {
         this.preflightRepo = preflightRepo;
         this.bindingRepo = bindingRepo;
         this.roomRepo = roomRepo;
+        this.cameraConnections = cameraConnections;
         this.attemptRepo = attemptRepo;
         this.sessionRepo = sessionRepo;
         this.monitoringPolicyRepo = monitoringPolicyRepo;
@@ -162,11 +165,16 @@ public class CameraPreflightService {
      * media room, and stores a fresh preflight (ACTIVE) with its media
      * identity + unbound binding at the next epoch. The student media token
      * is minted AFTER the transaction commits.
+     *
+     * <p>Media availability is checked BEFORE any row is written: with the
+     * infrastructure disabled, retries must not accumulate room/preflight/
+     * binding rows (nothing would clean them up) — the call fails fast with
+     * 503 and the database stays untouched.
      */
     public PreflightStartResponse createPreflight(Long userId, Long sessionId) {
         requirePermission(userId, PERMISSION_PREFLIGHT);
+        requireInfraEnabled();
         Instant now = clock.instant();
-
         CreatedPreflight created = tx.execute(status -> {
             // Mirrors startAttempt's validation order; the session row lock
             // is held because the lazy SCHEDULED→OPEN transition may write.
@@ -264,15 +272,30 @@ public class CameraPreflightService {
         String trackSid = activeCameraTrackSid(participant.get());
 
         // Second transaction: grant (or rotate) the lease after the media
-        // confirmation — re-validating state because the world moved on.
+        // confirmation. The transition itself is status-guarded in SQL — a
+        // preflight that meanwhile reached a terminal state (CONSUMED by a
+        // start, REVOKED by a teacher, EXPIRED) can never be resurrected to
+        // VERIFIED by this unlocked re-read.
         return tx.execute(status -> {
             MonitoringPreflight preflight = preflightRepo.findById(verified.preflightId())
                     .orElseThrow(() -> new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_NOT_FOUND));
             requireVerifiable(preflight, clock.instant());
             String rawLease = newRawLease();
             Instant leaseExpiresAt = clock.instant().plus(liveKit.getReadinessLeaseTtl());
-            preflight.markVerified(sha256Hex(rawLease), leaseExpiresAt, trackSid);
-            preflightRepo.saveAndFlush(preflight);
+            int granted = preflightRepo.markVerifiedGuarded(
+                    verified.preflightId(),
+                    java.util.List.of(PreflightStatus.ACTIVE, PreflightStatus.VERIFIED),
+                    PreflightStatus.VERIFIED,
+                    sha256Hex(rawLease), leaseExpiresAt, trackSid);
+            if (granted != 1) {
+                PreflightStatus current = preflightRepo.findById(verified.preflightId())
+                        .orElseThrow(() -> new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_NOT_FOUND))
+                        .getStatus();
+                if (current == PreflightStatus.CONSUMED) {
+                    throw new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_USED);
+                }
+                throw new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_EXPIRED);
+            }
             return PreflightVerifyResponse.ready(rawLease, leaseExpiresAt, trackSid);
         });
     }
@@ -280,8 +303,15 @@ public class CameraPreflightService {
     private record VerifiedPreflight(UUID preflightId, String mediaIdentity, String roomName) {
     }
 
-    /** A preflight is verifiable while ACTIVE/VERIFIED and not yet expired. */
+    /**
+     * A preflight is verifiable while ACTIVE/VERIFIED and not yet expired.
+     * A CONSUMED preflight (its lease was spent by a start) maps to the more
+     * precise USED — terminal states are never resurrected.
+     */
     private static void requireVerifiable(MonitoringPreflight preflight, Instant now) {
+        if (preflight.getStatus() == PreflightStatus.CONSUMED) {
+            throw new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_USED);
+        }
         boolean statusOk = preflight.getStatus() == PreflightStatus.ACTIVE
                 || preflight.getStatus() == PreflightStatus.VERIFIED;
         if (!statusOk || !preflight.getExpiresAt().isAfter(now)) {
@@ -396,9 +426,12 @@ public class CameraPreflightService {
      * Teacher viewer token for the session room (subscribe-only, identity
      * {@code teacher-<userId>}); the room row is lazily created on first
      * teacher access so a grid can open before any student preflight ran.
+     * The media availability check precedes the room upsert so a disabled
+     * infrastructure never writes rows on retry.
      */
     public MediaTokenResponse teacherMediaToken(Long userId, Long sessionId) {
         requireTeacherGate(userId, sessionId);
+        requireInfraEnabled();
         Instant now = clock.instant();
         String roomName = tx.execute(status -> ensureRoom(sessionId, now));
         return mintTeacherTokenOrUnavailable(userId, roomName, now);
@@ -410,7 +443,9 @@ public class CameraPreflightService {
 
     /**
      * Revokes a participant's camera binding: closes the binding
-     * (active_to + revoked_at), flips its preflight to REVOKED, records the
+     * (active_to + revoked_at) AND its open camera-connection period
+     * (close_reason 'REVOKED' — a revoked binding must never aggregate as
+     * CONNECTED), flips its preflight to REVOKED, records the
      * server-confirmed CAMERA_REVOKED activity event on the bound IN_PROGRESS
      * attempt, and — after commit — removes the participant from the media
      * room (best-effort; a failed kick is logged, the DB state stands).
@@ -433,6 +468,9 @@ public class CameraPreflightService {
             bindingRepo.saveAndFlush(binding);
             preflightRepo.findById(binding.getPreflightId()).ifPresent(MonitoringPreflight::markRevoked);
 
+            // A revoked binding must not aggregate as CONNECTED: close its
+            // open camera-connection period in the SAME transaction.
+            cameraConnections.closeOpenRow(binding.getId(), "REVOKED", Timestamp.from(now));
             if (binding.getAttemptId() != null) {
                 attemptRepo.findById(binding.getAttemptId())
                         .filter(a -> a.getStatus() == AttemptStatus.IN_PROGRESS)

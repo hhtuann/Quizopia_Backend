@@ -3,6 +3,7 @@ package com.quizopia.backend.monitoring.application;
 import com.quizopia.backend.media.config.LiveKitProperties;
 import com.quizopia.backend.media.roomservice.MediaRoomGateway;
 import com.quizopia.backend.media.roomservice.TwirpMediaRoomGateway;
+import com.quizopia.backend.monitoring.repository.MonitoringCameraConnectionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,7 +26,10 @@ import java.util.List;
  *       EXPIRED (their readiness leases die with them);</li>
  *   <li>bound bindings of non-OPEN sessions or finished attempts →
  *       {@code active_to = now} (close without the revoke flag — this is
- *       hygiene, not a teacher action);</li>
+ *       hygiene, not a teacher action) plus their OPEN camera connection
+ *       periods closed the same transaction ({@code close_reason} 'CLOSED',
+ *       so camera-status can never show a terminated binding as
+ *       CONNECTED);</li>
  *   <li>webhook ledger rows older than 7 days → deleted;</li>
  *   <li>media rooms of CLOSED/CANCELLED sessions with no active binding →
  *       LiveKit room deleted best-effort, outside the DB transaction.</li>
@@ -49,6 +53,7 @@ public class CameraHousekeepingScheduler {
     private final MediaRoomGateway gateway;
     private final LiveKitProperties liveKit;
     private final MonitoringCameraQueries queries;
+    private final MonitoringCameraConnectionRepository connections;
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final TransactionTemplate transactions;
@@ -56,12 +61,14 @@ public class CameraHousekeepingScheduler {
     public CameraHousekeepingScheduler(MediaRoomGateway gateway,
             LiveKitProperties liveKit,
             MonitoringCameraQueries queries,
+            MonitoringCameraConnectionRepository connections,
             JdbcTemplate jdbc,
             Clock clock,
             PlatformTransactionManager transactionManager) {
         this.gateway = gateway;
         this.liveKit = liveKit;
         this.queries = queries;
+        this.connections = connections;
         this.jdbc = jdbc;
         this.clock = clock;
         this.transactions = new TransactionTemplate(transactionManager);
@@ -97,18 +104,30 @@ public class CameraHousekeepingScheduler {
                             + "WHERE status IN ('ACTIVE', 'VERIFIED') "
                             + "AND expires_at < ?",
                     Timestamp.from(now.minus(PREFLIGHT_EXPIRY_GRACE)));
-            int closedBindings = jdbc.update(
-                    "UPDATE monitoring_media_bindings b SET active_to = ? "
+            // Select the dead bindings first, then close their OPEN camera
+            // connection periods (close_reason 'CLOSED') and the bindings in
+            // the SAME transaction — otherwise camera-status would keep
+            // showing a terminated binding as CONNECTED.
+            List<java.util.UUID> deadBindings = jdbc.queryForList(
+                    "SELECT b.id FROM monitoring_media_bindings b "
                             + "WHERE b.active_to IS NULL AND b.attempt_id IS NOT NULL "
                             + "AND (EXISTS (SELECT 1 FROM exam_sessions s "
                             + "             WHERE s.id = b.exam_session_id AND s.status <> 'OPEN') "
                             + "  OR EXISTS (SELECT 1 FROM attempts a "
                             + "             WHERE a.id = b.attempt_id AND a.status <> 'IN_PROGRESS'))",
-                    Timestamp.from(now));
+                    java.util.UUID.class);
+            int closedConnections = 0;
+            for (java.util.UUID bindingId : deadBindings) {
+                closedConnections += connections.closeOpenRow(bindingId, "CLOSED", Timestamp.from(now));
+                jdbc.update("UPDATE monitoring_media_bindings SET active_to = ? WHERE id = ?",
+                        Timestamp.from(now), bindingId);
+            }
+            int closedBindings = deadBindings.size();
             int purgedLedger = queries.deleteLedgerOlderThan(now.minus(LEDGER_RETENTION));
             if (expiredPreflights > 0 || closedBindings > 0 || purgedLedger > 0) {
-                log.info("camera housekeeping: {} preflights expired, {} bindings closed, "
-                        + "{} ledger rows purged", expiredPreflights, closedBindings, purgedLedger);
+                log.info("camera housekeeping: {} preflights expired, {} bindings closed "
+                        + "({} open camera periods), {} ledger rows purged",
+                        expiredPreflights, closedBindings, closedConnections, purgedLedger);
             }
             return jdbc.queryForList(
                     "SELECT r.room_name FROM monitoring_media_rooms r "

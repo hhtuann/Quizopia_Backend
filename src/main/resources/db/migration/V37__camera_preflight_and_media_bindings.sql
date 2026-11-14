@@ -48,8 +48,11 @@ ALTER TABLE attempt_activity_events ADD CONSTRAINT chk_aae_event_type CHECK (eve
 ));
 
 -- ---------------------------------------------------------------------
--- 2. Permissions (V36 pattern: learner-owned; TEACHER granted too so a
---    teacher can run the monitored flows on their own sessions in demos).
+-- 2. Permissions (V36 pattern): MONITORING_PREFLIGHT is learner-owned
+--    (TEACHER granted too so a teacher can run the monitored flows on
+--    their own sessions in demos); MONITORING_CAMERA_MANAGE is
+--    TEACHER-ONLY — the student-facing camera endpoints authorize by
+--    MONITORING_PREFLIGHT, never by the teacher management grant.
 -- ---------------------------------------------------------------------
 INSERT INTO permissions (code, name, description) VALUES
     ('MONITORING_PREFLIGHT',
@@ -63,8 +66,15 @@ ON CONFLICT DO NOTHING;
 INSERT INTO role_permissions (role_id, permission_id, granted_by)
 SELECT r.id, p.id, NULL
 FROM roles r
-JOIN permissions p ON p.code IN ('MONITORING_PREFLIGHT', 'MONITORING_CAMERA_MANAGE')
+JOIN permissions p ON p.code = 'MONITORING_PREFLIGHT'
 WHERE r.code IN ('STUDENT', 'TEACHER')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO role_permissions (role_id, permission_id, granted_by)
+SELECT r.id, p.id, NULL
+FROM roles r
+JOIN permissions p ON p.code = 'MONITORING_CAMERA_MANAGE'
+WHERE r.code = 'TEACHER'
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------
@@ -220,5 +230,20 @@ BEGIN
                                  WHERE rp.permission_id = permissions.id
                                    AND r.code IN ('STUDENT','TEACHER'))) THEN
         RAISE EXCEPTION 'V37 verification failed: MONITORING_PREFLIGHT must be granted to STUDENT and TEACHER';
+    END IF;
+    IF EXISTS (SELECT 1 FROM permissions
+               WHERE code = 'MONITORING_CAMERA_MANAGE'
+                 AND NOT EXISTS (SELECT 1 FROM role_permissions rp
+                                 JOIN roles r ON r.id = rp.role_id
+                                 WHERE rp.permission_id = permissions.id
+                                   AND r.code = 'TEACHER')) THEN
+        RAISE EXCEPTION 'V37 verification failed: MONITORING_CAMERA_MANAGE must be granted to TEACHER';
+    END IF;
+    IF EXISTS (SELECT 1 FROM role_permissions rp
+               JOIN roles r ON r.id = rp.role_id
+               JOIN permissions p ON p.id = rp.permission_id
+               WHERE p.code = 'MONITORING_CAMERA_MANAGE'
+                 AND r.code <> 'TEACHER') THEN
+        RAISE EXCEPTION 'V37 verification failed: MONITORING_CAMERA_MANAGE must be granted to TEACHER only';
     END IF;
 END $$;

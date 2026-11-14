@@ -4,6 +4,8 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.quizopia.backend.media.config.LiveKitProperties;
 import com.quizopia.backend.media.token.LiveKitTokenService;
 import org.springframework.stereotype.Component;
+
+import java.time.Clock;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -43,13 +45,16 @@ public class LiveKitWebhookVerifier {
     private final LiveKitTokenService tokens;
     private final LiveKitProperties properties;
     private final ObjectMapper objectMapper;
+    private final Clock clock;
 
     public LiveKitWebhookVerifier(LiveKitTokenService tokens,
                                   LiveKitProperties properties,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  Clock clock) {
         this.tokens = tokens;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.clock = clock;
     }
 
     public LiveKitWebhookEvent verify(byte[] rawBody, String authorizationHeader) {
@@ -87,8 +92,12 @@ public class LiveKitWebhookVerifier {
             if (timestamp == null && room != null) {
                 timestamp = instantSeconds(text(room, "createdAt"));
             }
-            if (eventHasTimestampField(event) && timestamp != null) {
-                Instant now = Instant.now();
+            // Freshness is enforced whenever ANY trustworthy timestamp could
+            // be resolved (top-level nanoseconds or room.createdAt seconds);
+            // only events with neither (rare room lifecycle variants) pass
+            // through, and the dedupe ledger still bounds replays.
+            if (timestamp != null) {
+                Instant now = clock.instant();
                 if (timestamp.isBefore(now.minus(properties.getWebhookMaxAge()))
                         || timestamp.isAfter(now.plusSeconds(60))) {
                     throw new VerificationException("stale or future timestamp");
@@ -135,10 +144,6 @@ public class LiveKitWebhookVerifier {
     private static String text(JsonNode node, String field) {
         JsonNode value = node == null ? null : node.get(field);
         return value == null || value.isNull() ? null : value.asString();
-    }
-
-    private static boolean eventHasTimestampField(JsonNode event) {
-        return event.hasNonNull("timestamp");
     }
 
     private static Instant instantNanos(JsonNode value) {

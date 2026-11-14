@@ -288,12 +288,31 @@ class CameraReconciliationSchedulerIntegrationTests {
     }
 
     @Test
-    void bindingOfFinishedAttemptIsClosed() {
+    void housekeepingClosesOpenConnectionOfClosedBinding() {
+        insertOpenCameraConnection(jdbc, binding.bindingId(), "TR_R1", base.minusSeconds(300));
+        jdbc.update("UPDATE exam_sessions SET status='CLOSED', closed_at=? WHERE id=?",
+                Timestamp.from(base), sessionId);
+
+        housekeeping.sweep();
+
+        assertThat(bindingRow().get("active_to")).isNotNull();
+        assertThat(openRow()).isNull();
+        Map<String, Object> closed = closedRow();
+        assertThat(closed.get("close_reason")).isEqualTo("CLOSED");
+        assertThat(closed.get("disconnected_at")).isNotNull();
+        // Hygiene closure emits no activity event (attempt may be long over).
+        assertThat(MonitoringCameraFixtures.cameraEventTotal(jdbc)).isZero();
+    }
+
+    @Test
+    void housekeepingClosesOpenConnectionOfFinishedAttemptBinding() {
+        insertOpenCameraConnection(jdbc, binding.bindingId(), "TR_R1", base.minusSeconds(300));
         finishAttempt(jdbc, attemptId, base);
 
         housekeeping.sweep();
 
         assertThat(bindingRow().get("active_to")).isNotNull();
+        assertThat(closedRow().get("close_reason")).isEqualTo("CLOSED");
     }
 
     @Test

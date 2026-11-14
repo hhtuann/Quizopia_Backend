@@ -172,11 +172,25 @@ class LiveKitWebhookControllerIntegrationTests {
     void staleTimestampIsRejected401() throws Exception {
         // 11 minutes old — beyond the 10-minute webhookMaxAge replay window.
         byte[] body = trackPublishedBody("EV_6", identity, "TR_HTTP_6",
-                nanosAt(Instant.now().minus(Duration.ofMinutes(11))));
+                nanosAt(clock.instant().minus(Duration.ofMinutes(11))));
 
         mockMvc.perform(post(PATH).content(body)
                         .contentType(MediaType.APPLICATION_JSON)
                         .header(HttpHeaders.AUTHORIZATION, signedAuthorization(body, Duration.ofMinutes(11))))
+                .andExpect(status().isUnauthorized());
+        assertThat(cameraEventCount(jdbc, attemptId, "CAMERA_CONNECTED")).isZero();
+    }
+
+    @Test
+    void staleRoomCreatedAtWithoutTimestampIsRejected401() throws Exception {
+        // No top-level timestamp: freshness falls back to room.createdAt
+        // (seconds) — 11 minutes stale ⇒ 401, not a free pass.
+        byte[] body = trackPublishedBody("EV_8", identity, "TR_HTTP_8", null,
+                String.valueOf(clock.instant().minus(Duration.ofMinutes(11)).getEpochSecond()));
+
+        mockMvc.perform(post(PATH).content(body)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, signedAuthorization(body, Duration.ZERO)))
                 .andExpect(status().isUnauthorized());
         assertThat(cameraEventCount(jdbc, attemptId, "CAMERA_CONNECTED")).isZero();
     }
@@ -201,8 +215,13 @@ class LiveKitWebhookControllerIntegrationTests {
 
     // === wire-format helpers (real LiveKit shape: bare JWT + body sha256) ===
 
-    private static String freshNanos() {
-        return nanosAt(Instant.now());
+    /**
+     * All webhook times derive from the injected {@link MutableClock} — the
+     * verifier checks freshness (event timestamp OR room.createdAt) against
+     * the app clock, not wall time.
+     */
+    private String freshNanos() {
+        return nanosAt(clock.instant());
     }
 
     private static String nanosAt(Instant instant) {
@@ -211,23 +230,37 @@ class LiveKitWebhookControllerIntegrationTests {
 
     private static byte[] trackPublishedBody(String eventId, String participantIdentity,
             String trackSid, String timestampNanos) {
-        return ("{\"event\": \"track_published\", \"id\": \"" + eventId + "\", "
-                + "\"room\": {\"name\": \"room-x\", \"sid\": \"RM_1\"}, "
+        return trackPublishedBody(eventId, participantIdentity, trackSid, timestampNanos, null);
+    }
+
+    /** {@code roomCreatedAt} = room.createdAt seconds; null fields are omitted. */
+    private static byte[] trackPublishedBody(String eventId, String participantIdentity,
+            String trackSid, String timestampNanos, String roomCreatedAt) {
+        StringBuilder room = new StringBuilder("{\"name\": \"room-x\", \"sid\": \"RM_1\"");
+        if (roomCreatedAt != null) {
+            room.append(", \"createdAt\": \"").append(roomCreatedAt).append("\"");
+        }
+        room.append("}");
+        StringBuilder body = new StringBuilder("{\"event\": \"track_published\", \"id\": \"" + eventId + "\", "
+                + "\"room\": " + room + ", "
                 + "\"participant\": {\"identity\": \"" + participantIdentity + "\", \"state\": \"ACTIVE\"}, "
-                + "\"track\": {\"sid\": \"" + trackSid + "\", \"type\": \"VIDEO\", \"source\": \"CAMERA\", \"muted\": false}, "
-                + "\"timestamp\": \"" + timestampNanos + "\"}").getBytes(StandardCharsets.UTF_8);
+                + "\"track\": {\"sid\": \"" + trackSid + "\", \"type\": \"VIDEO\", \"source\": \"CAMERA\", \"muted\": false}");
+        if (timestampNanos != null) {
+            body.append(", \"timestamp\": \"").append(timestampNanos).append("\"");
+        }
+        return body.append("}").toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /** Bare JWT (no Bearer prefix) signed with the shared test secret. */
-    private static String signedAuthorization(byte[] body, Duration tokenAge) {
+    private String signedAuthorization(byte[] body, Duration tokenAge) {
         return signedAuthorization(body, tokenAge, SECRET);
     }
 
-    private static String signedAuthorization(byte[] body, Duration tokenAge, String secret) {
+    private String signedAuthorization(byte[] body, Duration tokenAge, String secret) {
         try {
             String digest = Base64.getEncoder().encodeToString(
                     MessageDigest.getInstance("SHA-256").digest(body));
-            Instant now = Instant.now();
+            Instant now = clock.instant();
             SignedJWT jwt = new SignedJWT(
                     new JWSHeader.Builder(JWSAlgorithm.HS256).build(),
                     new JWTClaimsSet.Builder()

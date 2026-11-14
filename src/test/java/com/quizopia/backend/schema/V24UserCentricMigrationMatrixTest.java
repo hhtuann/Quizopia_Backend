@@ -220,7 +220,7 @@ class V24UserCentricMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain passed through V24/V25 (head is now V36)")
-                        .containsExactly("36");
+                        .containsExactly("37");
             }
         } finally {
             dropDatabase(dbName);
@@ -386,7 +386,7 @@ class V24UserCentricMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("fresh migration reaches the current head (V36)")
-                        .containsExactly("36");
+                        .containsExactly("37");
             }
         } finally {
             dropDatabase(dbName);

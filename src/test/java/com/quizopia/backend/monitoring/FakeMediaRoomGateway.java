@@ -15,8 +15,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * In-memory {@link MediaRoomGateway} for the P4-B camera-preflight tests.
  * Deliberately does NOT enforce the no-transaction guard (the fake is pure
- * state) — the guard itself is exercised against the real
- * {@link TwirpMediaRoomGateway}.
+ * state) — that guard is covered for the real gateway by
+ * {@code TwirpMediaRoomGatewayTransactionGuardTest}.
  *
  * <p>State is mutable so tests can simulate the LiveKit room: publish or
  * unpublish camera tracks, disconnect participants and inject

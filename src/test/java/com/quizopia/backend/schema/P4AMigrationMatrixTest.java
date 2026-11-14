@@ -83,12 +83,23 @@ class P4AMigrationMatrixTest {
 
         // Valid SERVER row (no client fields needed).
         insert(st, eventInsert(uuid, f.attemptId, "ATTEMPT_STARTED", "SERVER", "NULL", "NULL"));
-        // The P4-A event-type allowlist rejects media/AI/recording types.
-        for (String futureType : new String[]{"CAMERA_CONNECTED", "AI_ALERT_CREATED", "RECORDING_STARTED"}) {
+        // The event-type allowlist rejects still-future AI/recording types.
+        // (P4-B V37 admitted the CAMERA_* set as SERVER-confirmed types, so
+        // CAMERA_CONNECTED moved from the rejected list to the admitted set.)
+        for (String futureType : new String[]{"AI_ALERT_CREATED", "RECORDING_STARTED", "CAMERA_SPOOFED"}) {
             assertThatThrownBy(() -> execute(st, eventInsert(
                     UUID.randomUUID().toString(), f.attemptId, futureType, "SERVER", "NULL", "NULL")))
-                    .as("event_type %s must be rejected by the P4-A CHECK allowlist", futureType)
+                    .as("event_type %s must be rejected by the CHECK allowlist", futureType)
                     .isInstanceOf(SQLException.class);
+        }
+        // P4-B camera lifecycle types are admitted as SERVER rows. (Their
+        // server-only provenance is enforced at the application layer —
+        // ActivityEventType.CLIENT_TYPES rejects them on ingest — not by a
+        // per-source DB CHECK; a fully-populated CLIENT camera row is
+        // therefore schema-legal, like every other type.)
+        for (String cameraType : new String[]{"CAMERA_CONNECTED", "CAMERA_DISCONNECTED",
+                "CAMERA_RECONNECTED", "CAMERA_REVOKED", "MONITORING_GAP"}) {
+            insert(st, eventInsert(UUID.randomUUID().toString(), f.attemptId, cameraType, "SERVER", "NULL", "NULL"));
         }
         // Unknown provenance.
         assertThatThrownBy(() -> execute(st, eventInsert(
@@ -220,8 +231,8 @@ class P4AMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                .as("migration chain reached V36")
-                .containsExactly("36");
+                .as("migration chain reached V37")
+                .containsExactly("37");
     }
 
     // ==================================================================

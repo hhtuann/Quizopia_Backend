@@ -51,6 +51,23 @@ public interface MonitoringPreflightRepository extends JpaRepository<MonitoringP
                         @Param("now") Instant now);
 
     /**
+     * Status-guarded verify transition (first grant ACTIVE→VERIFIED or lease
+     * rotation VERIFIED→VERIFIED): 0 rows when the preflight meanwhile moved
+     * to a terminal state (CONSUMED/EXPIRED/REVOKED) — the caller re-reads
+     * and rejects, so a terminal state can never be resurrected.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE MonitoringPreflight p SET p.status = :verified, p.leaseHash = :leaseHash, "
+            + "p.leaseExpiresAt = :leaseExpiresAt, p.verifiedTrackSid = :trackSid "
+            + "WHERE p.id = :id AND p.status IN :verifiable")
+    int markVerifiedGuarded(@Param("id") UUID id,
+                            @Param("verifiable") java.util.List<PreflightStatus> verifiable,
+                            @Param("verified") PreflightStatus verified,
+                            @Param("leaseHash") String leaseHash,
+                            @Param("leaseExpiresAt") Instant leaseExpiresAt,
+                            @Param("trackSid") String trackSid);
+
+    /**
      * Supersedes the caller's prior ACTIVE preflights (a new preflight for
      * the same (session, user) makes the older ones stale). VERIFIED
      * preflights keep their leases — only the never-verified ACTIVE rows

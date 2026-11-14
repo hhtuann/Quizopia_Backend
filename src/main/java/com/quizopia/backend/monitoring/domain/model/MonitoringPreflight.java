@@ -97,17 +97,6 @@ public class MonitoringPreflight {
         return p;
     }
 
-    /**
-     * Marks the preflight VERIFIED with a (possibly rotated) lease grant.
-     * Callers pass {@code leaseHash} = sha256 hex of a freshly minted raw
-     * lease — never the raw lease itself.
-     */
-    public void markVerified(String leaseHash, Instant leaseExpiresAt, String trackSid) {
-        this.status = PreflightStatus.VERIFIED;
-        this.leaseHash = leaseHash;
-        this.leaseExpiresAt = leaseExpiresAt;
-        this.verifiedTrackSid = trackSid;
-    }
 
     /** Terminal teacher-revocation state (binding revoke path). */
     public void markRevoked() {

@@ -207,6 +207,17 @@ class CameraPreflightServiceIntegrationTests {
             postJson(studentId, "/api/exam-sessions/{id}/monitoring/preflights", sessionId)
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.code").value("MONITORING_INFRA_UNAVAILABLE"));
+            // The 503 fires BEFORE any write: no room/preflight/binding rows
+            // accumulate on retries while the infrastructure is disabled.
+            assertThat(jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM monitoring_media_rooms WHERE exam_session_id=?",
+                    Integer.class, sessionId)).isZero();
+            assertThat(jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM monitoring_preflights WHERE exam_session_id=?",
+                    Integer.class, sessionId)).isZero();
+            assertThat(jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM monitoring_media_bindings WHERE exam_session_id=?",
+                    Integer.class, sessionId)).isZero();
         } finally {
             liveKit.setEnabled(true);
         }
@@ -278,6 +289,27 @@ class CameraPreflightServiceIntegrationTests {
                 .isEqualTo(sha256Hex(second.readinessLease()));
         assertThat(jdbc.queryForObject("SELECT status FROM monitoring_preflights WHERE id=?",
                 String.class, created.preflightId())).isEqualTo("VERIFIED");
+    }
+
+    @Test
+    void verifyAfterLeaseConsumedIsRejectedWithoutResurrection() {
+        // Full flow consumes the lease (preflight CONSUMED, camera still up).
+        StartAttemptResponse attempt = startMonitoredAttempt();
+        UUID preflightId = jdbc.queryForObject(
+                "SELECT id FROM monitoring_preflights WHERE user_id=? AND status='CONSUMED'",
+                UUID.class, studentId);
+
+        // The camera is still published, so verify passes the media check —
+        // the guarded VERIFIED transition must refuse to resurrect the
+        // terminal CONSUMED state.
+        assertThatThrownBy(() -> preflightService.verifyPreflight(studentId, sessionId, preflightId))
+                .isInstanceOf(com.quizopia.backend.monitoring.exception.MonitoringException.class)
+                .satisfies(e -> assertThat(code(e)).isEqualTo("MONITORING_PREFLIGHT_USED"));
+        assertThat(jdbc.queryForObject("SELECT status FROM monitoring_preflights WHERE id=?",
+                String.class, preflightId)).isEqualTo("CONSUMED");
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_media_bindings WHERE attempt_id=?",
+                Integer.class, attempt.attemptId())).isEqualTo(1);
     }
 
     @Test
@@ -481,6 +513,15 @@ class CameraPreflightServiceIntegrationTests {
         assertThat(gateway.removed).contains(roomName(sessionId) + "/" + identity);
         assertThatThrownBy(() -> preflightService.attemptMediaToken(studentId, connected.attemptId()))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("MONITORING_CAMERA_REVOKED"));
+
+        // The open camera-connection period is closed in the SAME
+        // transaction — a revoked binding never aggregates as CONNECTED.
+        Map<String, Object> connection = jdbc.queryForMap(
+                "SELECT disconnected_at, close_reason FROM monitoring_camera_connections "
+                        + "WHERE binding_id=(SELECT id FROM monitoring_media_bindings WHERE attempt_id=?)",
+                connected.attemptId());
+        assertThat(connection.get("disconnected_at")).isNotNull();
+        assertThat(connection.get("close_reason")).isEqualTo("REVOKED");
 
         mockMvc.perform(get("/api/exam-sessions/" + sessionId + "/monitoring/camera-status")
                         .with(jwt().jwt(j -> j.subject(String.valueOf(teacherId)))))
