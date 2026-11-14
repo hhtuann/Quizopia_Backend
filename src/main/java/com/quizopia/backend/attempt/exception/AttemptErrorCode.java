@@ -27,11 +27,17 @@ public enum AttemptErrorCode {
     ATTEMPT_ALREADY_SUBMITTED(HttpStatus.CONFLICT, "ATTEMPT_ALREADY_SUBMITTED", "Attempt has already been submitted"),
     ATTEMPT_DUPLICATE_START(HttpStatus.CONFLICT, "ATTEMPT_DUPLICATE_START", "A concurrent start race was detected"),
     ATTEMPT_IDEMPOTENCY_CONFLICT(HttpStatus.CONFLICT, "ATTEMPT_IDEMPOTENCY_CONFLICT", "Idempotency conflict"),
-    // P4-A (issue #80): fail-closed monitored-start gate — camera readiness
-    // verification (LiveKit room/track state, ADR-008 invariant 4) arrives in
-    // P4-B. Until then a NEW attempt on a monitored session cannot start.
+    // P4-A (issue #80): fail-closed monitored-start gate — superseded in P4-B
+    // by the camera preflight readiness-lease codes (MonitoringErrorCode.
+    // MONITORING_PREFLIGHT_*). Kept unused for API stability: clients mapping
+    // the P4-A code keep working against the new gate's more precise codes.
+    @Deprecated
     ATTEMPT_MONITORING_START_UNAVAILABLE(HttpStatus.CONFLICT, "ATTEMPT_MONITORING_START_UNAVAILABLE",
             "Monitored sessions require camera readiness verification, which is not available yet (P4-B)"),
+    // P4-B (#85): preflight creation refused because an IN_PROGRESS attempt
+    // already exists for (session, user) — the client must resume instead.
+    ATTEMPT_ALREADY_ACTIVE(HttpStatus.CONFLICT, "ATTEMPT_ALREADY_ACTIVE",
+            "An attempt for this session is already in progress — resume it instead"),
     // Day 8 result/grading error codes
     ATTEMPT_NOT_SUBMITTED(HttpStatus.CONFLICT, "ATTEMPT_NOT_SUBMITTED", "Attempt has not been submitted"),
     ATTEMPT_NOT_GRADED(HttpStatus.CONFLICT, "ATTEMPT_NOT_GRADED", "Attempt has not been graded"),

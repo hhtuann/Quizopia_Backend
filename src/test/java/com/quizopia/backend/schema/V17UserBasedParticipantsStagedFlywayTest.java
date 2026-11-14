@@ -124,7 +124,7 @@ class V17UserBasedParticipantsStagedFlywayTest {
                 try (ResultSet rs = st.executeQuery("SELECT version FROM flyway_schema_history WHERE success "
                         + "ORDER BY installed_rank DESC LIMIT 1")) {
                     rs.next();
-                    assertThat(rs.getString(1)).isEqualTo("36");
+                    assertThat(rs.getString(1)).isEqualTo("37");
                 }
             }
         }
