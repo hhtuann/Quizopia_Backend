@@ -36,8 +36,12 @@ class RealtimeDataLeakStructuralTest {
 
     @Test
     void onlyAllowedComponentsExist() {
+        // P4-A (#83): activityType / activitySource / clientOccurredAt are the
+        // additive ATTEMPT_ACTIVITY delta-notification fields (names only,
+        // NON_NULL, no metadata/answer content on the wire).
         Set<String> allowed = Set.of("eventId", "eventType", "sessionId", "attemptId", "userId",
-                "studentProfileId", "occurredAt", "serverTime", "activeCount");
+                "studentProfileId", "occurredAt", "serverTime", "activeCount",
+                "activityType", "activitySource", "clientOccurredAt");
         for (RecordComponent rc : RealtimeEventEnvelope.class.getRecordComponents()) {
             assertThat(allowed).contains(rc.getName());
         }

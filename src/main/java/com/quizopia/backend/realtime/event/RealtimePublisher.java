@@ -37,6 +37,20 @@ public class RealtimePublisher {
     }
 
     /**
+     * P4-A4 (#83): sends an {@code ATTEMPT_ACTIVITY} delta notification to the
+     * EXISTING teacher topic {@code /topic/exam-sessions/{sessionId}}. No new
+     * destination is introduced (the subscribe allowlist stays frozen); the
+     * payload carries NO metadata — REST timeline is the source of truth.
+     */
+    public void sendActivityToSessionTopic(Long sessionId, Long attemptId, Long userId,
+            String activityType, String activitySource, Instant clientOccurredAt, Instant occurredAt) {
+        Instant serverTime = Instant.now(clock);
+        messaging.convertAndSend("/topic/exam-sessions/" + sessionId,
+                RealtimeEventEnvelope.activity(sessionId, attemptId, userId, activityType,
+                        activitySource, clientOccurredAt, occurredAt, serverTime));
+    }
+
+    /**
      * Sends {@code SERVER_TIME_SYNC} to ONE specific WebSocket session (not principal fan-out), using
      * <b>direct session routing</b> (B1R4-B2F7).
      *

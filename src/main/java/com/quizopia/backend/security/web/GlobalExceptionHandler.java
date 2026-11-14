@@ -145,6 +145,21 @@ public class GlobalExceptionHandler implements ResponseBodyAdvice<Object> {
         return response.body(body);
     }
 
+    @ExceptionHandler(com.quizopia.backend.monitoring.exception.MonitoringException.class)
+    public ResponseEntity<ApiError> handleMonitoringException(
+            com.quizopia.backend.monitoring.exception.MonitoringException ex, HttpServletRequest request) {
+        com.quizopia.backend.monitoring.exception.MonitoringErrorCode code = ex.getErrorCode();
+        String mpath = request != null ? request.getRequestURI() : null;
+        ApiError mbody = new ApiError(
+                Instant.now(), code.status().value(), code.code(), code.defaultMessage(),
+                mpath, MDC.get("traceId"));
+        ResponseEntity.BodyBuilder mresponse = ResponseEntity.status(code.status().value());
+        if (ex.getRetryAfterSeconds() > 0) {
+            mresponse = mresponse.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        return mresponse.body(mbody);
+    }
+
     @ExceptionHandler({
             MethodArgumentNotValidException.class,
             MethodArgumentTypeMismatchException.class,

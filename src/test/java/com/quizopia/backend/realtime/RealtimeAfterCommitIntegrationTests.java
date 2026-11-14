@@ -235,15 +235,24 @@ class RealtimeAfterCommitIntegrationTests extends RealtimeStompTestBase {
     // ============================ §10 NO-OP ============================
 
     @Test
-    void resumeStartEmitsNoEvent() throws Exception {
+    void resumeEmitsOnlyActivityDeltaPing() throws Exception {
         attemptService.startAttempt(studentId, sessionId, new StartAttemptRequest(null)).attemptId(); // committed
         try (StompTestConnection teacher = connect(teacherToken);
              EventSink sink = subscribeTopic(teacher, sessionId, 1)) {
             awaitAccepted(acceptedDestination(topic(sessionId)), 5);
             outboundProbe.clear();
-            attemptService.startAttempt(studentId, sessionId, new StartAttemptRequest(null)); // resume → no event
-            assertNoOutbound(topicMessage(sessionId), 2);
-            assertThat(sink.payloads).isEmpty();
+            attemptService.startAttempt(studentId, sessionId, new StartAttemptRequest(null)); // resume
+            assertThat(sink.latch.await(15, TimeUnit.SECONDS)).isTrue();
+            // P4-A (#81/#83): resume still emits NO ATTEMPT_STARTED /
+            // ACTIVE_COUNT_CHANGED pair; the durable ATTEMPT_RESUMED record
+            // now yields exactly ONE lightweight ATTEMPT_ACTIVITY delta ping
+            // (no metadata, no answer content).
+            assertThat(sink.payloads).hasSize(1);
+            String payload = new String(sink.payloads.get(0), java.nio.charset.StandardCharsets.UTF_8);
+            assertThat(payload).contains("\"eventType\":\"ATTEMPT_ACTIVITY\"");
+            assertThat(payload).contains("\"activityType\":\"ATTEMPT_RESUMED\"");
+            assertThat(payload).doesNotContain("ATTEMPT_STARTED");
+            assertThat(payload).doesNotContain("activeCount");
         }
     }
 

@@ -18,5 +18,14 @@ public enum RealtimeEventType {
     ATTEMPT_STARTED,
     ATTEMPT_SUBMITTED,
     ACTIVE_COUNT_CHANGED,
-    SERVER_TIME_SYNC
+    SERVER_TIME_SYNC,
+    /**
+     * P4-A4 (#83): durable attempt-activity delta notification on the EXISTING
+     * teacher topic {@code /topic/exam-sessions/{sessionId}} — a lightweight
+ * "something happened, refetch via REST" ping, never the event store.
+     * {@code activityType} in the envelope names the activity
+     * (e.g. TAB_HIDDEN, ANSWER_ACCEPTED). No new destination; the STOMP
+     * subscribe allowlist and SEND denial stay untouched.
+     */
+    ATTEMPT_ACTIVITY
 }

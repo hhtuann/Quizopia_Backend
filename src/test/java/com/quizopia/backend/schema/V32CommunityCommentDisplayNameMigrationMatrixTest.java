@@ -68,8 +68,8 @@ class V32CommunityCommentDisplayNameMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("migration chain reached V32")
-                        .containsExactly("32");
+                        .as("migration chain reached V36")
+                        .containsExactly("36");
             }
         } finally {
             dropDatabase(dbName);
@@ -190,8 +190,8 @@ class V32CommunityCommentDisplayNameMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .as("staged leg also reaches V32")
-                        .containsExactly("32");
+                        .as("staged leg also reaches the current head")
+                        .containsExactly("36");
             }
         } finally {
             dropDatabase(dbName);

@@ -63,4 +63,11 @@ public interface AttemptRepository extends JpaRepository<Attempt, Long> {
     @Query("SELECT a.id FROM Attempt a WHERE a.status = :status AND a.deadlineAt < :now "
             + "ORDER BY a.deadlineAt ASC")
     List<Long> findExpiredInProgressIds(@Param("status") AttemptStatus status, @Param("now") Instant now);
+
+    /**
+     * All attempts of a session in stable id order — the teacher
+ *     activity-monitoring picker (P4-A #83): includes IN_PROGRESS attempts,
+     * unlike the graded best-results report.
+     */
+    List<Attempt> findByExamSessionIdOrderByIdAsc(Long examSessionId);
 }

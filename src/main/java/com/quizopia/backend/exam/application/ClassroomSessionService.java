@@ -64,6 +64,7 @@ public class ClassroomSessionService {
     private final ClassroomRepository classroomRepository;
     private final ClassroomMemberRepository memberRepository;
     private final NamedParameterJdbcTemplate jdbc;
+    private final SessionMonitoringPolicyService monitoringPolicyService;
 
     public ClassroomSessionService(ExamAuthorizationService auth,
             ClassroomService classroomService,
@@ -71,7 +72,8 @@ public class ClassroomSessionService {
             ExamSessionRepository sessionRepository,
             ClassroomRepository classroomRepository,
             ClassroomMemberRepository memberRepository,
-            NamedParameterJdbcTemplate jdbc) {
+            NamedParameterJdbcTemplate jdbc,
+            SessionMonitoringPolicyService monitoringPolicyService) {
         this.auth = auth;
         this.classroomService = classroomService;
         this.examSessionService = examSessionService;
@@ -79,6 +81,7 @@ public class ClassroomSessionService {
         this.classroomRepository = classroomRepository;
         this.memberRepository = memberRepository;
         this.jdbc = jdbc;
+        this.monitoringPolicyService = monitoringPolicyService;
     }
 
     // ============================================================
@@ -242,6 +245,23 @@ public class ClassroomSessionService {
         if (session.getStatus() == ExamSessionStatus.SCHEDULED
                 && !Instant.now().isBefore(session.getStartsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_INVALID_STATE);
+        }
+        // P4-A1 (#80, review CLS-1): a monitoring-enabled session may not
+        // lose its LAST assigned classroom via this route — but only when
+        // this classroom is actually assigned: an idempotent no-op unassign
+        // (pre-P4-A: 204) must not be rejected. Count the OTHER assignments.
+        Integer remaining = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exam_session_classes WHERE exam_session_id = :sid "
+                        + "AND classroom_id <> :cid",
+                new MapSqlParameterSource().addValue("sid", sessionId).addValue("cid", classroomId),
+                Integer.class);
+        boolean pairAssigned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exam_session_classes WHERE exam_session_id = :sid "
+                        + "AND classroom_id = :cid",
+                new MapSqlParameterSource().addValue("sid", sessionId).addValue("cid", classroomId),
+                Integer.class) > 0;
+        if (pairAssigned && remaining != null && remaining < 1) {
+            monitoringPolicyService.requireClassAssignmentCompatibleWithMonitoring(session, 0);
         }
         jdbc.update("DELETE FROM exam_session_classes WHERE exam_session_id = :sid "
                         + "AND classroom_id = :cid",

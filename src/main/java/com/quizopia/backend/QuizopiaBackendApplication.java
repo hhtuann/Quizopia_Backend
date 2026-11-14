@@ -12,7 +12,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableConfigurationProperties({SecurityProperties.class, EmailVerificationProperties.class, OAuthProperties.class,
-        PasswordResetProperties.class, CommunityRateLimitProperties.class})
+        PasswordResetProperties.class, CommunityRateLimitProperties.class,
+        com.quizopia.backend.monitoring.application.ActivityIngestProperties.class})
 @EnableScheduling
 public class QuizopiaBackendApplication {
 

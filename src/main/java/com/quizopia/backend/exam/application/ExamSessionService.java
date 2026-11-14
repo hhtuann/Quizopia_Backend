@@ -66,6 +66,7 @@ public class ExamSessionService {
     private final NamedParameterJdbcTemplate jdbc;
     private final ApplicationEventPublisher eventPublisher;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
+    private final SessionMonitoringPolicyService monitoringPolicyService;
 
     public ExamSessionService(ExamAuthorizationService auth,
             ExamRepository examRepository,
@@ -75,7 +76,8 @@ public class ExamSessionService {
 
             NamedParameterJdbcTemplate jdbc,
             ApplicationEventPublisher eventPublisher,
-            com.quizopia.backend.notification.application.NotificationService notificationService) {
+            com.quizopia.backend.notification.application.NotificationService notificationService,
+            SessionMonitoringPolicyService monitoringPolicyService) {
         this.auth = auth;
         this.examRepository = examRepository;
         this.sessionRepository = sessionRepository;
@@ -85,6 +87,7 @@ public class ExamSessionService {
         this.jdbc = jdbc;
         this.eventPublisher = eventPublisher;
         this.notificationService = notificationService;
+        this.monitoringPolicyService = monitoringPolicyService;
     }
 
     // ============================================================
@@ -142,11 +145,19 @@ public class ExamSessionService {
         }
 
         // Assign classes (only meaningful for CLASS_RESTRICTED).
+        int assignedClassCount = 0;
         if (visibility == SessionVisibility.CLASS_RESTRICTED
                 && request.classroomIds() != null && !request.classroomIds().isEmpty()) {
             List<Classroom> classrooms = validateClassroomsForOwner(userId, request.classroomIds());
             replaceSessionClasses(session.getId(), classrooms);
+            assignedClassCount = classrooms.size();
         }
+
+        // Monitoring policy (P4-A1, issue #80): validated AFTER class
+        // assignment so eligibility rules see the post-write class state, in
+        // the same transaction. A brand-new session can never be frozen
+        // (DRAFT, zero attempts), so the freeze gate is trivially open here.
+        monitoringPolicyService.applyConfiguration(session, request.monitoring(), assignedClassCount);
 
         return buildDetailResponse(session, 0L);
     }
@@ -271,6 +282,20 @@ public class ExamSessionService {
 
         if (!request.endsAt().isAfter(request.startsAt())) {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_TIME_INVALID);
+        }
+
+        // P4-A1 freeze gate (review FRZ-1): monitoring configuration is
+        // evaluated and applied BEFORE updateConfig mutates startsAt, so
+        // isConfigurationFrozen sees the PERSISTED startsAt — issue #80
+        // freezes at the FIRST (originally scheduled) start. A SCHEDULED
+        // session whose original start has passed can never have its
+        // monitoring mutated, even by a request that simultaneously moves
+        // startsAt into the future. Title/time updates themselves remain
+        // allowed (absent monitoring block = no policy mutation). All writes
+        // share this transaction and the session row lock.
+        if (request.monitoring() != null) {
+            monitoringPolicyService.applyConfiguration(session, request.monitoring(),
+                    countAssignedClasses(sessionId));
         }
 
         session.updateConfig(request.title(), request.startsAt(), request.endsAt(), request.maxAttempts());
@@ -409,7 +434,9 @@ public class ExamSessionService {
                 session.getDurationMinutes(),
                 session.getOpenedAt(), session.getClosedAt(),
                 participantCount, session.getVersion(), session.getCreatedAt(),
-                session.getVisibility().name());
+                session.getVisibility().name(),
+                monitoringPolicyService.toResponse(session,
+                        monitoringPolicyService.findPolicy(session.getId()).orElse(null)));
     }
 
     // ============================================================
@@ -435,6 +462,9 @@ public class ExamSessionService {
         List<Classroom> classrooms = (classroomIds == null || classroomIds.isEmpty())
                 ? List.of()
                 : validateClassroomsForOwner(userId, classroomIds);
+        // P4-A1 (#80): a monitoring-enabled session may never lose its last
+        // assigned classroom (D1 eligibility would become contradictory).
+        monitoringPolicyService.requireClassAssignmentCompatibleWithMonitoring(session, classrooms.size());
         replaceSessionClasses(sessionId, classrooms);
         return listClasses(userId, pathExamId, sessionId);
     }
@@ -451,6 +481,15 @@ public class ExamSessionService {
                 (rs, n) -> new SessionClassesResponse.ClassSummary(
                         rs.getLong("id"), rs.getString("code"), rs.getString("name")));
         return new SessionClassesResponse(items);
+    }
+
+    /** Number of classrooms currently assigned to the session. */
+    private int countAssignedClasses(Long sessionId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exam_session_classes WHERE exam_session_id = :sid",
+                new MapSqlParameterSource("sid", sessionId),
+                Integer.class);
+        return count == null ? 0 : count;
     }
 
     // ============================================================
