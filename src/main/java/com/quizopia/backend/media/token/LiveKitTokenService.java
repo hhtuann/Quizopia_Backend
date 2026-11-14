@@ -65,13 +65,21 @@ public class LiveKitTokenService {
         return mint("teacher-" + teacherUserId, video, properties.getMediaTokenTtl(), now);
     }
 
-    /** Server-only admin token for RoomService calls (room management). */
-    public String mintAdminToken(Instant now) {
+    /**
+     * Server-only admin token for RoomService calls, scoped to ONE room.
+     * LiveKit rejects room-scoped Twirp methods (GetParticipant,
+     * ListParticipants, RemoveParticipant, DeleteRoom) with
+     * "permissions denied" when the grant carries no {@code room} claim —
+     * verified against self-hosted v1.9.12 (the e2e camera suite catches
+     * this; stubbed-gateway unit tests cannot).
+     */
+    public String mintAdminToken(String room, Instant now) {
         Map<String, Object> video = new LinkedHashMap<>();
         video.put("roomAdmin", true);
         video.put("roomList", true);
         video.put("roomCreate", true);
         video.put("roomDelete", true);
+        video.put("room", room);
         return mint("quizopia-backend", video, properties.getAdminTokenTtl(), now);
     }
 

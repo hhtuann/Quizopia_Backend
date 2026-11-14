@@ -464,9 +464,14 @@ public class CameraPreflightService {
             if (binding.getRevokedAt() != null) {
                 throw new MonitoringException(MonitoringErrorCode.MONITORING_CAMERA_ALREADY_REVOKED);
             }
+            // Lock order session → preflight → binding → connection (final
+            // review P3): the start gate locks the preflight row before
+            // touching the binding; taking the binding lock first could
+            // deadlock against a concurrent monitored start.
+            preflightRepo.findByIdForUpdate(binding.getPreflightId())
+                    .ifPresent(MonitoringPreflight::markRevoked);
             binding.markRevoked(now);
             bindingRepo.saveAndFlush(binding);
-            preflightRepo.findById(binding.getPreflightId()).ifPresent(MonitoringPreflight::markRevoked);
 
             // A revoked binding must not aggregate as CONNECTED: close its
             // open camera-connection period in the SAME transaction.

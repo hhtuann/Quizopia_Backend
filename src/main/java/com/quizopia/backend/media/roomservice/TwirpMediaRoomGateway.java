@@ -106,7 +106,7 @@ public class TwirpMediaRoomGateway implements MediaRoomGateway {
             Map<String, Object> response = restClient.post()
                     .uri("/twirp/livekit.RoomService/{m}", method)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.mintAdminToken(clock.instant()))
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.mintAdminToken(body.get("room"), clock.instant()))
                     .body(body)
                     .retrieve()
                     .body(MAP);

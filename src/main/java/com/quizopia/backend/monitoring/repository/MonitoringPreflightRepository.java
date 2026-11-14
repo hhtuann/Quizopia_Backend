@@ -37,6 +37,16 @@ public interface MonitoringPreflightRepository extends JpaRepository<MonitoringP
     Optional<MonitoringPreflight> findByLeaseHashForUpdate(@Param("leaseHash") String leaseHash);
 
     /**
+     * Pessimistic-write lock by primary key — used by the revoke path to
+     * preserve the global lock order session → preflight → binding →
+     * connection (the start gate locks preflight before binding; a revoke
+     * that took binding first could deadlock against it, final review P3).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM MonitoringPreflight p WHERE p.id = :id")
+    Optional<MonitoringPreflight> findByIdForUpdate(@Param("id") UUID id);
+
+    /**
      * Atomic one-time lease spend: VERIFIED → CONSUMED with the consumption
      * timestamp. Returns 0 when the lease was already consumed (concurrent
      * double-start guard) — callers translate that into
