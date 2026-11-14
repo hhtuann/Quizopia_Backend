@@ -138,8 +138,8 @@ transport-agnostic and versioned: an independent AI Worker
 API-key auth) can be added later without schema change; creating that worker
 repository/submodule remains separately owner-gated (§10). Browser detections
 are never labeled SERVER_VERIFIED and never trigger automatic verdicts.
-Rationale, contract and measurement plan: `p4c/CONTRACT.md` (repo root,
-P4-C working contract) and `docs/phase4/AI_MODEL_AUDIT.md` (real audit
-results). Server-side temporal aggregation, alert persistence, STOMP reuse
+Rationale, contract and measurement plan:
+`docs/phase4/AI_PROCTORING_CONTRACT.md` and `docs/phase4/AI_MODEL_AUDIT.md`
+(Quizopia_System repo, P4-C working contract + real audit results). Server-side temporal aggregation, alert persistence, STOMP reuse
 and teacher review feed are unchanged from §1/D8 (Backend stays the owner of
 attempt/alert state; browsers submit bounded idempotent observations only).
