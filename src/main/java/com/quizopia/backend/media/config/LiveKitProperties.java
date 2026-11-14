@@ -16,9 +16,10 @@ import java.time.Duration;
  * schedulers stay idle and legacy behaviour is bit-for-bit unchanged —
  * the same fail-closed posture P4-A shipped with.</p>
  *
- * <p>Secrets: {@code apiSecret} must be provided via environment when
- * enabled (never a default value, never committed). The pair matches the
- * {@code --key/--secret} flags in {@code docker-compose.livekit.yml}.</p>
+ * <p>Secrets: {@code apiKey}/{@code apiSecret} are validated at startup ONLY
+ * when enabled (see {@link LiveKitStartupValidator}) — binding-level
+ * @NotBlank would reject every context that runs with media disabled
+ * (CI/test), which is exactly the fail-closed default.</p>
  */
 @Validated
 @ConfigurationProperties(prefix = "quizopia.media.livekit")
@@ -28,11 +29,9 @@ public class LiveKitProperties {
     private boolean enabled = false;
 
     /** LiveKit API key name (must match the server's key configuration). */
-    @NotBlank
     private String apiKey = "";
 
     /** LiveKit API secret (HMAC key for tokens, admin calls and webhooks). */
-    @NotBlank
     private String apiSecret = "";
 
     /** Server API base URL (Twirp RoomService over HTTP), no trailing slash. */

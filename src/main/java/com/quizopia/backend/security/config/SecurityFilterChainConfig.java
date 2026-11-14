@@ -130,6 +130,12 @@ public class SecurityFilterChainConfig {
                                 // enforced in the service layer, not by URL patterns.
                                 "/api/auth/password/forgot",
                                 "/api/auth/password/reset").permitAll()
+                        // P4-B (issue #87): LiveKit server-to-server signed webhooks.
+                        // Unauthenticated at the chain on purpose — the delivery's own
+                        // HMAC (bare HS256 JWT + body sha256, checked in
+                        // LiveKitWebhookVerifier) IS the authentication; failures get
+                        // 401 from the controller. Stateless endpoint, CSRF N/A.
+                        .requestMatchers(HttpMethod.POST, "/internal/media/v1/livekit/webhooks").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 "/api/auth/providers",
                                 "/api/auth/oauth/google/link/callback",

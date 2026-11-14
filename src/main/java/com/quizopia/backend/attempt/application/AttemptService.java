@@ -21,6 +21,9 @@ import com.quizopia.backend.exam.domain.model.ExamSession;
 import com.quizopia.backend.exam.domain.model.ExamSessionStatus;
 import com.quizopia.backend.exam.repository.ExamSessionRepository;
 import com.quizopia.backend.exam.repository.SessionMonitoringPolicyRepository;
+import com.quizopia.backend.monitoring.application.CameraPreflightService;
+import com.quizopia.backend.monitoring.exception.MonitoringErrorCode;
+import com.quizopia.backend.monitoring.exception.MonitoringException;
 import com.quizopia.backend.realtime.event.AttemptRealtimeEvent;
 import com.quizopia.backend.realtime.event.RealtimeEventType;
 import jakarta.persistence.EntityManager;
@@ -70,6 +73,8 @@ public class AttemptService {
     private final AttemptQuestionRepository aqRepo;
     private final ExamSessionRepository sessionRepo;
     private final SessionMonitoringPolicyRepository monitoringPolicyRepo;
+    private final CameraPreflightService cameraPreflight;
+    private final SessionEligibilityPolicy eligibilityPolicy;
     private final JdbcTemplate jdbc;
     private final EntityManager em;
     private final Clock clock;
@@ -79,6 +84,8 @@ public class AttemptService {
     public AttemptService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
             AttemptQuestionRepository aqRepo, ExamSessionRepository sessionRepo,
             SessionMonitoringPolicyRepository monitoringPolicyRepo,
+            CameraPreflightService cameraPreflight,
+            SessionEligibilityPolicy eligibilityPolicy,
             JdbcTemplate jdbc, EntityManager em, Clock clock,
             ApplicationEventPublisher eventPublisher,
             com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder) {
@@ -87,6 +94,8 @@ public class AttemptService {
         this.aqRepo = aqRepo;
         this.sessionRepo = sessionRepo;
         this.monitoringPolicyRepo = monitoringPolicyRepo;
+        this.cameraPreflight = cameraPreflight;
+        this.eligibilityPolicy = eligibilityPolicy;
         this.jdbc = jdbc;
         this.em = em;
         this.clock = clock;
@@ -313,23 +322,9 @@ public class AttemptService {
      * </ul>
      */
     private boolean isEligible(Long userId, ExamSession session) {
-        // Blocked participants are denied regardless of visibility (P0-R7/R8).
-        Integer blocked = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM exam_session_participants bp "
-                        + "WHERE bp.exam_session_id = ? AND bp.user_id = ? AND bp.status = 'BLOCKED'",
-                Integer.class, session.getId(), userId);
-        if (blocked != null && blocked > 0) {
-            return false;
-        }
-        if (session.getVisibility() == com.quizopia.backend.exam.domain.model.SessionVisibility.PUBLIC) {
-            return true;
-        }
-        Integer cnt = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM exam_session_classes esc "
-                        + "JOIN classroom_members cm ON cm.classroom_id = esc.classroom_id "
-                        + "WHERE esc.exam_session_id = ? AND cm.user_id = ?",
-                Integer.class, session.getId(), userId);
-        return cnt != null && cnt > 0;
+        // P4-B: shared with the camera preflight path (SessionEligibilityPolicy)
+        // so a preflight can never promise a start the start path refuses.
+        return eligibilityPolicy.isEligible(userId, session);
     }
 
     private StartAttemptResponse resumeOrRejectExpired(Attempt active, Instant now, ExamSession session) {
@@ -352,13 +347,27 @@ public class AttemptService {
 
     private StartAttemptResponse createNewAttempt(Long userId, ExamSession session,
             Instant now, StartAttemptRequest request) {
-        // P4-A fail-closed gate (issue #80 / ADR-008 invariant 4): camera
-        // readiness is verified by the BACKEND via LiveKit room/track state,
-        // which arrives in P4-B. Until then a NEW attempt on a monitored
-        // session is refused — never a fake readiness pass-through. Resuming
-        // an existing IN_PROGRESS attempt is unaffected (ADR-008 D8).
-        if (Boolean.TRUE.equals(monitoringPolicyRepo.isMonitoringEnabled(session.getId()))) {
-            throw new AttemptException(AttemptErrorCode.ATTEMPT_MONITORING_START_UNAVAILABLE);
+        // P4-B camera-readiness gate (issue #85 / ADR-008 invariant 4,
+        // replacing the P4-A fail-closed throw): a NEW attempt on a
+        // monitored session requires a one-time readiness lease from a
+        // VERIFIED camera preflight. The lease is consumed HERE — under the
+        // already-held session row lock, before the attempt insert (lock
+        // order: session → preflight → attempt). No media call happens in
+        // this transaction. Resuming an IN_PROGRESS attempt never reaches
+        // this method (ADR-08 D8).
+        boolean monitoringEnabled = Boolean.TRUE
+                .equals(monitoringPolicyRepo.isMonitoringEnabled(session.getId()));
+        String readinessLease = request.monitoringReadinessLease();
+        CameraPreflightService.ConsumedLease consumedLease = null;
+        if (monitoringEnabled) {
+            if (readinessLease == null || readinessLease.isBlank()) {
+                throw new MonitoringException(MonitoringErrorCode.MONITORING_PREFLIGHT_REQUIRED);
+            }
+            consumedLease = cameraPreflight.consumeLeaseForNewAttempt(
+                    session.getId(), userId, readinessLease, now);
+        } else if (readinessLease != null && log.isDebugEnabled()) {
+            // Legacy compatibility: unmonitored sessions ignore the lease.
+            log.debug("ignoring monitoringReadinessLease on unmonitored session {}", session.getId());
         }
         // MAX+1 under session lock (user-based, issue #4 P0-1).
         int nextNumber = attemptRepo.findMaxAttemptNumber(session.getId(), userId).orElse(0) + 1;
@@ -387,6 +396,13 @@ public class AttemptService {
                     nextNumber, now, deadline, request.clientInstanceId());
             em.persist(attempt);
             em.flush();
+
+            // Bind the consumed preflight's media identity to THIS attempt
+            // (same transaction as the lease spend — they commit or roll
+            // back together; the attempt row must exist for the FK).
+            if (consumedLease != null) {
+                cameraPreflight.attachAttemptToBinding(consumedLease.bindingId(), attempt.getId());
+            }
 
             List<QuestionRow> qRows = queryOrderedQuestions(session.getExamId());
             if (qRows.isEmpty()) {

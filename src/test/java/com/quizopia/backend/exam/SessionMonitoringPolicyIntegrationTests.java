@@ -3,8 +3,6 @@ package com.quizopia.backend.exam;
 import com.quizopia.backend.attempt.application.AttemptService;
 import com.quizopia.backend.attempt.dto.SessionEligibilityResponse;
 import com.quizopia.backend.attempt.dto.StartAttemptRequest;
-import com.quizopia.backend.attempt.exception.AttemptErrorCode;
-import com.quizopia.backend.attempt.exception.AttemptException;
 import com.quizopia.backend.exam.application.ExamSessionService;
 import com.quizopia.backend.exam.dto.CreateExamSessionRequest;
 import com.quizopia.backend.exam.dto.ExamSessionDetailResponse;
@@ -303,8 +301,12 @@ class SessionMonitoringPolicyIntegrationTests {
     void monitoredSessionNewAttemptStartFailsClosed() {
         ExamSessionDetailResponse detail = createClassRestricted(monitoring(true, false, true, false, false, false));
         openSession(detail.id());
+        // P4-B: the gate now demands a camera readiness lease (P4-A's
+        // ATTEMPT_MONITORING_START_UNAVAILABLE placeholder is superseded).
         assertThatThrownBy(() -> attemptService.startAttempt(studentId, detail.id(), new StartAttemptRequest(null)))
-                .satisfies(e -> assertThat(attCode(e)).isEqualTo("ATTEMPT_MONITORING_START_UNAVAILABLE"));
+                .isInstanceOf(com.quizopia.backend.monitoring.exception.MonitoringException.class)
+                .satisfies(e -> assertThat(((com.quizopia.backend.monitoring.exception.MonitoringException) e)
+                        .getErrorCode().code()).isEqualTo("MONITORING_PREFLIGHT_REQUIRED"));
         // No attempt row was created.
         Integer attempts = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM attempts WHERE exam_session_id = ?", Integer.class, detail.id());
@@ -409,9 +411,6 @@ class SessionMonitoringPolicyIntegrationTests {
         return ((ExamException) e).getErrorCode().name();
     }
 
-    private static String attCode(Throwable e) {
-        return ((AttemptException) e).getErrorCode().code();
-    }
 
     private long ins(String sql) {
         return jdbc.queryForObject(sql + " RETURNING id", Long.class);
