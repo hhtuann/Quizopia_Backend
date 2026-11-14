@@ -136,6 +136,13 @@ public class SecurityFilterChainConfig {
                         // LiveKitWebhookVerifier) IS the authentication; failures get
                         // 401 from the controller. Stateless endpoint, CSRF N/A.
                         .requestMatchers(HttpMethod.POST, "/internal/media/v1/livekit/webhooks").permitAll()
+                        // P4-C (issue #88 worker contract): internal AI-worker
+                        // detection ingest. Unauthenticated at the chain on
+                        // purpose — the X-Api-Key header IS the authentication
+                        // (constant-time check in AiWorkerIngestController);
+                        // unconfigured key ⇒ deny-all 404, wrong key ⇒ 401.
+                        // Stateless endpoint, CSRF N/A.
+                        .requestMatchers(HttpMethod.POST, "/internal/ai/v1/detections").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 "/api/auth/providers",
                                 "/api/auth/oauth/google/link/callback",

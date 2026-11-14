@@ -3,20 +3,22 @@ package com.quizopia.backend.monitoring.domain.model;
 import java.util.Set;
 
 /**
- * Activity event types (P4-A2/#81 + P4-A4/#83; camera lifecycle P4-B/#85+/#87).
+ * Activity event types (P4-A2/#81 + P4-A4/#83; camera lifecycle P4-B/#85+/#87;
+ * AI alert lifecycle P4-C/#90).
  *
- * <p>The persistable set is frozen by the V34/V37 DB CHECK constraints; the
+ * <p>The persistable set is frozen by the V34/V37/V38 DB CHECK constraints; the
  * enum mirrors them exactly. The P4-B camera lifecycle types
- * (CAMERA_*, MONITORING_GAP) are SERVER-confirmed only: they are written
- * exclusively by the backend (webhook routing / reconciliation / revocation)
- * inside their transactions. Future media/AI types (AI_ALERT_CREATED,
- * RECORDING_*, EVIDENCE_AVAILABLE) stay absent until P4-C/D.
+ * (CAMERA_*, MONITORING_GAP) and the P4-C AI alert types (AI_ALERT_*) are
+ * SERVER-confirmed only: they are written exclusively by the backend
+ * (webhook routing / reconciliation / revocation / AI aggregation) inside
+ * their transactions. Future media types (RECORDING_*, EVIDENCE_AVAILABLE)
+ * stay absent until P4-D.
  *
  * <p>{@link #CLIENT_TYPES} is the ingest allowlist: only client-observed
  * types are accepted from the browser. Server types (lifecycle,
- * ANSWER_ACCEPTED, camera lifecycle) are written exclusively by backend
- * services inside their transactions — a client can never forge a
- * server-confirmed record.
+ * ANSWER_ACCEPTED, camera lifecycle, AI alert lifecycle) are written
+ * exclusively by backend services inside their transactions — a client can
+ * never forge a server-confirmed record.
  */
 public enum ActivityEventType {
     // Server-confirmed attempt lifecycle
@@ -55,7 +57,13 @@ public enum ActivityEventType {
     CAMERA_DISCONNECTED,
     CAMERA_RECONNECTED,
     CAMERA_REVOKED,
-    MONITORING_GAP;
+    MONITORING_GAP,
+
+    // Server-confirmed AI alert lifecycle (P4-C, issue #90; V38 CHECK).
+    // Written by AiAlertAggregationService only — never client-ingestable
+    // (CLIENT_TYPES below keeps rejecting them).
+    AI_ALERT_RAISED,
+    AI_ALERT_UPDATED;
 
     /** Types the browser ingest endpoint accepts (source=CLIENT only). */
     public static final Set<ActivityEventType> CLIENT_TYPES = Set.of(

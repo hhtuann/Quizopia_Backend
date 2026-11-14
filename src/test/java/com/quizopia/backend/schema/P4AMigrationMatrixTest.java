@@ -231,8 +231,8 @@ class P4AMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                .as("migration chain reached V37")
-                .containsExactly("37");
+                .as("migration chain reached V38")
+                .containsExactly("38");
     }
 
     // ==================================================================
