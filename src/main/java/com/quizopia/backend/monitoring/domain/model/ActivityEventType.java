@@ -11,8 +11,8 @@ import java.util.Set;
  * (CAMERA_*, MONITORING_GAP) and the P4-C AI alert types (AI_ALERT_*) are
  * SERVER-confirmed only: they are written exclusively by the backend
  * (webhook routing / reconciliation / revocation / AI aggregation) inside
- * their transactions. Future media types (RECORDING_*, EVIDENCE_AVAILABLE)
- * stay absent until P4-D.
+ * their transactions. The P4-D recording/evidence types (RECORDING_*,
+ * EVIDENCE_*) are likewise SERVER-confirmed only.
  *
  * <p>{@link #CLIENT_TYPES} is the ingest allowlist: only client-observed
  * types are accepted from the browser. Server types (lifecycle,
@@ -63,7 +63,20 @@ public enum ActivityEventType {
     // Written by AiAlertAggregationService only — never client-ingestable
     // (CLIENT_TYPES below keeps rejecting them).
     AI_ALERT_RAISED,
-    AI_ALERT_UPDATED;
+    AI_ALERT_UPDATED,
+
+    // Server-confirmed recording + evidence lifecycle (P4-D, issues
+    // #91-#94; V40 CHECK). Written by the recording coordinator, the
+    // snapshot/clip services and the retention job only — never
+    // client-ingestable.
+    RECORDING_STARTED,
+    RECORDING_STOPPED,
+    RECORDING_FAILED,
+    EVIDENCE_SNAPSHOT_UPLOADED,
+    EVIDENCE_SNAPSHOT_REJECTED,
+    EVIDENCE_CLIP_REQUESTED,
+    EVIDENCE_CLIP_READY,
+    EVIDENCE_CLIP_FAILED;
 
     /** Types the browser ingest endpoint accepts (source=CLIENT only). */
     public static final Set<ActivityEventType> CLIENT_TYPES = Set.of(

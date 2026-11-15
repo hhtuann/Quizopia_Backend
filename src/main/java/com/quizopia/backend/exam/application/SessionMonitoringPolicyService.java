@@ -176,11 +176,9 @@ public class SessionMonitoringPolicyService {
             throw new ExamException(ExamErrorCode.EXAM_SESSION_MONITORING_INVALID,
                     "Evidence snapshots require AI detection to be enabled");
         }
-        if (clips && !recording) {
-            throw new ExamException(ExamErrorCode.EXAM_SESSION_MONITORING_INVALID,
-                    "Evidence clips require full recording to be enabled in P4-A "
-                            + "(rolling-buffer capability arrives in P4-D)");
-        }
+        // P4-D: clips WITHOUT full recording are the rolling-buffer mode
+        // (bounded egress pulses, ADR-009 §2.2) — allowed since V40; the
+        // P4-A coupling was a capability placeholder, not a domain rule.
 
         SessionMonitoringPolicy policy = policyRepository.findByExamSessionId(session.getId())
                 .orElseGet(() -> SessionMonitoringPolicy.offFor(session.getId()));

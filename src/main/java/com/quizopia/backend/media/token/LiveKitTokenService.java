@@ -79,6 +79,10 @@ public class LiveKitTokenService {
         video.put("roomList", true);
         video.put("roomCreate", true);
         video.put("roomDelete", true);
+        // P4-D: the Egress twirp service requires roomRecord on the admin
+        // JWT (StartTrackCompositeEgress answers 401 "permissions denied"
+        // with roomAdmin alone).
+        video.put("roomRecord", true);
         video.put("room", room);
         return mint("quizopia-backend", video, properties.getAdminTokenTtl(), now);
     }

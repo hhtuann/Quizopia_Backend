@@ -137,7 +137,7 @@ transport-agnostic and versioned: an independent AI Worker
 (`WORKER_VERIFIED` provenance, `POST /internal/ai/v1/detections` with service
 API-key auth) can be added later without schema change; creating that worker
 repository/submodule remains separately owner-gated (§10). Browser detections
-are never labeled SERVER_VERIFIED and never trigger automatic verdicts.
+are never labeled WORKER_VERIFIED and never trigger automatic verdicts. (WORKER_VERIFIED itself only means "submitted by a worker API-key holder" — no independent worker is deployed in P4-C.)
 Rationale, contract and measurement plan:
 `docs/phase4/AI_PROCTORING_CONTRACT.md` and `docs/phase4/AI_MODEL_AUDIT.md`
 (Quizopia_System repo, P4-C working contract + real audit results). Server-side temporal aggregation, alert persistence, STOMP reuse

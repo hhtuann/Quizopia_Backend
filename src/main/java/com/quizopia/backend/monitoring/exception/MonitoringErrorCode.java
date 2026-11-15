@@ -48,7 +48,16 @@ public enum MonitoringErrorCode {
     MONITORING_BINDING_MISSING(HttpStatus.CONFLICT, "MONITORING_BINDING_MISSING",
             "No active camera binding for this attempt"),
     MONITORING_INFRA_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "MONITORING_INFRA_UNAVAILABLE",
-            "Camera monitoring infrastructure is unavailable");
+            "Camera monitoring infrastructure is unavailable"),
+    // P4-D evidence & recording (issues #91-#94, ADR-009).
+    EVIDENCE_SNAPSHOT_REJECTED(HttpStatus.BAD_REQUEST, "EVIDENCE_SNAPSHOT_REJECTED",
+            "Snapshot upload rejected: policy, state, format or size"),
+    EVIDENCE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "EVIDENCE_LIMIT_EXCEEDED",
+            "Evidence budget for this alert/attempt is exhausted"),
+    EVIDENCE_NOT_FOUND(HttpStatus.NOT_FOUND, "EVIDENCE_NOT_FOUND",
+            "Evidence resource not found for this session"),
+    EVIDENCE_CLIP_REJECTED(HttpStatus.CONFLICT, "EVIDENCE_CLIP_REJECTED",
+            "Clip request rejected for this alert");
 
     private final HttpStatus status;
     private final String code;
