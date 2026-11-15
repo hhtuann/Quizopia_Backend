@@ -78,10 +78,14 @@ class AiAlertBackfillIntegrationTests {
         return attemptId;
     }
 
+    private long ingestSequence = 0;
+
     private void ingest(Instant observedAt, String eventType) {
+        // Sequence must be monotonic per attempt+provenance (V39 unique) —
+        // the client contract increments one counter across all event types.
         AiDetectionBatchRequest.Item item = new AiDetectionBatchRequest.Item(
-                UUID.randomUUID(), eventType, observedAt, 1L, "yolo26s", "8.4.64-onnx",
-                "ORT_WEB_WASM", 640, 480, 40, List.of());
+                UUID.randomUUID(), eventType, observedAt, ++ingestSequence, "yolo26s",
+                "8.4.64-onnx", "ORT_WEB_WASM", 640, 480, 40, List.of());
         AiDetectionBatchResponse r = ingestService.ingestStudent(studentId,
                 jdbc.queryForObject("SELECT id FROM attempts ORDER BY id DESC LIMIT 1", Long.class),
                 new AiDetectionBatchRequest(List.of(item)));
