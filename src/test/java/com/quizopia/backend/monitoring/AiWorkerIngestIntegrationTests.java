@@ -203,6 +203,50 @@ class AiWorkerIngestIntegrationTests {
         }
     }
 
+    @Test
+    void oversizedBodyRejected413AfterAuthBeforeParse() throws Exception {
+        // No key + huge body → 401 (auth FIRST, body never parsed).
+        char[] big = new char[300_000];
+        java.util.Arrays.fill(big, 'a');
+        mockMvc.perform(post(PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(new String(big)))
+                .andExpect(status().isUnauthorized());
+        // Valid key + huge body → 413 from the pre-parse guard.
+        mockMvc.perform(post(PATH)
+                        .header("X-Api-Key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(new String(big)))
+                .andExpect(status().isPayloadTooLarge());
+        assertThat(detectionCount()).isZero();
+    }
+
+    @Test
+    void freshEventIdWithRepeatedSequenceIsDuplicateNeverAggregates() throws Exception {
+        mockMvc.perform(post(PATH)
+                        .header("X-Api-Key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(workerBody(attemptId, studentId, "WORKER_ORT", base)))
+                .andExpect(status().isOk());
+        assertThat(detectionCount()).isEqualTo(1L);
+
+        // P2-1 replay: SAME sequence, FRESH eventId → the V39 partial unique
+        // fires, the item reports DUPLICATE, the alert never grows.
+        MvcResult replay = mockMvc.perform(post(PATH)
+                        .header("X-Api-Key", API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(workerBody(attemptId, studentId, "WORKER_ORT", base)))
+                .andExpect(status().isOk())
+                .andReturn();
+        JsonNode response = objectMapper.readTree(
+                replay.getResponse().getContentAsString());
+        assertThat(response.get("duplicateCount").intValue()).isEqualTo(1);
+        assertThat(detectionCount()).isEqualTo(1L);
+        assertThat(jdbc.queryForObject(
+                "SELECT detection_count FROM monitoring_ai_alerts", Integer.class))
+                .isEqualTo(1);
+    }
+
     // === helpers ===
 
     private String workerBody(long attempt, long user, String runtime, Instant observedAt) {

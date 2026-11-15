@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -158,9 +159,16 @@ public class AiDetectionIngestService {
         return process(attempt, validated, AiProvenance.CLIENT_MODEL);
     }
 
+    /** Worker-path rate bucket domain (never shared with student ingest). */
+    static final String WORKER_RATE_DOMAIN = "monitoring:ai-ingest-worker";
+
+    /** Validated worker item (attempt resolved + payload validated). */
+    private record WorkerItem(Attempt attempt, ValidatedDetection validated) {
+    }
+
     // ==================================================================
     // Worker path — POST /internal/ai/v1/detections (X-Api-Key in the
-    // controller; no student JWT, items carry attemptId+userId).
+    // controller + guard filter; no student JWT, items carry attemptId+userId).
     // ==================================================================
 
     @Transactional
@@ -175,7 +183,10 @@ public class AiDetectionIngestService {
 
         // Per-item attempt resolution: a worker batch may span attempts,
         // so a bad attemptId/ownership is an ITEM outcome, never a 404.
+        // P3-3: validation is hoisted (two-pass) to mirror the student
+        // path's atomic shape — an invalid item rejects BEFORE any insert.
         Map<Long, Attempt> attempts = new HashMap<>();
+        List<WorkerItem> validatedItems = new ArrayList<>(request.detections().size());
         for (AiWorkerDetectionBatchRequest.Item item : request.detections()) {
             if (item == null || item.attemptId() == null || item.userId() == null
                     || item.detection() == null) {
@@ -197,6 +208,17 @@ public class AiDetectionIngestService {
                 continue;
             }
             ValidatedDetection validated = validate(item.detection(), Set.of(WORKER_RUNTIME));
+            validatedItems.add(new WorkerItem(attempt, validated));
+        }
+        // P2-2: per-attempt rate admission (domain-separated bucket) so a
+        // key holder cannot write an unbounded ledger per attempt.
+        for (Attempt attempt : attempts.values()) {
+            rateLimiter.admit(WORKER_RATE_DOMAIN, attempt.getId(),
+                    properties.getWorkerRateLimit(), properties.getWindow());
+        }
+        for (WorkerItem item : validatedItems) {
+            Attempt attempt = item.attempt();
+            ValidatedDetection validated = item.validated();
             Outcome outcome = processOne(attempt, validated, AiProvenance.WORKER_VERIFIED);
             accepted += outcome.accepted() ? 1 : 0;
             duplicates += outcome.duplicate() ? 1 : 0;
@@ -260,7 +282,7 @@ public class AiDetectionIngestService {
             return Outcome.quarantined(detection.eventId(), QUARANTINE_OBSERVED_AT_OUT_OF_WINDOW);
         }
 
-        int inserted = store(detection, attempt, provenance, binding.getId(), false, null, null);
+        int inserted = storeGuarded(detection, attempt, provenance, binding.getId());
         if (inserted == 0) {
             return Outcome.duplicate(detection.eventId());
         }
@@ -276,6 +298,32 @@ public class AiDetectionIngestService {
                 quarantineReason, null);
     }
 
+    /**
+     * Insert with BOTH idempotency semantics: the {@code event_id} conflict
+     * (ON CONFLICT DO NOTHING) and the V39 sequence-unique violation
+     * (replayed sequence under a fresh eventId) both map to 0 = DUPLICATE,
+     * so neither replay form can reach aggregation.
+     */
+    private int storeGuarded(ValidatedDetection detection, Attempt attempt,
+            AiProvenance provenance, UUID mediaBindingId) {
+        // Common replay path: PRE-CHECK the V39 sequence uniqueness so the
+        // INSERT never fires (a failed statement would abort the whole PG
+        // transaction). The partial unique index stays as the hard
+        // guarantee against concurrent same-sequence races; the residual
+        // DataIntegrityViolation there fails THAT batch loudly (500) with
+        // no integrity impact.
+        if (detectionRepo.sequenceSeen(attempt.getId(), provenance.name(),
+                detection.sequence())) {
+            return 0;
+        }
+        try {
+            return store(detection, attempt, provenance, mediaBindingId, false, null, null);
+        } catch (DataIntegrityViolationException ex) {
+            // V39 ux_ai_detections_attempt_prov_seq — concurrent race lost.
+            return 0;
+        }
+    }
+
     private int store(ValidatedDetection detection, Attempt attempt, AiProvenance provenance,
             UUID mediaBindingId, boolean quarantined, String quarantineReason, Long lateMs) {
         return detectionRepo.insertIfAbsent(
@@ -284,7 +332,8 @@ public class AiDetectionIngestService {
                 detection.type().name(), detection.modelId(), detection.modelVersion(),
                 detection.runtime(), Timestamp.from(detection.observedAt()), quarantined,
                 quarantineReason, detection.frameWidth(), detection.frameHeight(),
-                detection.processingMs(), detection.payloadJson(), lateMs);
+                detection.processingMs(), detection.payloadJson(), lateMs,
+                Long.valueOf(detection.sequence()));
     }
 
     private MonitoringMediaBinding activeBinding(Long attemptId, Long userId) {

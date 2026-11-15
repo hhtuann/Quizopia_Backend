@@ -438,6 +438,67 @@ class AiDetectionIngestIntegrationTests {
     }
 
     @Test
+    void studentReplayWithFreshEventIdRepeatedSequenceIsDuplicate() {
+        // P2-1: the V39 (attempt_id, provenance, sequence) partial unique —
+        // the student path maps the violation to DUPLICATE as well.
+        ingestService.ingestStudent(studentId, attemptId, batch(phoneDetection(base, 7, 0.9)));
+        clock.advance(Duration.ofSeconds(2));
+        // Same sequence 7, fresh eventId (phoneDetection randomizes ids).
+        ingestService.ingestStudent(studentId, attemptId, batch(phoneDetection(base.plusSeconds(1), 7, 0.9)));
+
+        assertThat(detectionCount()).isEqualTo(1);
+        assertThat(alertCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT detection_count FROM monitoring_ai_alerts", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void detectionCountSaturatesAtSixtyFour() {
+        // P2-1: 70 in-cooldown events — the stored count saturates at 64
+        // (matches the AI_ALERT_UPDATED notify ceiling). Paced as full
+        // batches (8 events each) every 12s to stay under the 6 batches/min
+        // student rate limit; events inside a batch are 1.5s apart so every
+        // event lands inside the 20s cooldown → ONE window.
+        int sequence = 0;
+        long offset = 0;
+        for (int b = 0; b < 9; b++) {
+            clock.advance(Duration.ofSeconds(12));
+            offset += 12;
+            List<AiDetectionBatchRequest.Item> items = new ArrayList<>();
+            for (int i = 0; i < 8 && sequence < 70; i++, sequence++) {
+                items.add(phoneDetection(base.plusSeconds(offset - 12 + i * 2L),
+                        sequence, 0.5 + (sequence % 10) * 0.04));
+            }
+            ingestService.ingestStudent(studentId, attemptId,
+                    new AiDetectionBatchRequest(items));
+        }
+        assertThat(detectionCount()).isEqualTo(70);
+        assertThat(alertCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT detection_count FROM monitoring_ai_alerts", Integer.class)).isEqualTo(64);
+    }
+
+    @Test
+    void windowOlderThanMaxSpanClosesAndOpensNewWindow() {
+        // P2-1: continuous in-cooldown detections (15s apart) crossing the
+        // 10-minute max span split into two incident windows.
+        for (int i = 0; i <= 42; i++) { // ~10.5 min of continuous activity
+            if (i > 0) {
+                clock.advance(Duration.ofSeconds(15));
+            }
+            ingestService.ingestStudent(studentId, attemptId,
+                    batch(phoneDetection(base.plusSeconds(15L * i), 100 + i, 0.8)));
+        }
+        List<Map<String, Object>> windows = jdbc.queryForList(
+                "SELECT status FROM monitoring_ai_alerts WHERE attempt_id=? ORDER BY id",
+                attemptId);
+        assertThat(windows).hasSize(2);
+        assertThat(windows.get(0).get("status")).isEqualTo("CLOSED");
+        assertThat(windows.get(1).get("status")).isEqualTo("OPEN");
+        assertThat(activityCount("AI_ALERT_RAISED")).isEqualTo(2);
+    }
+
+    @Test
     void personNotVisibleUsesLongerFortyFiveSecondCooldown() {
         ingestService.ingestStudent(studentId, attemptId,
                 batch(item("PERSON_NOT_OBSERVED", base, 1)));

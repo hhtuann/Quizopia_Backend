@@ -71,7 +71,7 @@ public interface MonitoringAiAlertRepository extends JpaRepository<MonitoringAiA
     // (chk_ai_alerts_period) nor shorten the window.
     @Query(value = "UPDATE monitoring_ai_alerts SET "
             + "last_detected_at = GREATEST(last_detected_at, :observedAt), "
-            + "detection_count = detection_count + 1, "
+            + "detection_count = LEAST(detection_count + 1, 64), "
             + "max_confidence = (SELECT MAX(v) FROM (VALUES (max_confidence), "
             + "(CAST(:maxConfidence AS double precision))) AS t(v)), "
             + "latest_payload = CAST(:payload AS jsonb), model_id = :modelId, "

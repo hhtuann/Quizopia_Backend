@@ -92,8 +92,14 @@ public class AiAlertAggregationService {
 
         // Gap beyond the cooldown: the incident window ends (CLOSED keeps
         // its own evidence) and this detection opens a NEW window.
-        if (open != null && detection.observedAt()
-                .isAfter(open.getLastDetectedAt().plus(cooldownOf(alertType)))) {
+        // P2-1: a window also ENDS when its total span exceeds the
+        // configured maximum — repeated in-cooldown detections cannot
+        // stretch one "incident" indefinitely (bounded ledger).
+        if (open != null && (detection.observedAt()
+                .isAfter(open.getLastDetectedAt().plus(cooldownOf(alertType)))
+                || detection.observedAt()
+                        .isAfter(open.getFirstDetectedAt()
+                                .plus(properties.getAlertMaxWindowSpan())))) {
             alertRepo.closeOpenAlert(open.getId());
             open = null;
         }

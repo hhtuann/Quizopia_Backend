@@ -33,6 +33,32 @@ public class AiIngestProperties {
     @Min(1)
     private int rateLimit = 6;
 
+    /**
+     * Worker-path admission: max EVENTS per attempt per window (bucket
+     * domain {@code monitoring:ai-ingest-worker}, keyed by attemptId). A
+     * physical camera stream is ≤3 analyzed FPS, so 240/min is a generous
+     * multiple — the cap bounds ledger amplification from a compromised
+     * worker key (P2-2 review).
+     */
+    @Min(1)
+    private int workerRateLimit = 240;
+
+    /**
+     * Guard-filter cap for POST /internal/ai/** bodies — rejects
+     * oversized payloads BEFORE Jackson deserialization (P2-2:
+     * unauthenticated CPU-burn primitive).
+     */
+    @Min(1024)
+    private int workerMaxBodyBytes = 131_072;
+
+    /**
+     * An OPEN alert window older than this is CLOSED and the next
+     * detection opens a NEW window (P2-1: bound fabricated incident
+     * spans from replayed detections).
+     */
+    @NotNull
+    private Duration alertMaxWindowSpan = Duration.ofMinutes(10);
+
     @NotNull
     private Duration window = Duration.ofMinutes(1);
 
@@ -113,5 +139,29 @@ public class AiIngestProperties {
 
     public void setWorkerKey(String workerKey) {
         this.workerKey = workerKey;
+    }
+
+    public int getWorkerRateLimit() {
+        return workerRateLimit;
+    }
+
+    public void setWorkerRateLimit(int workerRateLimit) {
+        this.workerRateLimit = workerRateLimit;
+    }
+
+    public int getWorkerMaxBodyBytes() {
+        return workerMaxBodyBytes;
+    }
+
+    public void setWorkerMaxBodyBytes(int workerMaxBodyBytes) {
+        this.workerMaxBodyBytes = workerMaxBodyBytes;
+    }
+
+    public Duration getAlertMaxWindowSpan() {
+        return alertMaxWindowSpan;
+    }
+
+    public void setAlertMaxWindowSpan(Duration alertMaxWindowSpan) {
+        this.alertMaxWindowSpan = alertMaxWindowSpan;
     }
 }

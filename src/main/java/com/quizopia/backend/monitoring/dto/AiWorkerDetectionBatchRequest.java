@@ -20,7 +20,7 @@ import java.util.List;
  * must be WORKER_ORT.
  */
 public record AiWorkerDetectionBatchRequest(
-        @NotNull @Size(min = 1) List<Item> detections) {
+        @NotNull @Size(min = 1, max = 64) List<Item> detections) {
 
     public record Item(
             @NotNull Long attemptId,
