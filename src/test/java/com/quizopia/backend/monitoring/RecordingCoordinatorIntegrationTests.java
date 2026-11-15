@@ -112,9 +112,10 @@ class RecordingCoordinatorIntegrationTests {
     }
 
 
-    /** Coordinator work is serialized onto its daemon executor — await it. */
+    /** Coordinator work is serialized onto its daemon executor — await it
+     *  (generous budget: shared CI runners are slow). */
     private void awaitTrue(java.util.function.BooleanSupplier condition) {
-        for (int i = 0; i < 100 && !condition.getAsBoolean(); i++) {
+        for (int i = 0; i < 300 && !condition.getAsBoolean(); i++) {
             try {
                 Thread.sleep(50);
             } catch (InterruptedException e) {
@@ -166,7 +167,7 @@ class RecordingCoordinatorIntegrationTests {
         enableMonitoringWithPolicy(jdbc, sessionId, false, true, false);
         publishCamera();
         publishCamera(); // duplicate publish must not start a second run
-        awaitTrue(() -> !egress.started.isEmpty());
+        awaitTrue(() -> !egress.started.isEmpty() && activityCount("RECORDING_STARTED") >= 1);
 
         assertThat(egress.started).hasSize(1);
         Map<String, Object> job = latestJob();
