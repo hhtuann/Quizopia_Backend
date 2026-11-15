@@ -141,19 +141,28 @@ alternatives for D1 were:
    to storage; enforcing the 2 MiB bound would need post-hoc HEAD+delete
    (the abuse already happened), and the two-phase slot flow adds orphan
    states for marginal gain in an authenticated single-tenant deployment.
-2. **Multipart JPEG via Spring (CHOSEN)** — the request is authenticated
-   (attempt owner + frozen policy + budgets) BEFORE the part is read; the
-   endpoint rejects parts over 2 MiB on `file.getSize()` WITHOUT buffering
-   them; total exposure per attempt is bounded (30 × 2 MiB); the transport
-   envelope stays the pre-existing multipart limits (5 MiB file / 6 MiB
-   request — the question-import workbook size, unchanged by P4-D).
+2. **Multipart JPEG via Spring (CHOSEN for the demo, Product Owner
+   sign-off PENDING)** — precise layering: the Spring multipart parser
+   accepts the request under the pre-existing TRANSPORT envelope (5 MiB
+   file / 6 MiB request — the question-import workbook size, unchanged by
+   P4-D); authentication (JWT attempt owner), policy, and the ENDPOINT
+   business cap of 2 MiB are enforced in the controller/service AFTER the
+   transport has buffered the part — the size guard runs on
+   `file.getSize()` before the bytes are processed further. Total exposure
+   per attempt is bounded (30 × 2 MiB service cap); the byte stream always
+   traverses the backend process (that is the documented trade-off of this
+   option).
 
-Safeguards in force: 2 MiB service cap + early part-size guard, per-alert
-(3) / per-attempt (30) budgets, idempotency key, JPEG SOI validation,
-SHA-256 persistence, provenance fixed at CLIENT_CAPTURE. **Product Owner
-sign-off requested for this transport decision** — switching to presigned
-PUT later only touches `EvidenceSnapshotService`/`EvidenceControllers`
-(ADR-009 §1 semantics unchanged).
+Safeguards in force: 2 MiB endpoint business cap (distinct from the 5/6
+MiB multipart transport cap), per-alert (3) / per-attempt (30) budgets
+enforced under a per-alert advisory lock (race-safe), insert-first
+reservation so a duplicate never overwrites the winner's metadata or
+object, idempotency key, JPEG SOI validation, SHA-256 persistence,
+provenance fixed at CLIENT_CAPTURE, orphan reconciliation for objects
+whose finalize transaction was lost. **Product Owner sign-off for this
+transport decision is still PENDING — it is not approved.** Switching to
+presigned PUT later only touches `EvidenceSnapshotService`/
+`EvidenceControllers` (ADR-009 §1 semantics unchanged).
 
 ## 5. Compliance gates (from the issues, restated as invariants)
 

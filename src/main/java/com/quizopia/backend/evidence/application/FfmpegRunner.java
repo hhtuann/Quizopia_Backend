@@ -69,8 +69,12 @@ public class FfmpegRunner {
         Path workDir = null;
         try {
             workDir = Files.createTempDirectory("quizopia-clip-");
+        } catch (IOException e) {
+            return new Result.Failed("FFMPEG_IO_ERROR"); // nothing created — nothing to clean
+        }
+        Path output = workDir.resolve("clip.mp4");
+        try {
             Path listFile = workDir.resolve("list.txt");
-            Path output = workDir.resolve("clip.mp4");
             StringBuilder list = new StringBuilder();
             for (SegmentInput segment : segments) {
                 list.append("file '").append(segment.url().replace("'", "%27")).append("'\n");

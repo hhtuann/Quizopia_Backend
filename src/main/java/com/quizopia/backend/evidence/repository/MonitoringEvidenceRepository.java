@@ -50,6 +50,14 @@ public interface MonitoringEvidenceRepository extends JpaRepository<MonitoringEv
             + "AND e.status IN ('PENDING','AVAILABLE','PARTIAL')")
     List<MonitoringEvidence> findPurgeable(@Param("sessionId") long sessionId);
 
+    /** Honest terminal transition for abandoned PENDING rows (sweep only). */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = "UPDATE monitoring_evidence SET status = 'FAILED', "
+            + "error = :error, object_key = NULL, sha256 = NULL, updated_at = :now "
+            + "WHERE id = :id AND status = 'PENDING'", nativeQuery = true)
+    int markFailedRow(@Param("id") java.util.UUID id, @Param("error") String error,
+            @Param("now") java.sql.Timestamp now);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE monitoring_evidence SET status = 'EXPIRED', "
             + "object_key = NULL, sha256 = NULL, updated_at = :now "
@@ -58,6 +66,15 @@ public interface MonitoringEvidenceRepository extends JpaRepository<MonitoringEv
 
     /** All rows of one attempt (orphan reference lookup; bounded by budgets). */
     List<MonitoringEvidence> findByAttemptId(Long attemptId);
+
+    /** Attempts owning ANY evidence rows — orphan-reconcile work list. */
+    @Query("SELECT DISTINCT e.attemptId FROM MonitoringEvidence e")
+    List<Long> findAttemptsWithEvidence();
+
+    /** PENDING evidence rows older than the grace window (abandoned owners). */
+    @Query("SELECT e FROM MonitoringEvidence e WHERE e.status = 'PENDING' "
+            + "AND e.updatedAt < :cutoff")
+    List<MonitoringEvidence> findStalePending(@Param("cutoff") java.time.Instant cutoff);
 
     /** Session ids owning an attempt's evidence (orphan reconciliation lookup). */
     @Query("SELECT DISTINCT e.examSessionId FROM MonitoringEvidence e WHERE e.attemptId = :attemptId")

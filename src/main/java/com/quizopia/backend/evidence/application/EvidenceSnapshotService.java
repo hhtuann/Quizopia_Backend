@@ -12,14 +12,15 @@ import com.quizopia.backend.monitoring.domain.model.MonitoringAiAlert;
 import com.quizopia.backend.monitoring.exception.MonitoringErrorCode;
 import com.quizopia.backend.monitoring.exception.MonitoringException;
 import com.quizopia.backend.monitoring.repository.MonitoringAiAlertRepository;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.HexFormat;
-import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -28,18 +29,26 @@ import tools.jackson.databind.node.ObjectNode;
  * D1 (issue #91): student-browser evidence snapshots with honest
  * {@code CLIENT_CAPTURE} provenance (ADR-009 §1).
  *
- * <p>The server verifies what it CAN verify — attempt ownership + IN_PROGRESS
- * state, frozen policy {@code evidence_snapshots_enabled}, alert belongs to
- * this attempt, per-alert/per-attempt bounds, JPEG magic, size cap, declared
- * SHA-256 equality, storage round-trip — and labels the result exactly as
- * what it is: a browser-captured frame. It never claims the frame content
- * was independently verified.
+ * <p><b>Reservation-first concurrency contract (gate review):</b> exactly ONE
+ * request owns each {@code idempotencyKey}. The row is INSERTED (PENDING,
+ * with its object key) under the key's unique index BEFORE any storage I/O;
+ * the insert winner alone uploads and finalizes. A concurrent duplicate
+ * loses the insert race and returns the OWNER's row read-only — it can
+ * never overwrite the winner's object key, digest or status, and never
+ * uploads a second object. Budgets are re-checked inside the same
+ * transaction under a per-alert advisory lock, so concurrent uploads with
+ * distinct keys cannot exceed 3/alert or 30/attempt. Storage PUT and every
+ * failure path run OUTSIDE the lock: the reservation transaction is a few
+ * inserts. A crash between PUT and finalize leaves a PENDING row with a
+ * known object key — the retention reconciler deletes the object and fails
+ * the row after a grace window (no permanent orphans, no silent successes).
  *
- * <p>Idempotency: the client-supplied {@code idempotencyKey} is unique in
- * {@code monitoring_evidence}; a retry of the same upload returns the first
- * row (200) instead of a second object. Storage PUT runs OUTSIDE the
- * transaction ({@link TransactionTemplate}); the row insert is the commit
- * point.
+ * <p>The server verifies what it CAN verify — attempt ownership +
+ * IN_PROGRESS state, frozen policy {@code evidence_snapshots_enabled},
+ * alert belongs to this attempt, per-alert/per-attempt bounds, JPEG magic,
+ * size cap, declared SHA-256 equality, storage round-trip — and labels the
+ * result exactly as what it is: a browser-captured frame. It never claims
+ * the frame content was independently verified.
  */
 @Service
 public class EvidenceSnapshotService {
@@ -83,16 +92,24 @@ public class EvidenceSnapshotService {
         this.clock = clock;
     }
 
+    /** Outcome of {@link #upload}: the winning row, or the owner's row on replay. */
+    public record UploadOutcome(MonitoringEvidence row, boolean owner, String reason) {
+
+        public boolean idempotentReplay() {
+            return !owner;
+        }
+    }
+
     /**
-     * Stores one student-captured snapshot frame.
+     * Stores one student-captured snapshot frame (reservation-first).
      *
-     * @param userId    authenticated student
-     * @param attemptId owning attempt
-     * @param alertId   the alert whose opening requested the snapshot
-     * @param idempotencyKey client retry key (≤128 chars)
-     * @param capturedAtMs client capture wall-clock (epoch ms)
+     * @param userId         authenticated student
+     * @param attemptId      owning attempt
+     * @param alertId        the alert whose opening requested the snapshot
+     * @param idempotencyKey client retry key (≤128 chars, unique per upload)
+     * @param capturedAtMs   client capture wall-clock (epoch ms)
      */
-    public SnapshotResult upload(long userId, long attemptId, long alertId,
+    public UploadOutcome upload(long userId, long attemptId, long alertId,
             String idempotencyKey, long capturedAtMs, byte[] image) {
         Attempt attempt = attempts.findById(attemptId)
                 .orElseThrow(() -> new MonitoringException(MonitoringErrorCode.MONITORING_ATTEMPT_NOT_FOUND));
@@ -128,61 +145,131 @@ public class EvidenceSnapshotService {
             rejectSnapshot(attempt, alertId, "SNAPSHOTS_DISABLED");
         }
 
-        // Idempotent retry short-circuit (before any storage I/O).
-        var existing = evidence.findByIdempotencyKey(idempotencyKey);
-        if (existing.isPresent()) {
-            if (!existing.get().getAttemptId().equals(attemptId)) {
-                throw new MonitoringException(MonitoringErrorCode.EVIDENCE_SNAPSHOT_REJECTED,
-                        "idempotencyKey already used by another attempt");
-            }
-            return new SnapshotResult(existing.get().getId(), existing.get().getStatus(),
-                    existing.get().getProvenance(), true);
-        }
-
-        if (evidence.countByAlertIdAndKindAndStatusNot(alertId,
-                MonitoringEvidence.KIND_SNAPSHOT, MonitoringEvidence.STATUS_EXPIRED)
-                >= properties.getSnapshotPerAlert()
-                || evidence.countByAttemptIdAndKind(attemptId, MonitoringEvidence.KIND_SNAPSHOT)
-                >= properties.getSnapshotPerAttempt()) {
-            rejectSnapshot(attempt, alertId, "SNAPSHOT_BUDGET_EXHAUSTED");
-        }
-
         Instant now = clock.instant();
         Instant capturedAt = Instant.ofEpochMilli(capturedAtMs);
-        // Browser clock sanity: far-future or far-past captures are stored but
-        // flagged through activity metadata (honest), never silently accepted
-        // as authoritative timestamps.
         String objectKey = "snapshots/" + attemptId + "/" + UUID.randomUUID() + ".jpg";
+
+        // ------------------------------------------------------------------
+        // RESERVATION (short tx, advisory-locked budget check, no storage I/O)
+        // ------------------------------------------------------------------
+        Reservation reservation = tx.execute(status -> {
+            jdbcLock("evidence-snap:" + alertId);
+            jdbcLock("evidence-snap-attempt:" + attemptId);
+            // Budget re-check under the lock — concurrent uploads with
+            // distinct keys cannot slip past the caps.
+            if (evidence.countByAlertIdAndKindAndStatusNot(alertId,
+                    MonitoringEvidence.KIND_SNAPSHOT, MonitoringEvidence.STATUS_EXPIRED)
+                    >= properties.getSnapshotPerAlert()) {
+                return Reservation.rejected("SNAPSHOT_BUDGET_EXHAUSTED");
+            }
+            if (evidence.countByAttemptIdAndKind(attemptId, MonitoringEvidence.KIND_SNAPSHOT)
+                    >= properties.getSnapshotPerAttempt()) {
+                return Reservation.rejected("SNAPSHOT_BUDGET_EXHAUSTED");
+            }
+            // Fast path: an owner already finalized (or holds the key).
+            var existing = evidence.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                MonitoringEvidence winner = existing.get();
+                if (!winner.getAttemptId().equals(attemptId)) {
+                    return Reservation.keyConflict();
+                }
+                return Reservation.duplicate(winner);
+            }
+            MonitoringEvidence row = MonitoringEvidence.newSnapshot(UUID.randomUUID(),
+                    attempt.getExamSessionId(), attemptId, alertId, idempotencyKey,
+                    capturedAt, policy.mediaRetentionExpiry(now), now);
+            try {
+                MonitoringEvidence inserted = evidence.save(row);
+                evidence.flush();
+                return Reservation.won(inserted, objectKey);
+            } catch (DataIntegrityViolationException race) {
+                // Lost the unique-idempotency race: read the winner READ-ONLY.
+                MonitoringEvidence winner = evidence.findByIdempotencyKey(idempotencyKey)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "idempotency winner vanished after conflict"));
+                if (!winner.getAttemptId().equals(attemptId)) {
+                    return Reservation.keyConflict();
+                }
+                return Reservation.duplicate(winner);
+            }
+        });
+
+        if (reservation.rejectedReason != null) {
+            rejectSnapshot(attempt, alertId, reservation.rejectedReason);
+        }
+        if (reservation.keyConflict) {
+            throw new MonitoringException(MonitoringErrorCode.EVIDENCE_SNAPSHOT_REJECTED,
+                    "idempotencyKey already used by another attempt");
+        }
+        if (reservation.duplicate != null) {
+            // Replay: return the OWNER's row untouched. We never uploaded,
+            // never wrote to their row — no overwrite, no second object.
+            return new UploadOutcome(reservation.duplicate, false, null);
+        }
+
+        // ------------------------------------------------------------------
+        // OWNER path: storage I/O outside the transaction/lock
+        // ------------------------------------------------------------------
+        MonitoringEvidence ownerRow = reservation.row;
         EvidenceStorage.StoredObject stored;
         try {
             stored = storage.put(objectKey, image, "image/jpeg");
         } catch (RuntimeException e) {
             log.warn("snapshot storage unavailable (attempt={}, alert={}): {}",
                     attemptId, alertId, e.getMessage());
+            failOwnRow(ownerRow.getId(), "STORAGE_UNAVAILABLE", attempt);
             throw new MonitoringException(MonitoringErrorCode.MONITORING_INFRA_UNAVAILABLE);
         }
-
-        MonitoringEvidence row = MonitoringEvidence.newSnapshot(UUID.randomUUID(),
-                attempt.getExamSessionId(), attemptId, alertId, idempotencyKey, capturedAt,
-                policy.mediaRetentionExpiry(now), now);
-        MonitoringEvidence saved = tx.execute(status -> {
-            // Re-check idempotency inside the insert transaction (race).
-            var raced = evidence.findByIdempotencyKey(idempotencyKey);
-            if (raced.isPresent()) {
-                return raced.get();
-            }
-            MonitoringEvidence inserted = evidence.save(row);
-            recordActivity(attempt, alert, inserted, capturedAt, stored.bytes());
-            return inserted;
+        // Browser clock honesty: far-future or far-past captures stay visible
+        // through activity metadata; never silently trusted as authoritative.
+        MonitoringEvidence finalized = tx.execute(status -> {
+            MonitoringEvidence fresh = evidence.findById(ownerRow.getId())
+                    .orElseThrow(() -> new IllegalStateException("reservation row vanished"));
+            fresh.markAvailable(objectKey, stored.sha256Hex(), stored.bytes(), null, null);
+            fresh.setUpdatedAt(clock.instant());
+            MonitoringEvidence saved = evidence.save(fresh);
+            recordActivity(attempt, alert, saved, capturedAt, stored.bytes());
+            return saved;
         });
-        saved.markAvailable(objectKey, stored.sha256Hex(), stored.bytes(), null, null);
-        saved.setUpdatedAt(clock.instant());
-        MonitoringEvidence finalized = tx.execute(status -> evidence.save(saved));
         log.info("snapshot stored (attempt={}, alert={}, bytes={}, sha256={})",
                 attemptId, alertId, stored.bytes(), stored.sha256Hex());
-        return new SnapshotResult(finalized.getId(), finalized.getStatus(),
-                finalized.getProvenance(), false);
+        return new UploadOutcome(finalized, true, null);
     }
+
+    /** Fails OUR OWN row (never another request's) when storage is down. */
+    private void failOwnRow(UUID rowId, String reason, Attempt attempt) {
+        try {
+            tx.execute(new TransactionCallbackWithoutResult() {
+                @Override
+                protected void doInTransactionWithoutResult(
+                        org.springframework.transaction.TransactionStatus status) {
+                    MonitoringEvidence fresh = evidence.findById(rowId).orElse(null);
+                    if (fresh == null || !MonitoringEvidence.STATUS_PENDING.equals(fresh.getStatus())) {
+                        return; // someone finalized/failed it already
+                    }
+                    fresh.markFailed(reason);
+                    fresh.setUpdatedAt(clock.instant());
+                    evidence.save(fresh);
+                }
+            });
+        } catch (RuntimeException e) {
+            log.warn("failed-row write failed (row={}): {}", rowId, e.getMessage());
+            // Row stays PENDING → reconciler fails it after the grace window.
+        }
+    }
+
+    /** Per-key advisory lock inside the open transaction (short-held). */
+    private void jdbcLock(String key) {
+        try {
+            entityManager.createNativeQuery("SELECT pg_advisory_xact_lock(hashtext(?))")
+                    .setParameter(1, key).getSingleResult();
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("advisory lock failed: " + e.getMessage(), e);
+        }
+    }
+
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
 
     /** Rejections are honest activity events, then a 400 to the client. */
     private void rejectSnapshot(Attempt attempt, long alertId, String reason) {
@@ -217,17 +304,46 @@ public class EvidenceSnapshotService {
                 clock.instant(), meta.toString());
     }
 
-    /** Result of an upload (first store or idempotent replay). */
-    public record SnapshotResult(UUID evidenceId, String status, String provenance,
-            boolean idempotentReplay) {
-    }
+    /** Result of the reservation transaction. */
+    private static final class Reservation {
+        MonitoringEvidence row;          // we own it (PENDING)
+        MonitoringEvidence duplicate;    // owner's row — replay, read-only
+        String rejectedReason;
+        boolean keyConflict;
 
+        static Reservation won(MonitoringEvidence row, String objectKey) {
+            Reservation r = new Reservation();
+            r.row = row;
+            return r;
+        }
+
+        static Reservation duplicate(MonitoringEvidence winner) {
+            Reservation r = new Reservation();
+            r.duplicate = winner;
+            return r;
+        }
+
+        static Reservation rejected(String reason) {
+            Reservation r = new Reservation();
+            r.rejectedReason = reason;
+            return r;
+        }
+
+        static Reservation keyConflict() {
+            Reservation r = new Reservation();
+            r.keyConflict = true;
+            return r;
+        }
+    }
+    /** Test-visible digest helper (same algorithm the storage layer uses). */
     public static String sha256Hex(byte[] content) {
         try {
-            return HexFormat.of().formatHex(java.security.MessageDigest
-                    .getInstance("SHA-256").digest(content)).toLowerCase(Locale.ROOT);
+            return java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(content))
+                    .toLowerCase(java.util.Locale.ROOT);
         } catch (Exception e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
     }
+
 }

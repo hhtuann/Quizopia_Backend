@@ -57,14 +57,57 @@ public class EvidenceRetentionJob {
         expireEvidence();
         expireRecordings();
         sweepAccessLog();
+        sweepStalePending();
         try {
-            for (Long attemptId : jobs.findAttemptsWithRollingRows()) {
-                reconcileRollingOrphans(attemptId);
-            }
+            reconcileAllOrphans();
         } catch (RuntimeException e) {
             log.warn("orphan reconcile pass failed: {}", e.getMessage());
         }
     }
+
+    /**
+     * P1 orphan coverage: reconcile EVERY attempt that owns evidence rows OR
+     * recording jobs — not just attempts with rolling rows (a recording-OFF
+     * attempt with only snapshots was previously missed). Per attempt the
+     * snapshots/, clips/, rolling/ and recordings/ prefixes are checked
+     * against their referencing rows; unreferenced objects are deleted only
+     * when nothing is in flight for that attempt.
+     */
+    public java.util.Set<Long> reconcileAllOrphansExposesWorkList() {
+        java.util.Set<Long> workList = new java.util.TreeSet<>();
+        workList.addAll(evidence.findAttemptsWithEvidence());
+        workList.addAll(jobs.findAttemptsWithJobs());
+        return workList;
+    }
+
+    public int reconcileAllOrphans() {
+        java.util.Set<Long> workList = new java.util.TreeSet<>();
+        workList.addAll(evidence.findAttemptsWithEvidence());
+        workList.addAll(jobs.findAttemptsWithJobs());
+        int deleted = 0;
+        for (Long attemptId : workList) {
+            deleted += reconcileAttemptOrphans(attemptId);
+        }
+        return deleted;
+    }
+
+    /** Owner crashed between reservation and finalize — fail + clean after grace. */
+    public void sweepStalePending() {
+        Instant cutoff = clock.instant().minus(ORPHAN_GRACE);
+        for (MonitoringEvidence row : evidence.findStalePending(cutoff)) {
+            try {
+                if (row.getObjectKey() != null && !deleteObjectHonestly(row.getObjectKey())) {
+                    continue; // storage in trouble — retry next cycle
+                }
+                tx.executeWithoutResult(status -> evidence.markFailedRow(
+                        row.getId(), "ABANDONED_PENDING", Timestamp.from(clock.instant())));
+            } catch (RuntimeException e) {
+                log.warn("stale-pending sweep failed (row={}): {}", row.getId(), e.getMessage());
+            }
+        }
+    }
+
+    private static final java.time.Duration ORPHAN_GRACE = java.time.Duration.ofHours(1);
 
     /** Media retention: object delete first, then EXPIRED metadata. */
     public void expireEvidence() {
@@ -137,36 +180,48 @@ public class EvidenceRetentionJob {
         }
     }
 
-    /**
-     * Orphan reconciliation (issue #94): deletes storage objects of an
-     * attempt that no row references anymore — rolling pulses whose row was
-     * superseded, plus snapshot objects orphaned by a lost insert race
-     * (PUT succeeded, the metadata transaction did not). Skips cycles where
-     * anything is in flight (an upload in progress is not yet referenced).
-     */
+    /** Legacy entry point — delegates to the per-type pass. */
     public int reconcileRollingOrphans(long attemptId) {
+        return reconcileAttemptOrphans(attemptId);
+    }
+
+    /**
+     * Per-attempt, per-prefix orphan pass. Objects are compared with the
+     * object keys the attempt's evidence rows and recording jobs reference;
+     * unreferenced objects are deleted when (a) the attempt has NO in-flight
+     * jobs and (b) no PENDING SNAPSHOT row younger than the grace window
+     * exists (an upload whose finalize tx is still being retried is not an
+     * orphan yet).
+     */
+    public int reconcileAttemptOrphans(long attemptId) {
         if (!jobs.findActiveByAttemptId(attemptId).isEmpty()) {
-            return 0; // something in flight — skip this cycle
+            return 0; // recording in flight — skip this attempt entirely
         }
-        java.util.List<String> referenced = jobs.findRollingNewestFirst(attemptId).stream()
-                .map(com.quizopia.backend.evidence.domain.MonitoringRecordingJob::getObjectKey)
-                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        Instant graceStart = clock.instant().minus(ORPHAN_GRACE);
+        boolean snapshotUploadInFlight = evidence.findByAttemptId(attemptId).stream()
+                .anyMatch(row -> MonitoringEvidence.KIND_SNAPSHOT.equals(row.getKind())
+                        && MonitoringEvidence.STATUS_PENDING.equals(row.getStatus())
+                        && row.getUpdatedAt() != null
+                        && row.getUpdatedAt().isAfter(graceStart));
+        if (snapshotUploadInFlight) {
+            return 0;
+        }
+        java.util.Set<String> referenced = new java.util.HashSet<>();
         evidence.findByAttemptId(attemptId).forEach(row -> {
             if (row.getObjectKey() != null) {
                 referenced.add(row.getObjectKey());
             }
         });
+        referenced.addAll(jobs.findObjectKeysOfAttempt(attemptId));
         int deleted = 0;
-        for (String prefix : java.util.List.of(
-                "rolling/" + attemptId + "/", "snapshots/" + attemptId + "/")) {
+        for (String prefix : List.of(
+                "snapshots/" + attemptId + "/",
+                "clips/" + attemptId + "/",
+                "rolling/" + attemptId + "/",
+                "recordings/" + attemptId + "/")) {
             for (String key : storage.list(prefix)) {
-                if (!referenced.contains(key)) {
-                    try {
-                        storage.delete(key);
-                        deleted++;
-                    } catch (RuntimeException e) {
-                        log.warn("orphan delete failed (key={}): {}", key, e.getMessage());
-                    }
+                if (!referenced.contains(key) && deleteObjectHonestly(key)) {
+                    deleted++;
                 }
             }
         }

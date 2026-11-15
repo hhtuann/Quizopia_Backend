@@ -71,12 +71,13 @@ public class EvidenceControllers {
                     com.quizopia.backend.monitoring.exception.MonitoringErrorCode
                             .EVIDENCE_SNAPSHOT_REJECTED, "SNAPSHOT_TOO_LARGE");
         }
-        EvidenceSnapshotService.SnapshotResult result = snapshots.upload(
+        EvidenceSnapshotService.UploadOutcome outcome = snapshots.upload(
                 userId, attemptId, alertId, idempotencyKey, capturedAt, file.getBytes());
+        MonitoringEvidence row = outcome.row();
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .body(new SnapshotResponse(result.evidenceId(), result.status(),
-                        result.provenance(), result.idempotentReplay()));
+                .body(new SnapshotResponse(row.getId(), row.getStatus(),
+                        row.getProvenance(), outcome.idempotentReplay()));
     }
 
     @GetMapping("/api/attempts/{attemptId}/monitoring/media-status")

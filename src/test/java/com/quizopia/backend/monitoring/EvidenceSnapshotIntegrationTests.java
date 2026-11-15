@@ -10,7 +10,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.quizopia.backend.attempt.application.AttemptService;
 import com.quizopia.backend.attempt.dto.StartAttemptRequest;
 import com.quizopia.backend.evidence.application.EvidenceSnapshotService;
-import com.quizopia.backend.evidence.application.EvidenceSnapshotService.SnapshotResult;
 import com.quizopia.backend.media.storage.EvidenceStorage;
 import com.quizopia.backend.monitoring.application.AiDetectionIngestService;
 import com.quizopia.backend.monitoring.dto.AiDetectionBatchRequest;
@@ -24,6 +23,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -104,14 +104,15 @@ class EvidenceSnapshotIntegrationTests {
     @Test
     void uploadStoresRealObjectWithSha256AndHeadVerifiesIt() {
         long alertId = openAlertId();
-        SnapshotResult result = snapshots.upload(studentId, attemptId, alertId,
+        var outcome = snapshots.upload(studentId, attemptId, alertId,
                 "idem-" + UUID.randomUUID(), base.toEpochMilli(), REAL_JPEG);
+        assertThat(outcome.owner()).isTrue();
 
-        assertThat(result.status()).isEqualTo("AVAILABLE");
-        assertThat(result.provenance()).isEqualTo("CLIENT_CAPTURE");
+        assertThat(outcome.row().getStatus()).isEqualTo("AVAILABLE");
+        assertThat(outcome.row().getProvenance()).isEqualTo("CLIENT_CAPTURE");
         var row = jdbc.queryForMap(
                 "SELECT object_key, sha256, bytes, provenance, status FROM monitoring_evidence "
-                        + "WHERE id = ?", java.util.UUID.fromString(result.evidenceId().toString()));
+                        + "WHERE id = ?", outcome.row().getId());
         String key = (String) row.get("object_key");
         assertThat(key).startsWith("snapshots/" + attemptId + "/");
         assertThat(row.get("provenance")).isEqualTo("CLIENT_CAPTURE");
@@ -130,12 +131,14 @@ class EvidenceSnapshotIntegrationTests {
     void duplicateIdempotencyKeyReplaysTheFirstRowWithoutASecondObject() {
         long alertId = openAlertId();
         String key = "idem-" + UUID.randomUUID();
-        SnapshotResult first = snapshots.upload(studentId, attemptId, alertId,
+        var first = snapshots.upload(studentId, attemptId, alertId,
                 key, base.toEpochMilli(), REAL_JPEG);
-        SnapshotResult retry = snapshots.upload(studentId, attemptId, alertId,
+        var retry = snapshots.upload(studentId, attemptId, alertId,
                 key, base.plusSeconds(2).toEpochMilli(), REAL_JPEG);
         assertThat(retry.idempotentReplay()).isTrue();
-        assertThat(retry.evidenceId()).isEqualTo(first.evidenceId());
+        assertThat(retry.row().getId()).isEqualTo(first.row().getId());
+        // no overwrite: the winner's digest/bytes/status survive the replay
+        assertThat(retry.row().getSha256()).isEqualTo(first.row().getSha256());
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM monitoring_evidence WHERE kind='SNAPSHOT' AND attempt_id = ?",
                 Long.class, attemptId)).isEqualTo(1L);
@@ -247,6 +250,121 @@ class EvidenceSnapshotIntegrationTests {
                 "idem-y", base.toEpochMilli(), REAL_JPEG))
                 .isInstanceOf(MonitoringException.class);
     }
+
+    @Test
+    void concurrentDuplicateKeySingleWinnerNoOverwrite() throws Exception {
+        long alertId = openAlertId();
+        String key = "idem-race-" + UUID.randomUUID();
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Callable<Object>> calls = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            calls.add(() -> {
+                start.await();
+                return snapshots.upload(studentId, attemptId, alertId, key,
+                        base.toEpochMilli(), REAL_JPEG);
+            });
+        }
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+        java.util.List<Future<Object>> futures = new java.util.ArrayList<>();
+        for (java.util.concurrent.Callable<Object> call : calls) {
+            futures.add(pool.submit(call));
+        }
+        start.countDown();
+        java.util.Set<UUID> distinctRows = new java.util.HashSet<>();
+        int owners = 0;
+        for (Future<Object> future : futures) {
+            EvidenceSnapshotService.UploadOutcome outcome =
+                    (EvidenceSnapshotService.UploadOutcome) future.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            distinctRows.add(outcome.row().getId());
+            if (outcome.owner()) {
+                owners++;
+            }
+            assertThat(outcome.row().getStatus())
+                    .as("no half-written state visible to either side")
+                    .isIn("AVAILABLE", "PENDING");
+        }
+        pool.shutdownNow();
+        assertThat(distinctRows).as("exactly one row owns the key").hasSize(1);
+        assertThat(owners).as("exactly one request finalized").isEqualTo(1);
+        // and the surviving row is complete, consistent metadata
+        var row = jdbc.queryForMap(
+                "SELECT status, sha256, bytes, object_key FROM monitoring_evidence "
+                        + "WHERE idempotency_key = ?", key);
+        assertThat(row.get("status")).isEqualTo("AVAILABLE");
+        assertThat(row.get("sha256")).isEqualTo(EvidenceSnapshotService.sha256Hex(REAL_JPEG));
+        assertThat(((Number) row.get("bytes")).longValue()).isEqualTo(REAL_JPEG.length);
+    }
+
+    @Test
+    void concurrentDistinctKeysCannotExceedPerAlertBudget() throws Exception {
+        long alertId = openAlertId();
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+        java.util.List<Future<Object>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            final int idx = i;
+            futures.add(pool.submit(() -> {
+                start.await();
+                return snapshots.upload(studentId, attemptId, alertId,
+                        "idem-budget-" + idx, base.plusSeconds(idx).toEpochMilli(), REAL_JPEG);
+            }));
+        }
+        start.countDown();
+        int accepted = 0;
+        int rejected = 0;
+        for (Future<Object> future : futures) {
+            try {
+                EvidenceSnapshotService.UploadOutcome outcome =
+                        (EvidenceSnapshotService.UploadOutcome) future.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                if (outcome.owner()) {
+                    accepted++;
+                }
+            } catch (java.util.concurrent.ExecutionException e) {
+                assertThat(e.getCause()).isInstanceOf(MonitoringException.class);
+                rejected++;
+            }
+        }
+        pool.shutdownNow();
+        assertThat(accepted).as("budget cap 3/alert holds under concurrency").isLessThanOrEqualTo(3);
+        assertThat(accepted + rejected).isEqualTo(8);
+        Long stored = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_evidence WHERE kind='SNAPSHOT' "
+                        + "AND attempt_id = ? AND status = 'AVAILABLE'",
+                Long.class, attemptId);
+        assertThat(stored).isEqualTo((long) accepted);
+    }
+
+    @Test
+    void sameKeyDifferentAttemptIsKeyConflict() {
+        long alertId = openAlertId();
+        String key = "idem-cross-" + UUID.randomUUID();
+        snapshots.upload(studentId, attemptId, alertId, key, base.toEpochMilli(), REAL_JPEG);
+        // second attempt (fresh session) with the SAME key
+        long otherSession = insertOpenSession(jdbc, studentId, base);
+        long otherAttempt = attemptService
+                .startAttempt(studentId, otherSession, new StartAttemptRequest(null))
+                .attemptId();
+        insertPreflightAndBinding(jdbc, otherSession, studentId, otherAttempt, base, null);
+        long otherAlert = jdbc.queryForObject(
+                "INSERT INTO monitoring_ai_alerts (attempt_id, exam_session_id, user_id, "
+                        + "alert_type, status, first_detected_at, last_detected_at, detection_count, "
+                        + "model_id, model_version, provenance) "
+                        + "VALUES (?,?,?,'PHONE_DETECTED','OPEN',?,?,1,'yolo26s','8.4.64-onnx',"
+                        + "'CLIENT_MODEL') RETURNING id",
+                Long.class, otherAttempt, otherSession, studentId,
+                java.sql.Timestamp.from(base.minusSeconds(5)),
+                java.sql.Timestamp.from(base.minusSeconds(4)));
+        assertThatThrownBy(() -> snapshots.upload(studentId, otherAttempt, otherAlert,
+                key, base.toEpochMilli(), REAL_JPEG))
+                .isInstanceOf(MonitoringException.class)
+                .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
+                        .isEqualTo("EVIDENCE_SNAPSHOT_REJECTED"));
+        // original row untouched
+        var row = jdbc.queryForMap(
+                "SELECT status, object_key FROM monitoring_evidence WHERE idempotency_key = ?", key);
+        assertThat(row.get("status")).isEqualTo("AVAILABLE");
+    }
+
 
     @Test
     void finishedAttemptRejectsSnapshots() {

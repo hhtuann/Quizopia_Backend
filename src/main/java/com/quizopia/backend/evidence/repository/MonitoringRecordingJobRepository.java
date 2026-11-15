@@ -50,7 +50,16 @@ public interface MonitoringRecordingJobRepository extends JpaRepository<Monitori
             + "AND j.objectDeleted = false ORDER BY j.startedAt DESC")
     List<MonitoringRecordingJob> findRollingNewestFirst(@Param("attemptId") long attemptId);
 
-    /** Attempts that own rolling rows — the orphan-reconcile work list. */
+    /** Object keys referenced by ANY job row of the attempt (orphan pass). */
+    @Query("SELECT j.objectKey FROM MonitoringRecordingJob j "
+            + "WHERE j.attemptId = :attemptId AND j.objectKey IS NOT NULL")
+    List<String> findObjectKeysOfAttempt(@Param("attemptId") long attemptId);
+
+    /** Attempts that own ANY recording rows — orphan-reconcile work list. */
+    @Query("SELECT DISTINCT j.attemptId FROM MonitoringRecordingJob j")
+    List<Long> findAttemptsWithJobs();
+
+    /** Attempts that own rolling rows — the legacy orphan-reconcile name. */
     @Query("SELECT DISTINCT j.attemptId FROM MonitoringRecordingJob j WHERE j.kind = 'ROLLING'")
     List<Long> findAttemptsWithRollingRows();
 
