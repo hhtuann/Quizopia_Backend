@@ -129,6 +129,32 @@ default `ffmpeg`); environments without it get honest `FAILED`
 - **Java-native MP4 sub-range cutting** — rejected: fMP4 box surgery is high
   risk for no benefit over stream-copy ffmpeg.
 
+### 2.7 Amendment (final gate): snapshot transport decision
+
+The kickoff rule "no raw media frames through Spring Boot/STOMP" targets
+STREAMED frame paths (WebSocket/STOMP), not bounded one-shot uploads. The
+alternatives for D1 were:
+
+1. **Scoped presigned PUT + server finalization** — the browser uploads
+   directly to MinIO. Rejected for P4-D: S3 presigned PUT cannot cap
+   Content-Length, so a hostile client could push unbounded bytes straight
+   to storage; enforcing the 2 MiB bound would need post-hoc HEAD+delete
+   (the abuse already happened), and the two-phase slot flow adds orphan
+   states for marginal gain in an authenticated single-tenant deployment.
+2. **Multipart JPEG via Spring (CHOSEN)** — the request is authenticated
+   (attempt owner + frozen policy + budgets) BEFORE the part is read; the
+   endpoint rejects parts over 2 MiB on `file.getSize()` WITHOUT buffering
+   them; total exposure per attempt is bounded (30 × 2 MiB); the transport
+   envelope stays the pre-existing multipart limits (5 MiB file / 6 MiB
+   request — the question-import workbook size, unchanged by P4-D).
+
+Safeguards in force: 2 MiB service cap + early part-size guard, per-alert
+(3) / per-attempt (30) budgets, idempotency key, JPEG SOI validation,
+SHA-256 persistence, provenance fixed at CLIENT_CAPTURE. **Product Owner
+sign-off requested for this transport decision** — switching to presigned
+PUT later only touches `EvidenceSnapshotService`/`EvidenceControllers`
+(ADR-009 §1 semantics unchanged).
+
 ## 5. Compliance gates (from the issues, restated as invariants)
 
 1. No clip without prior real footage (rolling pulses start at camera

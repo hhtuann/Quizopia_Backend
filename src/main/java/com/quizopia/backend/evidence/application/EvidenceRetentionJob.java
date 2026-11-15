@@ -55,6 +55,7 @@ public class EvidenceRetentionJob {
     @Scheduled(fixedDelayString = "PT1H")
     public void run() {
         expireEvidence();
+        expireRecordings();
         sweepAccessLog();
         try {
             for (Long attemptId : jobs.findAttemptsWithRollingRows()) {
@@ -70,20 +71,60 @@ public class EvidenceRetentionJob {
         Instant now = clock.instant();
         List<MonitoringEvidence> due = evidence.findExpired(now, PageRequest.of(0, BATCH));
         for (MonitoringEvidence row : due) {
-            if (row.getObjectKey() != null) {
-                try {
-                    storage.delete(row.getObjectKey());
-                } catch (RuntimeException e) {
-                    log.warn("retention delete failed (key={}): {}",
-                            row.getObjectKey(), e.getMessage());
-                    continue; // keep the row non-EXPIRED until the object is gone
-                }
+            if (!deleteObjectHonestly(row.getObjectKey())) {
+                continue; // keep the row non-EXPIRED until the object is gone
             }
             tx.executeWithoutResult(status -> evidence.markExpired(
                     List.of(row.getId()), Timestamp.from(now)));
         }
         if (!due.isEmpty()) {
             log.info("retention expired {} evidence rows", due.size());
+        }
+    }
+
+    /**
+     * P1-1: 30-day retention for FULL/ROLLING recording objects. Deletes the
+     * object, then marks {@code object_deleted = true} per row — rows stay
+     * as metadata/gap evidence. Honesty: a row is flagged ONLY after a
+     * successful delete or a verified absence (see {@link #deleteObjectHonestly}).
+     */
+    public void expireRecordings() {
+        Instant now = clock.instant();
+        List<com.quizopia.backend.evidence.domain.MonitoringRecordingJob> due =
+                jobs.findExpired(now);
+        for (com.quizopia.backend.evidence.domain.MonitoringRecordingJob job : due) {
+            if (!deleteObjectHonestly(job.getObjectKey())) {
+                continue; // retried next cycle
+            }
+            tx.executeWithoutResult(status -> jobs.markObjectDeleted(
+                    job.getId(), Timestamp.from(now)));
+        }
+        if (!due.isEmpty()) {
+            log.info("retention expired {} recording objects", due.size());
+        }
+    }
+
+    /**
+     * P1-2 false-deletion guard: true ONLY when the object is really gone —
+     * delete succeeded, or HEAD confirms absence (already removed out-of-
+     * band). A storage OUTAGE (delete AND head both failing) returns false:
+     * no fake success, the caller retries next cycle.
+     */
+    private boolean deleteObjectHonestly(String objectKey) {
+        if (objectKey == null) {
+            return true; // nothing to delete — target state already holds
+        }
+        try {
+            storage.delete(objectKey);
+            return true;
+        } catch (RuntimeException deleteFailed) {
+            try {
+                return storage.head(objectKey).isEmpty();
+            } catch (RuntimeException headFailed) {
+                log.warn("retention delete+verify failed (key={}): delete={}, head={}",
+                        objectKey, deleteFailed.getMessage(), headFailed.getMessage());
+                return false;
+            }
         }
     }
 
@@ -135,25 +176,32 @@ public class EvidenceRetentionJob {
         return deleted;
     }
 
-    /** Demo purge: delete all live evidence objects of a session (audit kept). */
+    /**
+     * Demo purge: delete all live evidence AND recording objects of a session
+     * (audit kept). P1-2: a row is marked EXPIRED / object_deleted ONLY when
+     * its object is really gone; survivors stay truthfully untouched for the
+     * next cycle — no fake success, no skipped objects.
+     */
     public int purgeSession(long sessionId) {
-        List<MonitoringEvidence> purgeable = evidence.findPurgeable(sessionId);
         int deleted = 0;
         Instant now = clock.instant();
-        for (MonitoringEvidence row : purgeable) {
-            if (row.getObjectKey() != null) {
-                try {
-                    storage.delete(row.getObjectKey());
+        for (MonitoringEvidence row : evidence.findPurgeable(sessionId)) {
+            if (deleteObjectHonestly(row.getObjectKey())) {
+                tx.executeWithoutResult(status -> evidence.markExpired(
+                        List.of(row.getId()), Timestamp.from(now)));
+                if (row.getObjectKey() != null) {
                     deleted++;
-                } catch (RuntimeException e) {
-                    log.warn("purge delete failed (key={}): {}", row.getObjectKey(), e.getMessage());
-                    continue;
                 }
             }
         }
-        List<UUID> ids = purgeable.stream().map(MonitoringEvidence::getId).toList();
-        if (!ids.isEmpty()) {
-            tx.executeWithoutResult(status -> evidence.markExpired(ids, Timestamp.from(now)));
+        for (com.quizopia.backend.evidence.domain.MonitoringRecordingJob job
+                : jobs.findBySessionOrdered(sessionId)) {
+            if (job.getObjectKey() != null && !job.isObjectDeleted()
+                    && deleteObjectHonestly(job.getObjectKey())) {
+                tx.executeWithoutResult(status -> jobs.markObjectDeleted(
+                        job.getId(), Timestamp.from(now)));
+                deleted++;
+            }
         }
         return deleted;
     }

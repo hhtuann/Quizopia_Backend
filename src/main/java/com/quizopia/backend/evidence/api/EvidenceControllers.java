@@ -7,6 +7,7 @@ import com.quizopia.backend.evidence.application.EvidenceQueryService.SignedUrl;
 import com.quizopia.backend.evidence.application.EvidenceRetentionJob;
 import com.quizopia.backend.evidence.application.EvidenceSnapshotService;
 import com.quizopia.backend.evidence.domain.MonitoringEvidence;
+import com.quizopia.backend.evidence.dto.EvidenceDtos;
 import com.quizopia.backend.evidence.dto.EvidenceDtos.AttemptMediaStatusResponse;
 import com.quizopia.backend.evidence.dto.EvidenceDtos.EvidenceResponse;
 import com.quizopia.backend.evidence.dto.EvidenceDtos.EvidenceUrlResponse;
@@ -63,6 +64,13 @@ public class EvidenceControllers {
             @RequestParam("capturedAt") Long capturedAt,
             @RequestPart("file") MultipartFile file) throws java.io.IOException {
         long userId = Long.parseLong(jwt.getSubject());
+        // Cheap pre-guard: reject oversized parts BEFORE reading them into
+        // memory (the multipart layer still allows the 5 MiB workbook limit).
+        if (file.getSize() > 2 * 1024 * 1024) {
+            throw new com.quizopia.backend.monitoring.exception.MonitoringException(
+                    com.quizopia.backend.monitoring.exception.MonitoringErrorCode
+                            .EVIDENCE_SNAPSHOT_REJECTED, "SNAPSHOT_TOO_LARGE");
+        }
         EvidenceSnapshotService.SnapshotResult result = snapshots.upload(
                 userId, attemptId, alertId, idempotencyKey, capturedAt, file.getBytes());
         return ResponseEntity.ok()
@@ -120,6 +128,17 @@ public class EvidenceControllers {
         SignedUrl signed = queries.mintPlaybackUrl(userId, sessionId, evidenceId);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
                 .body(new EvidenceUrlResponse(signed.url(), signed.expiresAt()));
+    }
+
+    @GetMapping("/api/exam-sessions/{sessionId}/recordings/{jobId}/url")
+    public ResponseEntity<EvidenceDtos.RecordingUrlResponse> recordingPlaybackUrl(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable("sessionId") Long sessionId,
+            @PathVariable("jobId") java.util.UUID jobId) {
+        long userId = Long.parseLong(jwt.getSubject());
+        var signed = queries.recordingPlaybackUrl(userId, sessionId, jobId);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(new EvidenceDtos.RecordingUrlResponse(signed.url(), signed.expiresAt()));
     }
 
     @GetMapping("/api/exam-sessions/{sessionId}/recordings")

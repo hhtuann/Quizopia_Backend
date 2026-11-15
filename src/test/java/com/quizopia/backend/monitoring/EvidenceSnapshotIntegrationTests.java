@@ -160,6 +160,57 @@ class EvidenceSnapshotIntegrationTests {
     }
 
     @Test
+    void oversizedPayloadRejectedByServiceCap() {
+        // SERVICE layer: the 2 MiB cap rejects a 3.5 MiB payload regardless
+        // of transport (renamed from the earlier endpoint claim — the
+        // transport envelope itself is asserted by the MockMvc test below).
+        long alertId = openAlertId();
+        assertThatThrownBy(() -> snapshots.upload(studentId, attemptId, alertId,
+                "idem-big", base.toEpochMilli(), new byte[3_500_000]))
+                .isInstanceOf(MonitoringException.class)
+                .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
+                        .isIn("EVIDENCE_SNAPSHOT_REJECTED"));
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_evidence WHERE kind='SNAPSHOT' AND attempt_id = ?",
+                Long.class, attemptId)).isZero();
+    }
+
+    @Test
+    void oversizedPartRejectedByEndpointCapNotMultipartLayer() throws Exception {
+        // ENDPOINT + TRANSPORT layer (P2-3 regression guard): a 3.5 MiB part
+        // TRAVERSES the multipart envelope (still 5 MiB file / 6 MiB request —
+        // the pre-P4-D workbook limits restored) and is rejected by the
+        // controller's own pre-guard, not by the transport.
+        long alertId = openAlertId();
+        byte[] part = new byte[3_500_000];
+        part[0] = (byte) 0xFF;
+        part[1] = (byte) 0xD8;
+        var mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders
+                .webAppContextSetup(context)
+                .apply(org.springframework.security.test.web.servlet.setup
+                        .SecurityMockMvcConfigurers.springSecurity())
+                .build();
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .multipart("/api/attempts/{id}/evidence/snapshots", attemptId)
+                        .file(new org.springframework.mock.web.MockMultipartFile(
+                                "file", "snap.jpg", "image/jpeg", part))
+                        .param("alertId", String.valueOf(alertId))
+                        .param("idempotencyKey", "idem-endpoint")
+                        .param("capturedAt", String.valueOf(base.toEpochMilli()))
+                        .with(org.springframework.security.test.web.servlet.request
+                                .SecurityMockMvcRequestPostProcessors.jwt()
+                                .jwt(jwt -> jwt.claim("sub", String.valueOf(studentId)))))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .status().isBadRequest());
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_evidence WHERE kind='SNAPSHOT' AND attempt_id = ?",
+                Long.class, attemptId)).isZero();
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.web.context.WebApplicationContext context;
+
+    @Test
     void nonJpegPayloadIsRejected() {
         long alertId = openAlertId();
         assertThatThrownBy(() -> snapshots.upload(studentId, attemptId, alertId,

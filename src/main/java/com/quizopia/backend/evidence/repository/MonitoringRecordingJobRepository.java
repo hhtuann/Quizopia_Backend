@@ -1,6 +1,7 @@
 package com.quizopia.backend.evidence.repository;
 
 import com.quizopia.backend.evidence.domain.MonitoringRecordingJob;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -53,12 +54,7 @@ public interface MonitoringRecordingJobRepository extends JpaRepository<Monitori
     @Query("SELECT DISTINCT j.attemptId FROM MonitoringRecordingJob j WHERE j.kind = 'ROLLING'")
     List<Long> findAttemptsWithRollingRows();
 
-    /** Segments of a session's attempts (teacher recordings view). */
-    @Query("SELECT j FROM MonitoringRecordingJob j WHERE j.examSessionId = :sessionId "
-            + "ORDER BY j.attemptId ASC, j.startedAt ASC")
-    List<MonitoringRecordingJob> findBySessionOrdered(@Param("sessionId") long sessionId);
-
-    /** Marks an active run ENDING/terminal from an egress status webhook. */
+    /** Mirrors an egress status webhook onto a job row (authoritative). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE monitoring_recording_jobs SET status = :status, "
             + "started_at = COALESCE(:startedAt, started_at), "
@@ -75,9 +71,7 @@ public interface MonitoringRecordingJobRepository extends JpaRepository<Monitori
 
     /**
      * Stop-side ENDING transition — CONDITIONAL on non-terminal status so a
-     * concurrently processed egress_ended webhook can never be overwritten
-     * (a stuck ENDING row would silently kill further recording and
-     * coverage for the attempt; review P2).
+     * concurrently processed egress_ended webhook can never be overwritten.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE monitoring_recording_jobs SET status = 'ENDING', "
@@ -86,8 +80,20 @@ public interface MonitoringRecordingJobRepository extends JpaRepository<Monitori
     int markEnding(@Param("egressId") String egressId, @Param("error") String error,
             @Param("now") java.sql.Timestamp now);
 
+    /** Recording rows past media expiry whose object still needs deletion. */
+    @Query("SELECT j FROM MonitoringRecordingJob j WHERE j.objectDeleted = false "
+            + "AND j.objectKey IS NOT NULL AND j.expiresAt IS NOT NULL "
+            + "AND j.expiresAt < :now ORDER BY j.expiresAt ASC")
+    List<MonitoringRecordingJob> findExpired(@Param("now") Instant now);
+
+    /** Conditional object_deleted flag for ONE row (false-deletion guard). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query(value = "UPDATE monitoring_recording_jobs SET object_deleted = true, "
-            + "updated_at = :now WHERE id IN (:ids)", nativeQuery = true)
-    int markObjectsDeleted(@Param("ids") Collection<UUID> ids, @Param("now") java.sql.Timestamp now);
+            + "updated_at = :now WHERE id = :id AND object_deleted = false", nativeQuery = true)
+    int markObjectDeleted(@Param("id") UUID id, @Param("now") java.sql.Timestamp now);
+
+    /** Segments of a session's attempts (teacher recordings view). */
+    @Query("SELECT j FROM MonitoringRecordingJob j WHERE j.examSessionId = :sessionId "
+            + "ORDER BY j.attemptId ASC, j.startedAt ASC")
+    List<MonitoringRecordingJob> findBySessionOrdered(@Param("sessionId") long sessionId);
 }

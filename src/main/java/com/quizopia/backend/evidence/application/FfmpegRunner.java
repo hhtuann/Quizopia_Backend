@@ -8,6 +8,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -18,11 +19,18 @@ import org.springframework.stereotype.Component;
  * path is configuration; environments without ffmpeg fail with
  * {@link FfmpegUnavailable} — callers translate that to an honest
  * {@code FAILED/FFMPEG_UNAVAILABLE} evidence row, never a silent skip.
+ *
+ * <p><b>Process discipline (gate review P2-2):</b> stderr is drained
+ * asynchronously on a bounded daemon thread — {@code readAllBytes()} before
+ * {@code waitFor} would block on EOF forever for a hung process. The
+ * timeout is enforced by {@code waitFor(timeout)}; a timeout kills the
+ * process tree and still cleans up every temp file.
  */
 @Component
 public class FfmpegRunner {
 
     private static final Logger log = LoggerFactory.getLogger(FfmpegRunner.class);
+    private static final int STDERR_CAP = 8 * 1024;
 
     /** One concat input: a presigned URL plus in/out points in seconds. */
     public record SegmentInput(String url, double inSeconds, double outSeconds) {
@@ -91,31 +99,44 @@ public class FfmpegRunner {
             } catch (IOException e) {
                 throw new FfmpegUnavailable("ffmpeg binary unavailable", e);
             }
-            String stderr;
-            try (var err = process.getErrorStream()) {
-                stderr = new String(err.readAllBytes(), StandardCharsets.UTF_8);
-            }
-            boolean finished = process.waitFor(
-                    properties.getFfmpegTimeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (!finished) {
+            // Bounded async stderr drain: NEVER block on EOF before waitFor.
+            Drain drain = new Drain(process);
+            boolean finished;
+            try {
+                finished = process.waitFor(
+                        properties.getFfmpegTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
                 process.destroyForcibly();
+                drain.joinAndRead();
+                return new Result.Failed("FFMPEG_INTERRUPTED");
+            }
+            if (!finished) {
+                // kill FIRST — joining the drain before the kill would burn
+                // its full budget waiting for a process that never exits.
+                process.destroyForcibly();
+                String timeoutStderr = drain.joinAndRead();
+                log.warn("ffmpeg timeout after {} — killed, stderr: {}",
+                        properties.getFfmpegTimeout(), tail(timeoutStderr));
+                cleanup(workDir.resolve("clip.mp4"));
                 return new Result.Failed("FFMPEG_TIMEOUT");
             }
+            String stderr = drain.joinAndRead();
             if (process.exitValue() != 0) {
                 log.warn("ffmpeg exit {}: {}", process.exitValue(), tail(stderr));
+                cleanup(output);
                 return new Result.Failed("FFMPEG_EXIT_" + process.exitValue());
             }
             long bytes = Files.size(output);
             if (bytes <= 0) {
+                cleanup(output);
                 return new Result.Failed("FFMPEG_EMPTY_OUTPUT");
             }
             return new Result.Ok(output, bytes);
         } catch (FfmpegUnavailable e) {
             throw e;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new Result.Failed("FFMPEG_INTERRUPTED");
         } catch (IOException e) {
+            cleanup(workDir.resolve("clip.mp4"));
             return new Result.Failed("FFMPEG_IO_ERROR");
         } finally {
             if (workDir != null && Files.exists(workDir.resolve("list.txt"))) {
@@ -126,6 +147,42 @@ public class FfmpegRunner {
                 }
             }
             // output path ownership: caller deletes after upload
+        }
+    }
+
+    /** Bounded stderr collector: the daemon thread fills {@code buffer}. */
+    private static final class Drain {
+        final byte[] buffer = new byte[STDERR_CAP];
+        final Thread thread;
+
+        Drain(Process process) {
+            this.thread = new Thread(() -> {
+                try (var err = process.getErrorStream()) {
+                    int total = 0;
+                    int read;
+                    while (total < buffer.length
+                            && (read = err.read(buffer, total, buffer.length - total)) > 0) {
+                        total += read;
+                    }
+                    // swallow the rest so a chatty ffmpeg cannot block on a full pipe
+                    while (err.read() != -1) {
+                        // discard
+                    }
+                } catch (IOException e) {
+                    // process died — drain ends
+                }
+            }, "ffmpeg-stderr-drain");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        String joinAndRead() {
+            try {
+                thread.join(2_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return new String(buffer, StandardCharsets.UTF_8).trim();
         }
     }
 

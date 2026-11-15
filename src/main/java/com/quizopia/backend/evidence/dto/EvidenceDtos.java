@@ -48,6 +48,10 @@ public final class EvidenceDtos {
     public record EvidenceUrlResponse(String url, Instant expiresAt) {
     }
 
+    /** Signed playback URL outcome for a recording segment. */
+    public record RecordingUrlResponse(String url, Instant expiresAt) {
+    }
+
     public record RecordingSegmentResponse(
             UUID jobId,
             Long attemptId,

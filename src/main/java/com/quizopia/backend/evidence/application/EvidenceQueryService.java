@@ -115,6 +115,34 @@ public class EvidenceQueryService {
         return jobs.findBySessionOrdered(sessionId);
     }
 
+    /**
+     * P1-3: teacher-only playback/download URL for a FULL/ROLLING segment.
+     * Gates: permission + session ownership, job belongs to the session,
+     * status COMPLETE, object present, not object_deleted, not past expiry.
+     * Every mint is audited (recording target).
+     */
+    public SignedUrl recordingPlaybackUrl(long teacherUserId, long sessionId,
+            java.util.UUID jobId) {
+        requireTeacherReader(teacherUserId, sessionId);
+        MonitoringRecordingJob job = jobs.findById(jobId)
+                .filter(j -> j.getExamSessionId().equals(sessionId))
+                .orElseThrow(() -> new MonitoringException(MonitoringErrorCode.EVIDENCE_NOT_FOUND));
+        if (!MonitoringRecordingJob.STATUS_COMPLETE.equals(job.getStatus())
+                || job.getObjectKey() == null
+                || job.isObjectDeleted()
+                || (job.getExpiresAt() != null
+                        && !job.getExpiresAt().isAfter(clock.instant()))) {
+            throw new MonitoringException(MonitoringErrorCode.EVIDENCE_CLIP_REJECTED,
+                    "recording not playable in status " + job.getStatus()
+                            + (job.isObjectDeleted() ? " (object deleted)" : ""));
+        }
+        String url = storage.presignedGet(job.getObjectKey(), storageProperties.getPresignTtl());
+        tx.executeWithoutResult(status -> accessLog.save(MonitoringEvidenceAccess.ofRecording(
+                job.getId(), teacherUserId, MonitoringEvidenceAccess.ACTION_URL_MINTED,
+                clock.instant())));
+        return new SignedUrl(url, clock.instant().plus(storageProperties.getPresignTtl()));
+    }
+
     /** Student-facing media status projection (read-only, own attempt). */
     public AttemptMediaStatus mediaStatus(long userId, long attemptId) {
         var attempt = attempts.findById(attemptId)

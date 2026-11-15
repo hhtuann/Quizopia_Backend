@@ -90,6 +90,10 @@ public class MonitoringRecordingJob {
     @Column(name = "object_deleted", nullable = false)
     private boolean objectDeleted;
 
+    /** Media retention expiry (frozen session policy); row survives expiry. */
+    @Column(name = "expires_at")
+    private Instant expiresAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -102,7 +106,7 @@ public class MonitoringRecordingJob {
 
     public static MonitoringRecordingJob newJob(UUID id, Long examSessionId, Long attemptId,
             UUID bindingId, String kind, String egressId, String roomName, String trackSid,
-            int pulseIndex, Instant now) {
+            int pulseIndex, Instant expiresAt, Instant now) {
         MonitoringRecordingJob job = new MonitoringRecordingJob();
         job.id = id;
         job.examSessionId = examSessionId;
@@ -114,6 +118,7 @@ public class MonitoringRecordingJob {
         job.trackSid = trackSid;
         job.status = STATUS_STARTING;
         job.pulseIndex = pulseIndex;
+        job.expiresAt = expiresAt;
         job.createdAt = now;
         job.updatedAt = now;
         return job;
@@ -185,6 +190,10 @@ public class MonitoringRecordingJob {
 
     public boolean isObjectDeleted() {
         return objectDeleted;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
     }
 
     public Instant getCreatedAt() {

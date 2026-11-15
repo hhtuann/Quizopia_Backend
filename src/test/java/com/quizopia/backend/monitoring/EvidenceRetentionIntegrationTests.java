@@ -121,7 +121,8 @@ class EvidenceRetentionIntegrationTests {
                 evidenceId, teacherId, java.sql.Timestamp.from(base.minusSeconds(91 * 86400L)));
         retention.sweepAccessLog();
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM monitoring_evidence_access", Long.class)).isZero();
+                "SELECT COUNT(*) FROM monitoring_evidence_access WHERE accessed_at < ?",
+                Long.class, java.sql.Timestamp.from(base.minusSeconds(90 * 86400L)))).isZero();
     }
 
     @Test

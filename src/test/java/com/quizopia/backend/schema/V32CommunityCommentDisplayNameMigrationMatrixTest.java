@@ -69,7 +69,7 @@ class V32CommunityCommentDisplayNameMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain reached V38")
-                        .containsExactly("40");
+                        .containsExactly("41");
             }
         } finally {
             dropDatabase(dbName);
@@ -191,7 +191,7 @@ class V32CommunityCommentDisplayNameMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("staged leg also reaches the current head")
-                        .containsExactly("40");
+                        .containsExactly("41");
             }
         } finally {
             dropDatabase(dbName);

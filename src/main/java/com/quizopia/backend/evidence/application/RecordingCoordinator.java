@@ -202,9 +202,12 @@ public class RecordingCoordinator {
         try {
             EgressGateway.EgressRun run = egress.startVideoTrackRecording(
                     room, trackSid, prefix, s3Output());
+            EvidencePolicyReader.MediaPolicy policyForExpiry =
+                    policyReader.policyOf(examSessionId);
             MonitoringRecordingJob job = MonitoringRecordingJob.newJob(
                     UUID.randomUUID(), examSessionId, attemptId, bindingId, kind,
-                    run.egressId(), room, trackSid, pulseIndex, clock.instant());
+                    run.egressId(), room, trackSid, pulseIndex,
+                    policyForExpiry.mediaRetentionExpiry(clock.instant()), clock.instant());
             final String initialStatus = mapStatus(run.status());
             final String egressId = run.egressId();
             final Timestamp nowTs = toTimestamp(clock.instant());
@@ -341,7 +344,12 @@ public class RecordingCoordinator {
         }
     }
 
-    /** Keep-N: deletes older pulse objects (rows stay as gap evidence). */
+    /**
+     * Keep-N: deletes older pulse objects; rows stay as gap evidence.
+     * P1-2: a row is flagged {@code object_deleted} ONLY after its object is
+     * really gone (delete succeeded or HEAD says absent) — partial storage
+     * failures leave survivors truthfully un-flagged for the next cycle.
+     */
     private void cleanupRolling(long attemptId) {
         List<MonitoringRecordingJob> pulses = jobs.findRollingNewestFirst(attemptId);
         if (pulses.size() <= properties.getRollingKeep()) {
@@ -350,18 +358,28 @@ public class RecordingCoordinator {
         List<MonitoringRecordingJob> stale = pulses.subList(properties.getRollingKeep(),
                 pulses.size());
         for (MonitoringRecordingJob pulse : stale) {
+            if (pulse.getObjectKey() == null || pulse.isObjectDeleted()) {
+                continue;
+            }
+            boolean gone;
             try {
-                if (pulse.getObjectKey() != null && !pulse.isObjectDeleted()) {
-                    storage.delete(pulse.getObjectKey());
+                storage.delete(pulse.getObjectKey());
+                gone = true;
+            } catch (RuntimeException deleteFailed) {
+                try {
+                    gone = storage.head(pulse.getObjectKey()).isEmpty();
+                } catch (RuntimeException headFailed) {
+                    log.warn("rolling cleanup delete+verify failed (key={}): delete={}, head={}",
+                            pulse.getObjectKey(), deleteFailed.getMessage(),
+                            headFailed.getMessage());
+                    gone = false;
                 }
-            } catch (RuntimeException e) {
-                log.warn("rolling cleanup delete failed (key={}): {}",
-                        pulse.getObjectKey(), e.getMessage());
+            }
+            if (gone) {
+                txNew.executeWithoutResult(status -> jobs.markObjectDeleted(
+                        pulse.getId(), toTimestamp(clock.instant())));
             }
         }
-        List<UUID> ids = stale.stream().map(MonitoringRecordingJob::getId).toList();
-        txNew.executeWithoutResult(status ->
-                jobs.markObjectsDeleted(ids, toTimestamp(clock.instant())));
     }
 
     // ==================================================================

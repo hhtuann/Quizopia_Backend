@@ -24,8 +24,12 @@ public class MonitoringEvidenceAccess {
     @Column(name = "id")
     private Long id;
 
-    @Column(name = "evidence_id", nullable = false)
+    /** Evidence row OR recording segment (exactly one — V41 CHECK). */
+    @Column(name = "evidence_id")
     private java.util.UUID evidenceId;
+
+    @Column(name = "recording_job_id")
+    private java.util.UUID recordingJobId;
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
@@ -50,12 +54,27 @@ public class MonitoringEvidenceAccess {
         return row;
     }
 
+    /** Audit row for a recording-segment playback URL mint. */
+    public static MonitoringEvidenceAccess ofRecording(java.util.UUID recordingJobId,
+            Long userId, String action, Instant accessedAt) {
+        MonitoringEvidenceAccess row = new MonitoringEvidenceAccess();
+        row.recordingJobId = recordingJobId;
+        row.userId = userId;
+        row.action = action;
+        row.accessedAt = accessedAt;
+        return row;
+    }
+
     public Long getId() {
         return id;
     }
 
     public java.util.UUID getEvidenceId() {
         return evidenceId;
+    }
+
+    public java.util.UUID getRecordingJobId() {
+        return recordingJobId;
     }
 
     public Long getUserId() {
