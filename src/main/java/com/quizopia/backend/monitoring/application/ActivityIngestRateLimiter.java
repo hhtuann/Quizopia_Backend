@@ -65,12 +65,22 @@ public class ActivityIngestRateLimiter {
         this.hmacKey = hmac(encryptionKey, KEY_DOMAIN.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** Admits one ingest batch for the user; throws 429 on saturation. */
+    /** Admits one activity-event batch for the user; throws 429 on saturation. */
     public void admitUser(Long userId) {
+        admit(MESSAGE_DOMAIN, userId, properties.getRateLimit(), properties.getWindow());
+    }
+
+    /**
+     * Admits one batch for the user under a DOMAIN-SEPARATED policy
+     * (P4-C: the AI ingest path uses its own bucket domain
+     * {@code monitoring:ai-ingest} with its own limit/window — buckets of
+     * different domains never interfere). Same mechanics: leaf-most
+     * REQUIRES_NEW transaction, fail closed, denied requests saturate.
+     */
+    public void admit(String domain, Long userId, int rateLimit, Duration window) {
         String bucketKey = hex(hmac(hmacKey,
-                (MESSAGE_DOMAIN + ":user:" + userId).getBytes(StandardCharsets.UTF_8)));
+                (domain + ":user:" + userId).getBytes(StandardCharsets.UTF_8)));
         Instant now = Instant.now(clock).truncatedTo(ChronoUnit.MICROS);
-        Duration window = properties.getWindow();
         long retryAfterSeconds = admissionTx.execute(status -> {
             buckets.insertIfAbsent(bucketKey, now, now.plus(window));
 
@@ -86,7 +96,7 @@ public class ActivityIngestRateLimiter {
             attempts = attempts == MAX_ATTEMPTS ? attempts : attempts + 1;
             Instant windowEnd = windowStart.plus(window);
             buckets.updateWindow(bucketKey, windowStart, attempts, windowEnd);
-            if (attempts <= properties.getRateLimit()) {
+            if (attempts <= rateLimit) {
                 buckets.markAdmitted(bucketKey, now);
                 return 0L;
             }

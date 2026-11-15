@@ -118,3 +118,28 @@ Track P4-0..F implementation issues on GitHub; complete AI audit before committi
 - Minimum safety baseline remains: owner-only media, no public evidence, 30/90 retention, no audio by default, no AI verdict.
 - **P4-F renamed to Demo Reliability & Integration Testing.** A measured 5-publisher run + failure/recovery proof are required; 10 publishers are an explicit stretch target. 30/50/100 camera scaling, production rollout, enterprise HA and formal legal compliance are *stretch/future work*.
 - GitHub Issues creation only authorizes **tracking**. AI repository/submodule creation, implementation commits, merges and deployment remain separately gated.
+
+## 11. Amendment 1 (2026-11-15) — P4-C real-model runtime: browser-side ONNX Runtime Web initially, worker-ready contract
+
+The owner-supplied model audit (`yolo26s.onnx`, Ultralytics YOLO26s, COCO 80)
+shows phone (`cell phone`=67), screen (`tv`=62, `laptop`=63) and person (`0`)
+detection with end-to-end NMS in a single `[1,300,6]` output, runnable
+directly by ONNX Runtime Web in the browser. The original §1 text assumed AI
+Worker(s) reading LiveKit tracks as the only inference host. Decision D8
+already classifies browser-side events as observations, not verified
+misconduct.
+
+**Amended decision:** the initial real-model path for P4-C is **browser-side
+inference on the student's own camera track** (onnxruntime-web; WebGPU with
+WASM fallback), producing `CLIENT_MODEL`-provenance detections
+(`*_OBSERVED` event types). The Backend ingestion contract is
+transport-agnostic and versioned: an independent AI Worker
+(`WORKER_VERIFIED` provenance, `POST /internal/ai/v1/detections` with service
+API-key auth) can be added later without schema change; creating that worker
+repository/submodule remains separately owner-gated (§10). Browser detections
+are never labeled SERVER_VERIFIED and never trigger automatic verdicts.
+Rationale, contract and measurement plan:
+`docs/phase4/AI_PROCTORING_CONTRACT.md` and `docs/phase4/AI_MODEL_AUDIT.md`
+(Quizopia_System repo, P4-C working contract + real audit results). Server-side temporal aggregation, alert persistence, STOMP reuse
+and teacher review feed are unchanged from §1/D8 (Backend stays the owner of
+attempt/alert state; browsers submit bounded idempotent observations only).

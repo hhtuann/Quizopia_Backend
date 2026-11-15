@@ -36,4 +36,19 @@ public interface MonitoringMediaBindingRepository extends JpaRepository<Monitori
     @Query("SELECT MAX(b.epoch) FROM MonitoringMediaBinding b "
             + "WHERE b.examSessionId = :sessionId AND b.userId = :userId")
     Optional<Integer> findMaxEpoch(@Param("sessionId") Long sessionId, @Param("userId") Long userId);
+
+    /**
+     * The ACTIVE binding of an attempt+user (P4-C, CONTRACT §3.2): the
+     * media-session-to-Attempt validation — AI detections are only
+     * accepted while the media identity that published the camera is
+     * still bound and neither terminated nor revoked. Highest epoch wins
+     * (a superseded binding is always terminated, so in practice at most
+     * one row matches).
+     */
+    @Query("SELECT b FROM MonitoringMediaBinding b "
+            + "WHERE b.attemptId = :attemptId AND b.userId = :userId "
+            + "AND b.activeTo IS NULL AND b.revokedAt IS NULL "
+            + "ORDER BY b.epoch DESC")
+    List<MonitoringMediaBinding> findActiveByAttemptIdAndUserId(
+            @Param("attemptId") Long attemptId, @Param("userId") Long userId);
 }

@@ -42,17 +42,19 @@ class UserEncryptedPersonalDataIntegrationTests {
                 .createNativeQuery("SELECT version FROM flyway_schema_history WHERE type = 'SQL' ORDER BY installed_rank", String.class)
                 .getResultList();
 
-        // Latest version is 36 after the community foundation (V26),
+        // Latest version is 38 after the community foundation (V26),
         // moderation (V27), bookmarks (V28), fork records (V29),
         // membership periods (V30), community social (V31), comment
-        // display names (V32) and the P4-A monitoring foundation
+        // display names (V32), the P4-A monitoring foundation
         // (V33 policies, V34 activity events, V35 answer history, V36
-        // monitoring permissions). This test pins the current Flyway version
-        // and must be updated whenever a migration is added.
+        // monitoring permissions), the P4-B camera infrastructure (V37)
+        // and the P4-C AI detection ingest + alerts (V38). This test pins
+        // the current Flyway version and must be updated whenever a
+        // migration is added.
         assertThat(versions).contains("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
                 "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25",
-                "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37");
-        assertThat(versions).endsWith("37");
+                "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39");
+        assertThat(versions).endsWith("39");
     }
 
     @Test
