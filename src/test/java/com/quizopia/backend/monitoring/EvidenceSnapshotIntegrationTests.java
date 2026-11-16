@@ -307,7 +307,7 @@ class EvidenceSnapshotIntegrationTests {
         int owners = 0;
         int replays = 0;
         int conflicts = 0;
-        java.util.UUID ownerRowId = null;
+        java.util.List<java.util.UUID> rowIds = new java.util.ArrayList<>();
         for (Future<Object> future : futures) {
             try {
                 EvidenceSnapshotService.UploadOutcome outcome =
@@ -315,11 +315,10 @@ class EvidenceSnapshotIntegrationTests {
                                 30, java.util.concurrent.TimeUnit.SECONDS);
                 if (outcome.owner()) {
                     owners++;
-                    ownerRowId = outcome.row().getId();
                 } else {
                     replays++;
-                    org.junit.jupiter.api.Assertions.assertEquals(ownerRowId, outcome.row().getId());
                 }
+                rowIds.add(outcome.row().getId());
             } catch (java.util.concurrent.ExecutionException e) {
                 assertThat(e.getCause()).isInstanceOf(MonitoringException.class);
                 conflicts++;
@@ -327,11 +326,14 @@ class EvidenceSnapshotIntegrationTests {
         }
         pool.shutdownNow();
         // exactly ONE owner; same-alert duplicates may replay the SAME row
-        // read-only; cross-alert requests MUST conflict (never hand out the
-        // other alert's evidence)
+        // read-only (owner and replays all reference one row id — asserted
+        // AFTER polling, replay may resolve first); cross-alert requests MUST
+        // conflict (never hand out the other alert's evidence)
         assertThat(owners).isEqualTo(1);
         assertThat(replays + conflicts).isEqualTo(3);
-        org.junit.jupiter.api.Assertions.assertNotNull(ownerRowId);
+        assertThat(rowIds).as("owner + replays reference exactly one row")
+                .hasSize(owners + replays)
+                .allMatch(id -> id.equals(rowIds.get(0)));
         Long rows = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM monitoring_evidence WHERE idempotency_key = ?",
                 Long.class, key);
