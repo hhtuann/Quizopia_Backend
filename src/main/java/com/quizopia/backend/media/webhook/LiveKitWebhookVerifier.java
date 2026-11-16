@@ -104,10 +104,39 @@ public class LiveKitWebhookVerifier {
                 }
             }
 
+            // LiveKit webhooks are protojson: fields arrive CAMEL case
+            // (egressInfo/egressId/fileResults/startedAt). Snake case is
+            // accepted too so hand-written test payloads keep working.
+            JsonNode egressInfo = firstNode(event, "egress_info", "egressInfo");
+            String egressId = egressInfo == null ? null
+                    : text(egressInfo, firstPresent(egressInfo, "egress_id", "egressId"));
+            String egressStatus = egressInfo == null ? null
+                    : text(egressInfo, firstPresent(egressInfo, "status"));
+            String egressError = egressInfo == null ? null
+                    : text(egressInfo, firstPresent(egressInfo, "error"));
+            long egressStartedNs = egressInfo == null ? 0
+                    : longOf(egressInfo.get(firstPresent(egressInfo, "started_at", "startedAt")));
+            long egressEndedNs = egressInfo == null ? 0
+                    : longOf(egressInfo.get(firstPresent(egressInfo, "ended_at", "endedAt")));
+            java.util.List<LiveKitWebhookEvent.EgressFile> egressFiles = new java.util.ArrayList<>();
+            JsonNode fileResults = egressInfo == null ? null
+                    : firstNode(egressInfo, "file_results", "fileResults");
+            if (fileResults instanceof tools.jackson.databind.node.ArrayNode files) {
+                for (tools.jackson.databind.JsonNode file : files) {
+                    egressFiles.add(new LiveKitWebhookEvent.EgressFile(
+                            text(file, firstPresent(file, "filename")),
+                            longOf(file.get(firstPresent(file, "size"))),
+                            longOf(file.get(firstPresent(file, "duration"))),
+                            longOf(file.get(firstPresent(file, "started_at", "startedAt"))),
+                            longOf(file.get(firstPresent(file, "ended_at", "endedAt")))));
+                }
+            }
+
             String dedupeSource = eventId != null && !eventId.isBlank()
                     ? "id:" + eventId
                     : type + "|" + nullSafe(roomName) + "|" + nullSafe(identity) + "|"
-                            + nullSafe(trackSid) + "|" + timestamp;
+                            + nullSafe(trackSid) + "|" + timestamp + "|"
+                            + nullSafe(egressId) + "|" + egressEndedNs;
             String dedupeKey = HexFormat.of().formatHex(
                     MessageDigest.getInstance("SHA-256")
                             .digest(dedupeSource.getBytes(StandardCharsets.UTF_8)));
@@ -121,7 +150,13 @@ public class LiveKitWebhookVerifier {
                     track == null ? null : text(track, "type"),
                     track == null ? null : text(track, "source"),
                     timestamp,
-                    dedupeKey);
+                    dedupeKey,
+                    egressId,
+                    egressStatus,
+                    egressStartedNs,
+                    egressEndedNs,
+                    egressError,
+                    java.util.List.copyOf(egressFiles));
         } catch (VerificationException e) {
             throw e;
         } catch (Exception e) {
@@ -157,6 +192,30 @@ public class LiveKitWebhookVerifier {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static long longOf(JsonNode value) {
+        return value == null || value.isNull() ? 0L : value.asLong(0L);
+    }
+
+    /** First present (non-null) field name of the node. */
+    private static String firstPresent(JsonNode node, String... names) {
+        for (String name : names) {
+            if (node != null && node.get(name) != null && !node.get(name).isNull()) {
+                return name;
+            }
+        }
+        return names[names.length - 1];
+    }
+
+    /** First non-null child among the candidate names. */
+    private static JsonNode firstNode(JsonNode node, String... names) {
+        for (String name : names) {
+            if (node != null && node.get(name) != null && !node.get(name).isNull()) {
+                return node.get(name);
+            }
+        }
+        return null;
     }
 
     private static Instant instantSeconds(String value) {

@@ -40,14 +40,24 @@ public record AiDetectionBatchResponse(
     public record ItemResult(
             UUID eventId,
             Status status,
-            @JsonInclude(JsonInclude.Include.NON_NULL) String reason) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) String reason,
+            @JsonInclude(JsonInclude.Include.NON_NULL) SnapshotRequest snapshotRequest) {
 
         public static ItemResult of(UUID eventId, Status status) {
-            return new ItemResult(eventId, status, null);
+            return new ItemResult(eventId, status, null, null);
         }
 
         public static ItemResult of(UUID eventId, Status status, String reason) {
-            return new ItemResult(eventId, status, reason);
+            return new ItemResult(eventId, status, reason, null);
+        }
+
+        /**
+         * P4-D (#91): present only when this ACCEPTED event OPENED an alert
+         * window and the frozen policy enables snapshots — asks the client
+         * to capture the current frame from the SAME MediaStream the
+         * detector ran on (CLIENT_CAPTURE provenance).
+         */
+        public record SnapshotRequest(long alertId, String reason) {
         }
     }
 }

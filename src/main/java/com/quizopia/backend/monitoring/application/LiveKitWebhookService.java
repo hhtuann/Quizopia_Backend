@@ -1,5 +1,6 @@
 package com.quizopia.backend.monitoring.application;
 
+import com.quizopia.backend.evidence.application.RecordingEvents;
 import com.quizopia.backend.media.webhook.LiveKitWebhookEvent;
 import com.quizopia.backend.monitoring.domain.model.ActivityEventType;
 import com.quizopia.backend.monitoring.domain.model.MonitoringCameraConnection;
@@ -52,19 +53,22 @@ public class LiveKitWebhookService {
     private final ActivityEventRecorder activity;
     private final ObjectMapper json;
     private final Clock clock;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     public LiveKitWebhookService(MonitoringWebhookEventRepository ledger,
             MonitoringCameraConnectionRepository connections,
             MonitoringCameraQueries queries,
             ActivityEventRecorder activity,
             ObjectMapper json,
-            Clock clock) {
+            Clock clock,
+            org.springframework.context.ApplicationEventPublisher events) {
         this.ledger = ledger;
         this.connections = connections;
         this.queries = queries;
         this.activity = activity;
         this.json = json;
         this.clock = clock;
+        this.events = events;
     }
 
     /**
@@ -85,9 +89,31 @@ public class LiveKitWebhookService {
             routeCameraPublished(event, now);
         } else if (event.isCameraTermination()) {
             routeCameraTermination(event, now);
+        } else if (event.isEgressLifecycle()) {
+            routeEgressLifecycle(event);
         }
-        // Everything else (room lifecycle, participant_joined, egress/ingress,
-        // teacher/admin identities) is ledger-only in P4-B.
+        // Everything else (room lifecycle, participant_joined, ingress,
+        // teacher/admin identities) is ledger-only.
+    }
+
+    /**
+     * P4-D: egress_started/ended/updated webhooks carry the authoritative
+     * {@code EgressInfo} (status, timings, file results). Published as a
+     * transaction-bound event — the coordinator applies it AFTER COMMIT.
+     */
+    private void routeEgressLifecycle(LiveKitWebhookEvent event) {
+        events.publishEvent(new RecordingEvents.EgressUpdate(
+                event.egressId(),
+                event.egressStatus(),
+                event.egressStartedAtNs(),
+                event.egressEndedAtNs(),
+                event.egressError(),
+                event.egressFiles() == null ? java.util.List.of()
+                        : event.egressFiles().stream()
+                        .map(f -> new RecordingEvents.EgressUpdate.File(
+                                f.filename(), f.size(), f.durationNs(),
+                                f.startedAtNs(), f.endedAtNs()))
+                        .toList()));
     }
 
     // ------------------------------------------------------------------
@@ -125,6 +151,9 @@ public class LiveKitWebhookService {
             record(b, ActivityEventType.CAMERA_CONNECTED, now,
                     metadata("webhook", event.trackSid(), null));
         }
+        // P4-D: recording evaluation AFTER COMMIT (ADR-08 invariant 6).
+        events.publishEvent(new RecordingEvents.CameraPresence(
+                b.id(), b.attemptId(), b.sessionId(), true));
     }
 
     /**
@@ -172,9 +201,15 @@ public class LiveKitWebhookService {
             return; // termination of a different track (non-camera) — ledger only
         }
         int closed = connections.closeOpenRow(b.id(), event.event(), Timestamp.from(now));
-        if (closed == 1 && attemptInProgress(b.attemptId())) {
-            record(b, ActivityEventType.CAMERA_DISCONNECTED, now,
-                    metadata(event.event(), event.trackSid(), null));
+        if (closed == 1) {
+            if (attemptInProgress(b.attemptId())) {
+                record(b, ActivityEventType.CAMERA_DISCONNECTED, now,
+                        metadata(event.event(), event.trackSid(), null));
+            }
+            // P4-D: stop active recordings AFTER COMMIT regardless of the
+            // attempt state (final segments must be closed out honestly).
+            events.publishEvent(new RecordingEvents.CameraPresence(
+                    b.id(), b.attemptId(), b.sessionId(), false));
         }
     }
 
