@@ -36,6 +36,10 @@ public record AiAlertPageResponse(
             String modelId,
             String modelVersion,
             String provenance,
-            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode latestDetections) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode latestDetections,
+            /** P4-E current human-review state (V42) — never a verdict. */
+            String reviewStatus,
+            int reviewVersion,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Instant reviewedAt) {
     }
 }

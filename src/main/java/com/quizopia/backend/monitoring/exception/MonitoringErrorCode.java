@@ -57,7 +57,15 @@ public enum MonitoringErrorCode {
     EVIDENCE_NOT_FOUND(HttpStatus.NOT_FOUND, "EVIDENCE_NOT_FOUND",
             "Evidence resource not found for this session"),
     EVIDENCE_CLIP_REJECTED(HttpStatus.CONFLICT, "EVIDENCE_CLIP_REJECTED",
-            "Clip request rejected for this alert");
+            "Clip request rejected for this alert"),
+
+    // P4-E review + dashboard/report reads (issues #95/#96, ADR-010)
+    MONITORING_ALERT_NOT_FOUND(HttpStatus.NOT_FOUND, "MONITORING_ALERT_NOT_FOUND",
+            "Alert resource not found"),
+    MONITORING_REVIEW_REJECTED(HttpStatus.BAD_REQUEST, "MONITORING_REVIEW_REJECTED",
+            "Alert review request validation failed"),
+    MONITORING_REVIEW_VERSION_CONFLICT(HttpStatus.CONFLICT, "MONITORING_REVIEW_VERSION_CONFLICT",
+            "Alert review was updated by another reviewer; reload and retry");
 
     private final HttpStatus status;
     private final String code;

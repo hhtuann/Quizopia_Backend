@@ -99,7 +99,7 @@ class AiAlertBackfillIntegrationTests {
         clock.advance(Duration.ofSeconds(30));
         ingest(base.plusSeconds(30), "SCREEN_OBSERVED");
 
-        AiAlertPageResponse page = alertQueryService.alerts(teacherId, sessionId, null, 50, null);
+        AiAlertPageResponse page = alertQueryService.alerts(teacherId, sessionId, null, 50, null, null);
         assertThat(page.items()).hasSize(2);
         // newest-first by id: SCREEN window opened later
         assertThat(page.items().get(0).alertType()).isEqualTo("SCREEN_DETECTED");
@@ -124,12 +124,12 @@ class AiAlertBackfillIntegrationTests {
         ingest(base.plusSeconds(30), "PHONE_OBSERVED"); // gap>20s → second window
         ingest(base.plusSeconds(31), "PERSON_NOT_OBSERVED");
 
-        AiAlertPageResponse first = alertQueryService.alerts(teacherId, sessionId, null, 2, null);
+        AiAlertPageResponse first = alertQueryService.alerts(teacherId, sessionId, null, 2, null, null);
         assertThat(first.items()).hasSize(2);
         assertThat(first.nextCursor()).isNotNull();
 
         AiAlertPageResponse second = alertQueryService.alerts(teacherId, sessionId,
-                first.nextCursor(), 2, null);
+                first.nextCursor(), 2, null, null);
         assertThat(second.items()).hasSize(1);
         Long newest = first.items().get(0).alertId();
         Long oldest = second.items().get(0).alertId();
@@ -137,11 +137,11 @@ class AiAlertBackfillIntegrationTests {
 
         // Status filter: only the two OPEN windows of PHONE + PERSON types…
         AiAlertPageResponse openOnly = alertQueryService.alerts(teacherId, sessionId, null, 50,
-                "OPEN");
+                "OPEN", null);
         assertThat(openOnly.items()).hasSize(2);
         // …while the CLOSED first PHONE window is filterable too.
         AiAlertPageResponse closedOnly = alertQueryService.alerts(teacherId, sessionId, null, 50,
-                "CLOSED");
+                "CLOSED", null);
         assertThat(closedOnly.items()).hasSize(1);
         assertThat(closedOnly.items().get(0).alertType()).isEqualTo("PHONE_DETECTED");
     }
@@ -151,7 +151,7 @@ class AiAlertBackfillIntegrationTests {
         startMonitoredAttempt();
         ingest(base, "PHONE_OBSERVED");
         assertThatThrownBy(() -> alertQueryService.alerts(otherTeacherId, sessionId, null, 50,
-                null))
+                null, null))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_ACCESS_DENIED"));
     }
@@ -160,7 +160,7 @@ class AiAlertBackfillIntegrationTests {
     void studentDenied403() {
         startMonitoredAttempt();
         ingest(base, "PHONE_OBSERVED");
-        assertThatThrownBy(() -> alertQueryService.alerts(studentId, sessionId, null, 50, null))
+        assertThatThrownBy(() -> alertQueryService.alerts(studentId, sessionId, null, 50, null, null))
                 .as("students never read alerts (AI_ALERTS_READ is TEACHER-only)")
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_ACCESS_DENIED"));
@@ -173,14 +173,14 @@ class AiAlertBackfillIntegrationTests {
         jdbc.update("DELETE FROM role_permissions WHERE role_id="
                 + "(SELECT id FROM roles WHERE code='TEACHER') AND permission_id="
                 + "(SELECT id FROM permissions WHERE code='AI_ALERTS_READ')");
-        assertThatThrownBy(() -> alertQueryService.alerts(teacherId, sessionId, null, 50, null))
+        assertThatThrownBy(() -> alertQueryService.alerts(teacherId, sessionId, null, 50, null, null))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_ACCESS_DENIED"));
     }
 
     @Test
     void missingSessionDenied403WithoutExistenceLeak() {
-        assertThatThrownBy(() -> alertQueryService.alerts(teacherId, 999999L, null, 50, null))
+        assertThatThrownBy(() -> alertQueryService.alerts(teacherId, 999999L, null, 50, null, null))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_ACCESS_DENIED"));
     }
@@ -188,7 +188,7 @@ class AiAlertBackfillIntegrationTests {
     @Test
     void malformedCursorRejected400() {
         assertThatThrownBy(() -> alertQueryService.alerts(teacherId, sessionId, "not-a-number",
-                50, null))
+                50, null, null))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_CURSOR_INVALID"));
     }
@@ -196,7 +196,7 @@ class AiAlertBackfillIntegrationTests {
     @Test
     void unknownStatusFilterRejected400() {
         assertThatThrownBy(() -> alertQueryService.alerts(teacherId, sessionId, null, 50,
-                "ARCHIVED"))
+                "ARCHIVED", null))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode().code())
                         .isEqualTo("MONITORING_VALIDATION_ERROR"));
     }

@@ -63,8 +63,9 @@ public class AiDetectionController {
             @PathVariable Long sessionId,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false, defaultValue = "50") int limit,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String review) {
         return alertQueryService.alerts(Long.valueOf(jwt.getSubject()), sessionId,
-                cursor, limit, status);
+                cursor, limit, status, review);
     }
 }
