@@ -148,6 +148,9 @@ public class EvidenceSnapshotService {
         Instant now = clock.instant();
         Instant capturedAt = Instant.ofEpochMilli(capturedAtMs);
         String objectKey = "snapshots/" + attemptId + "/" + UUID.randomUUID() + ".jpg";
+        // Payload identity for replay validation (pure hashing, no storage I/O):
+        // the SAME key must carry the SAME attempt, alert and JPEG bytes.
+        String payloadDigest = sha256Hex(image);
 
         // ------------------------------------------------------------------
         // RESERVATION (short tx, advisory-locked budget check, no storage I/O)
@@ -155,6 +158,14 @@ public class EvidenceSnapshotService {
         Reservation reservation = tx.execute(status -> {
             jdbcLock("evidence-snap:" + alertId);
             jdbcLock("evidence-snap-attempt:" + attemptId);
+            // IDEMPOTENCY FIRST (gate review): a legitimate replay must get
+            // its original record back even when the budget is already
+            // exhausted — retrying after a full quota is the normal case a
+            // retry exists for. Conflicts are rejected before budget too.
+            var existing = evidence.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                return validateReplay(existing.get(), attemptId, alertId, payloadDigest);
+            }
             // Budget re-check under the lock — concurrent uploads with
             // distinct keys cannot slip past the caps.
             if (evidence.countByAlertIdAndKindAndStatusNot(alertId,
@@ -166,15 +177,6 @@ public class EvidenceSnapshotService {
                     >= properties.getSnapshotPerAttempt()) {
                 return Reservation.rejected("SNAPSHOT_BUDGET_EXHAUSTED");
             }
-            // Fast path: an owner already finalized (or holds the key).
-            var existing = evidence.findByIdempotencyKey(idempotencyKey);
-            if (existing.isPresent()) {
-                MonitoringEvidence winner = existing.get();
-                if (!winner.getAttemptId().equals(attemptId)) {
-                    return Reservation.keyConflict();
-                }
-                return Reservation.duplicate(winner);
-            }
             MonitoringEvidence row = MonitoringEvidence.newSnapshot(UUID.randomUUID(),
                     attempt.getExamSessionId(), attemptId, alertId, idempotencyKey,
                     capturedAt, policy.mediaRetentionExpiry(now), now);
@@ -183,14 +185,12 @@ public class EvidenceSnapshotService {
                 evidence.flush();
                 return Reservation.won(inserted, objectKey);
             } catch (DataIntegrityViolationException race) {
-                // Lost the unique-idempotency race: read the winner READ-ONLY.
+                // Lost the unique-idempotency race: read the winner READ-ONLY
+                // under the same strict replay contract.
                 MonitoringEvidence winner = evidence.findByIdempotencyKey(idempotencyKey)
                         .orElseThrow(() -> new IllegalStateException(
                                 "idempotency winner vanished after conflict"));
-                if (!winner.getAttemptId().equals(attemptId)) {
-                    return Reservation.keyConflict();
-                }
-                return Reservation.duplicate(winner);
+                return validateReplay(winner, attemptId, alertId, payloadDigest);
             }
         });
 
@@ -198,8 +198,9 @@ public class EvidenceSnapshotService {
             rejectSnapshot(attempt, alertId, reservation.rejectedReason);
         }
         if (reservation.keyConflict) {
+            // Generic message: never reveal WHICH dimension mismatched.
             throw new MonitoringException(MonitoringErrorCode.EVIDENCE_SNAPSHOT_REJECTED,
-                    "idempotencyKey already used by another attempt");
+                    "idempotencyKey already used by a different upload");
         }
         if (reservation.duplicate != null) {
             // Replay: return the OWNER's row untouched. We never uploaded,
@@ -302,6 +303,25 @@ public class EvidenceSnapshotService {
         activity.recordServerEvent(attempt.getId(), attempt.getExamSessionId(),
                 attempt.getUserId(), ActivityEventType.EVIDENCE_SNAPSHOT_UPLOADED,
                 clock.instant(), meta.toString());
+    }
+
+    /**
+     * Replay contract: the SAME key must carry the SAME attempt, alert and
+     * payload digest. A PENDING winner (owner still uploading) has no digest
+     * yet — the alert identity still must match. Any mismatch (different
+     * attempt, different alert, different bytes on a finalized winner) is a
+     * key conflict, never a cross-alert/cross-payload handout.
+     */
+    private Reservation validateReplay(MonitoringEvidence winner, long attemptId,
+            long alertId, String payloadDigest) {
+        if (!winner.getAttemptId().equals(attemptId)
+                || winner.getAlertId() == null || winner.getAlertId() != alertId) {
+            return Reservation.keyConflict();
+        }
+        if (winner.getSha256() != null && !winner.getSha256().equals(payloadDigest)) {
+            return Reservation.keyConflict();
+        }
+        return Reservation.duplicate(winner);
     }
 
     /** Result of the reservation transaction. */
