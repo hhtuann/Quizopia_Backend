@@ -142,7 +142,7 @@ alternatives for D1 were:
    (the abuse already happened), and the two-phase slot flow adds orphan
    states for marginal gain in an authenticated single-tenant deployment.
 2. **Multipart JPEG via Spring (CHOSEN for the demo, Product Owner
-   sign-off PENDING)** — precise layering: the Spring multipart parser
+   sign-off APPROVED (Product Owner, 2026-11-16))** — precise layering: the Spring multipart parser
    accepts the request under the pre-existing TRANSPORT envelope (5 MiB
    file / 6 MiB request — the question-import workbook size, unchanged by
    P4-D); authentication (JWT attempt owner), policy, and the ENDPOINT
@@ -159,8 +159,7 @@ enforced under a per-alert advisory lock (race-safe), insert-first
 reservation so a duplicate never overwrites the winner's metadata or
 object, idempotency key, JPEG SOI validation, SHA-256 persistence,
 provenance fixed at CLIENT_CAPTURE, orphan reconciliation for objects
-whose finalize transaction was lost. **Product Owner sign-off for this
-transport decision is still PENDING — it is not approved.** Switching to
+whose finalize transaction was lost. **Product Owner sign-off for this transport decision is APPROVED (2026-11-16), recorded in Quizopia_System Issue #91.** Switching to
 presigned PUT later only touches `EvidenceSnapshotService`/
 `EvidenceControllers` (ADR-009 §1 semantics unchanged).
 
