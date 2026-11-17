@@ -69,7 +69,7 @@ class V27CommunityModerationMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain passed through V27 (head is now V38)")
-                        .containsExactly("39");
+                        .containsExactly("40");
             }
         } finally {
             dropDatabase(dbName);
@@ -160,7 +160,7 @@ class V27CommunityModerationMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain passed through V27 (head is now V38)")
-                        .containsExactly("39");
+                        .containsExactly("40");
             }
         } finally {
             dropDatabase(dbName);

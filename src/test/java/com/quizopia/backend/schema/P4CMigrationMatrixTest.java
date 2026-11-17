@@ -85,6 +85,16 @@ class P4CMigrationMatrixTest {
         Fixture f = scaffold(st);
         insert(st, detectionInsert(f.attemptId, UUID.randomUUID().toString(),
                 "CLIENT_MODEL", "PHONE_OBSERVED", "false", "NULL", "'[]'::jsonb", "NULL"));
+        // V40: the gaze observation is admitted next to the V38 four…
+        insert(st, detectionInsert(f.attemptId, UUID.randomUUID().toString(),
+                "CLIENT_MODEL", "LOOKING_AWAY_OBSERVED", "false", "NULL", "'[]'::jsonb",
+                "NULL"));
+        // …and the aggregated (alert) spelling is still not a detection type.
+        assertThatThrownBy(() -> execute(st, detectionInsert(f.attemptId,
+                UUID.randomUUID().toString(), "CLIENT_MODEL", "LOOKING_AWAY", "false", "NULL",
+                "'[]'::jsonb", "NULL")))
+                .as("event_type CHECK admits only the OBSERVED vocabulary")
+                .isInstanceOf(SQLException.class);
 
         // event_id is the idempotency identity — a second row with the same
         // UUID fails.
@@ -148,6 +158,12 @@ class P4CMigrationMatrixTest {
                 .isInstanceOf(SQLException.class);
         // …while a different type coexists…
         insert(st, alertInsert(f.attemptId, "SCREEN_DETECTED", "OPEN"));
+        // …including the V40 gaze alert type.
+        insert(st, alertInsert(f.attemptId, "LOOKING_AWAY", "OPEN"));
+        assertThatThrownBy(() -> execute(st,
+                alertInsert(f.attemptId, "LOOKING_AWAY_OBSERVED", "OPEN")))
+                .as("alert_type CHECK rejects the observation spelling")
+                .isInstanceOf(SQLException.class);
         // …and closing the window frees the slot (§5 gap semantics).
         execute(st, "UPDATE monitoring_ai_alerts SET status='CLOSED' "
                 + "WHERE attempt_id=" + f.attemptId + " AND alert_type='PHONE_DETECTED'");
@@ -235,7 +251,7 @@ class P4CMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain reached V38")
-                .containsExactly("39");
+                .containsExactly("40");
     }
 
     // ==================================================================
