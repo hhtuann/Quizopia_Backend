@@ -42,11 +42,32 @@ public class AiAlertQueryService {
     static final int MAX_PAGE_SIZE = 100;
     static final int DEFAULT_PAGE_SIZE = 50;
 
-    private static final String SELECT_PAGE = """
+    /** Package-private for the CASE-coverage test (every AiAlertType). */
+    static final String SELECT_PAGE = """
             SELECT a.id, a.attempt_id, a.user_id, u.display_name AS student_name,
                    a.alert_type, a.status, a.first_detected_at, a.last_detected_at,
                    a.detection_count, a.max_confidence, a.model_id, a.model_version,
                    a.provenance, a.latest_payload,
+                   -- Boxes of the detection that OPENED the window (the frame
+                   -- the P4-D evidence snapshot shows). Derived, not stored:
+                   -- the opening detection is the accepted one of the alert's
+                   -- type observed exactly at first_detected_at
+                   -- (ix_ai_detections_attempt_observed).
+                   (SELECT d.payload::text
+                      FROM monitoring_ai_detections d
+                     WHERE d.attempt_id = a.attempt_id
+                       AND d.observed_at = a.first_detected_at
+                       AND NOT d.quarantined
+                       AND d.provenance = a.provenance
+                       AND d.event_type = CASE a.alert_type
+                               WHEN 'PHONE_DETECTED' THEN 'PHONE_OBSERVED'
+                               WHEN 'SCREEN_DETECTED' THEN 'SCREEN_OBSERVED'
+                               WHEN 'MULTIPLE_PERSONS_DETECTED' THEN 'MULTIPLE_PERSONS_OBSERVED'
+                               WHEN 'PERSON_NOT_VISIBLE' THEN 'PERSON_NOT_OBSERVED'
+                               WHEN 'LOOKING_AWAY' THEN 'LOOKING_AWAY_OBSERVED'
+                           END
+                     ORDER BY d.id
+                     LIMIT 1) AS first_payload,
                    a.review_status, a.review_version, a.reviewed_at
             FROM monitoring_ai_alerts a
             JOIN users u ON u.id = a.user_id
@@ -197,6 +218,7 @@ public class AiAlertQueryService {
             rs.getString("model_version"),
             rs.getString("provenance"),
             parsePayload(rs.getString("latest_payload")),
+            parsePayload(rs.getString("first_payload")),
             rs.getString("review_status"),
             rs.getInt("review_version"),
             toInstant(rs.getTimestamp("reviewed_at")));

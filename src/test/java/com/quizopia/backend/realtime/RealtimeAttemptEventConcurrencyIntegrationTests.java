@@ -134,10 +134,35 @@ class RealtimeAttemptEventConcurrencyIntegrationTests extends RealtimeStompTestB
             }
 
             assertThat(cap.latch.await(20, TimeUnit.SECONDS)).isTrue();
-            assertNoExtraFrame(cap, 2);
-            assertEventCounts(cap.payloads, 1, 1); // 1 ATTEMPT_STARTED + 1 ACTIVE_COUNT_CHANGED
+            // Worker B resumes A's attempt, and P4-A2 (#81) records a durable
+            // ATTEMPT_RESUMED server activity → one ATTEMPT_ACTIVITY ping on the
+            // same topic. Its delivery races the canonical pair, so the frame
+            // count is checked only after the bounded window, and the ping is
+            // asserted precisely instead of counted as a duplicate.
+            assertCanonicalPairPlusOptionalResumePing(cap);
             assertThat(activeCount(f.sessionId)).isEqualTo(1L);
         }
+    }
+
+    private void assertCanonicalPairPlusOptionalResumePing(TopicCapture cap) throws InterruptedException {
+        CountDownLatch window = new CountDownLatch(1);
+        assertThat(window.await(2, TimeUnit.SECONDS)).isFalse();
+        List<byte[]> frames = List.copyOf(cap.payloads);
+        RealtimeEventEnvelope[] all = parse(frames);
+        List<byte[]> canonical = new java.util.ArrayList<>();
+        int resumePings = 0;
+        for (int i = 0; i < all.length; i++) {
+            if ("ATTEMPT_ACTIVITY".equals(all[i].eventType())) {
+                assertThat(all[i].activityType()).as("only the resume ping may ride along").isEqualTo("ATTEMPT_RESUMED");
+                assertThat(all[i].activitySource()).isEqualTo("SERVER");
+                resumePings++;
+            } else {
+                canonical.add(frames.get(i));
+            }
+        }
+        assertThat(resumePings).as("at most one resume ping").isLessThanOrEqualTo(1);
+        assertThat(canonical).as("exact canonical frame count").hasSize(2);
+        assertEventCounts(canonical, 1, 1); // 1 ATTEMPT_STARTED + 1 ACTIVE_COUNT_CHANGED
     }
 
     // === §3.2 same-key concurrent submit — HELD-TX true-overlap barrier ===

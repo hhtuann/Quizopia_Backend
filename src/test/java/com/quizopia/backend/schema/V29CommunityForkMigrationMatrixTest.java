@@ -67,7 +67,7 @@ class V29CommunityForkMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain reached V38")
-                        .containsExactly("42");
+                        .containsExactly("43");
             }
         } finally {
             dropDatabase(dbName);
@@ -158,7 +158,7 @@ class V29CommunityForkMigrationMatrixTest {
                         SELECT version FROM flyway_schema_history WHERE success
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
-                        .containsExactly("42");
+                        .containsExactly("43");
             }
         } finally {
             dropDatabase(dbName);

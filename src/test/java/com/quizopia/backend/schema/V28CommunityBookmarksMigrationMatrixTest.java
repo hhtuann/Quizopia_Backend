@@ -67,7 +67,7 @@ class V28CommunityBookmarksMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain reached V38")
-                        .containsExactly("42");
+                        .containsExactly("43");
             }
         } finally {
             dropDatabase(dbName);
@@ -151,7 +151,7 @@ class V28CommunityBookmarksMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                         .as("migration chain reached V38")
-                        .containsExactly("42");
+                        .containsExactly("43");
             }
         } finally {
             dropDatabase(dbName);

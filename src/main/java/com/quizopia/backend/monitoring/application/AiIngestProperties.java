@@ -62,7 +62,7 @@ public class AiIngestProperties {
     @NotNull
     private Duration window = Duration.ofMinutes(1);
 
-    /** Aggregation cooldown for PHONE/SCREEN/MULTIPLE_PERSONS (CONTRACT §5: 20s). */
+    /** Aggregation cooldown for PHONE/SCREEN/MULTIPLE_PERSONS/LOOKING_AWAY (CONTRACT §5: 20s). */
     @NotNull
     private Duration alertCooldown = Duration.ofSeconds(20);
 

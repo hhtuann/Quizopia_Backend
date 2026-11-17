@@ -513,6 +513,48 @@ class AiDetectionIngestIntegrationTests {
     }
 
     @Test
+    void lookingAwayAggregatesIntoItsOwnAlertWithTheGazeModelIdentity() {
+        // Gaze observation (V43): face box + direction label, gaze model id.
+        AiDetectionBatchResponse first = ingestService.ingestStudent(studentId, attemptId,
+                batch(lookingAway(base, 1, "gaze:left:-38:3")));
+        assertThat(first.results().get(0).status().name()).isEqualTo("ACCEPTED");
+        clock.advance(Duration.ofSeconds(10)); // client pacing: one per 10s
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(lookingAway(base.plusSeconds(10), 2, "gaze:left:-41:2")));
+
+        // Two observations inside the 20s cooldown → ONE window, count 2.
+        assertThat(alertCount()).isEqualTo(1);
+        assertThat(alertTypeOf()).isEqualTo("LOOKING_AWAY");
+        Map<String, Object> alert = jdbc.queryForMap(
+                "SELECT detection_count, model_id, model_version, provenance, max_confidence, "
+                        + "latest_payload::text AS payload FROM monitoring_ai_alerts");
+        assertThat(alert.get("detection_count")).isEqualTo(2);
+        assertThat(alert.get("model_id")).isEqualTo("mobilegaze-mobileone-s0");
+        assertThat(alert.get("model_version")).isEqualTo("gaze360-onnx");
+        assertThat(alert.get("provenance")).isEqualTo("CLIENT_MODEL");
+        assertThat((Double) alert.get("max_confidence")).isEqualTo(0.91);
+        assertThat((String) alert.get("payload")).contains("gaze:left:-41:2");
+        assertThat(activityCount("AI_ALERT_RAISED")).isEqualTo(1);
+
+        // A phone seen at the same time is its OWN window — types never merge.
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(phoneDetection(base.plusSeconds(10), 3, 0.9)));
+        assertThat(alertCount()).isEqualTo(2);
+    }
+
+    @Test
+    void lookingAwayGapBeyondCooldownOpensNewWindow() {
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(lookingAway(base, 1, "gaze:down:0:-30")));
+        clock.advance(Duration.ofSeconds(25)); // 25s > 20s default cooldown
+        ingestService.ingestStudent(studentId, attemptId,
+                batch(lookingAway(base.plusSeconds(25), 2, "gaze:right:33:0")));
+
+        assertThat(alertCount()).isEqualTo(2);
+        assertThat(activityCount("AI_ALERT_RAISED")).isEqualTo(2);
+    }
+
+    @Test
     void quarantinedDetectionNeverAggregates() {
         finishAttempt(jdbc, attemptId, base);
         ingestService.ingestStudent(studentId, attemptId, batch(phoneDetection(base, 1, 0.9)));
@@ -585,6 +627,15 @@ class AiDetectionIngestIntegrationTests {
                 seq, "yolo26s", "8.4.64-onnx", "ORT_WEB_WEBGPU", 640, 480, 55,
                 List.of(new AiDetectionBatchRequest.DetectedObject(67, "cell phone",
                         confidence, List.of(0.1, 0.2, 0.3, 0.4))));
+    }
+
+    private AiDetectionBatchRequest.Item lookingAway(Instant observedAt, long seq,
+            String label) {
+        return new AiDetectionBatchRequest.Item(UUID.randomUUID(), "LOOKING_AWAY_OBSERVED",
+                observedAt, seq, "mobilegaze-mobileone-s0", "gaze360-onnx", "ORT_WEB_WEBGPU",
+                640, 480, 35,
+                List.of(new AiDetectionBatchRequest.DetectedObject(1000, label, 0.91,
+                        List.of(0.3, 0.2, 0.6, 0.7))));
     }
 
     private AiDetectionBatchRequest.Item item(String type, Instant observedAt, long seq) {

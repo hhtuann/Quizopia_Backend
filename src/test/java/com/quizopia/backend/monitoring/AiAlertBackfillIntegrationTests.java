@@ -116,6 +116,46 @@ class AiAlertBackfillIntegrationTests {
         assertThat(page.nextCursor()).isNull();
     }
 
+    private void ingestWithBox(Instant observedAt, String eventType, int classId,
+            String label, double x1) {
+        AiDetectionBatchRequest.Item item = new AiDetectionBatchRequest.Item(
+                UUID.randomUUID(), eventType, observedAt, ++ingestSequence, "yolo26s",
+                "8.4.64-onnx", "ORT_WEB_WASM", 640, 480, 40,
+                List.of(new AiDetectionBatchRequest.DetectedObject(classId, label, 0.9,
+                        List.of(x1, 0.2, x1 + 0.2, 0.6))));
+        AiDetectionBatchResponse r = ingestService.ingestStudent(studentId,
+                jdbc.queryForObject("SELECT id FROM attempts ORDER BY id DESC LIMIT 1", Long.class),
+                new AiDetectionBatchRequest(List.of(item)));
+        assertThat(r.acceptedCount()).isEqualTo(1);
+    }
+
+    @Test
+    void firstDetectionsKeepTheOpeningBoxesWhileLatestMovesOn() {
+        // The evidence snapshot (P4-D) is the frame of the detection that
+        // OPENED the window — the feed needs THOSE boxes to draw on it.
+        startMonitoredAttempt();
+        ingestWithBox(base, "PHONE_OBSERVED", 67, "cell phone", 0.10);
+        // Same instant, different type: must never leak into the phone alert.
+        ingestWithBox(base, "SCREEN_OBSERVED", 63, "laptop", 0.70);
+        clock.advance(Duration.ofSeconds(10));
+        ingestWithBox(base.plusSeconds(10), "PHONE_OBSERVED", 67, "cell phone", 0.50);
+
+        AiAlertPageResponse page = alertQueryService.alerts(teacherId, sessionId, null, 50, null, null);
+        AiAlertPageResponse.Item phone = page.items().stream()
+                .filter(i -> i.alertType().equals("PHONE_DETECTED")).findFirst().orElseThrow();
+        assertThat(phone.detectionCount()).isEqualTo(2);
+        assertThat(phone.firstDetections().get(0).get("bbox").get(0).asDouble()).isEqualTo(0.10);
+        assertThat(phone.firstDetections().get(0).get("label").asString()).isEqualTo("cell phone");
+        assertThat(phone.latestDetections().get(0).get("bbox").get(0).asDouble()).isEqualTo(0.50);
+        // P4-E review rollup travels next to the boxes, untouched by them.
+        assertThat(phone.reviewStatus()).isEqualTo("UNREVIEWED");
+        assertThat(phone.reviewVersion()).isZero();
+
+        AiAlertPageResponse.Item screen = page.items().stream()
+                .filter(i -> i.alertType().equals("SCREEN_DETECTED")).findFirst().orElseThrow();
+        assertThat(screen.firstDetections().get(0).get("label").asString()).isEqualTo("laptop");
+    }
+
     @Test
     void cursorPagesNewestFirstAndStatusFilterApplies() {
         startMonitoredAttempt();
