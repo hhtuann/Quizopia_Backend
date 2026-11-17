@@ -139,6 +139,17 @@ public class AlertReviewService {
                 MonitoringAiAlert locked = alertRepo.findById(alertId)
                         .orElseThrow(() -> new MonitoringException(
                                 MonitoringErrorCode.MONITORING_ALERT_NOT_FOUND));
+                // Strict optimistic concurrency on the TRANSACTION'S read:
+                // the entry check may be stale (a racer committed between the
+                // check and this tx) — a stale caller must CONFLICT, never
+                // silently append a later version (CI five-way race caught
+                // exactly one success turning into two).
+                if (locked.getReviewVersion() != expectedVersion) {
+                    throw new MonitoringException(
+                            MonitoringErrorCode.MONITORING_REVIEW_VERSION_CONFLICT,
+                            "Alert review was updated by another reviewer (current version "
+                                    + locked.getReviewVersion() + "); reload and retry");
+                }
                 MonitoringAlertReview appended = MonitoringAlertReview.append(locked, userId,
                         normalizedAction, normalizedNote, idempotencyKey);
                 reviewRepo.saveAndFlush(appended);

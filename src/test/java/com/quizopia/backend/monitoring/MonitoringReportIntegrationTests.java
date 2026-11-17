@@ -55,6 +55,23 @@ class MonitoringReportIntegrationTests {
     private long alertId;
     private UUID bindingId;
 
+    /**
+     * These suites are deliberately NON-transactional (REQUIRES_NEW append /
+     * concurrency semantics need committed data). This restores the shared
+     * container DB isolation every other suite gets from rollback: deleting
+     * the session cascades exam graph → attempts → alerts/reviews/evidence/
+     * jobs (all FKs ON DELETE CASCADE).
+     */
+    @org.junit.jupiter.api.AfterEach
+    void cleanUpCommittedFixture() {
+        // fk_attempts_session is ON DELETE RESTRICT (V24) — attempts (and
+        // their cascading monitoring children) go first, then the session.
+        jdbc.update("DELETE FROM grades WHERE attempt_id IN "
+                + "(SELECT id FROM attempts WHERE exam_session_id = ?)", sessionId);
+        jdbc.update("DELETE FROM attempts WHERE exam_session_id = ?", sessionId);
+        jdbc.update("DELETE FROM exam_sessions WHERE id = ?", sessionId);
+    }
+
     @BeforeEach
     void setUp() {
         base = Instant.parse("2026-11-17T11:00:00Z");
