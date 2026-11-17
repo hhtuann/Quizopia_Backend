@@ -36,6 +36,10 @@ public record AiAlertPageResponse(
             String modelId,
             String modelVersion,
             String provenance,
-            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode latestDetections) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode latestDetections,
+            /** Boxes of the detection that OPENED this alert window — the
+             *  frame its evidence snapshot was captured on. Omitted when
+             *  that detection row is no longer available. */
+            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode firstDetections) {
     }
 }
