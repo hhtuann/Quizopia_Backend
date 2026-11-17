@@ -77,11 +77,14 @@ public class AiAlertAggregationService {
      * ({@code MANDATORY} — an alert outside the detection's transaction
      * would violate the atomicity contract of CONTRACT §5).
      *
+     * @return the id of an alert window OPENED by this detection (null when
+     *         it only extended an existing window) — P4-D uses it to ask the
+     *         student's browser for an evidence snapshot at that moment.
      * @param maxConfidence max confidence of the detection's boxes
      *                      (null when the payload carries no boxes)
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void aggregate(Attempt attempt, AggregatedDetection detection,
+    public Long aggregate(Attempt attempt, AggregatedDetection detection,
             AiProvenance provenance, Double maxConfidence) {
         AiAlertType alertType = AiAlertType.fromDetection(detection.type());
 
@@ -118,7 +121,7 @@ public class AiAlertAggregationService {
                                 "AI alert window missing right after insert"));
                 recordAlertEvent(raised.getId(), attempt, ActivityEventType.AI_ALERT_RAISED,
                         detection, provenance, maxConfidence, 1);
-                return;
+                return raised.getId();
             }
             // Lost an open-race to a concurrent batch: extend the winner's
             // window instead (the partial unique index guarantees exactly
@@ -146,7 +149,7 @@ public class AiAlertAggregationService {
                                     "AI alert window missing right after re-open"));
                     recordAlertEvent(reopened.getId(), attempt, ActivityEventType.AI_ALERT_RAISED,
                             detection, provenance, maxConfidence, 1);
-                    return;
+                    return reopened.getId();
                 }
                 open = alertRepo
                         .findFirstByAttemptIdAndAlertTypeAndStatusOrderByIdDesc(
@@ -164,6 +167,7 @@ public class AiAlertAggregationService {
             recordAlertEvent(open.getId(), attempt, ActivityEventType.AI_ALERT_UPDATED,
                     detection, provenance, maxConfidence, count);
         }
+        return null;
     }
 
     private Duration cooldownOf(AiAlertType alertType) {

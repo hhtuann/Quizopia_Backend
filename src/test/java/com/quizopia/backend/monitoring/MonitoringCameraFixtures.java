@@ -83,6 +83,27 @@ final class MonitoringCameraFixtures {
                 + "VALUES (?, true)", sessionId);
     }
 
+    /** Full monitoring policy row (P4-D): AI implied for snapshots; clips
+     *  WITHOUT recording = rolling-buffer mode (V40 relaxation). */
+    static void enableMonitoringWithPolicy(JdbcTemplate jdbc, long sessionId,
+            boolean snapshots, boolean recording, boolean clips) {
+        jdbc.update("INSERT INTO session_monitoring_policies "
+                + "(exam_session_id, monitoring_enabled, ai_detection_enabled, "
+                + "evidence_snapshots_enabled, full_recording_enabled, evidence_clips_enabled) "
+                + "VALUES (?, true, ?, ?, ?, ?)", sessionId, snapshots, snapshots, recording, clips);
+    }
+
+    /** Teacher user holding every monitoring read/manage permission. */
+    /** TEACHER user; permissions flow through the TEACHER role grants. */
+    static long newTeacherUser(JdbcTemplate jdbc, String username) {
+        long id = insertReturningId(jdbc,
+                "INSERT INTO users (username, email, password_hash, display_name) VALUES ('"
+                        + username + "','" + username + "@t.com','h','" + username.toUpperCase() + "')");
+        Long roleId = jdbc.queryForObject("SELECT id FROM roles WHERE code='TEACHER'", Long.class);
+        jdbc.update("INSERT INTO user_roles (user_id, role_id) VALUES (" + id + "," + roleId + ")");
+        return id;
+    }
+
     /** Inserts the session's media room; returns the generated room name. */
     static String insertRoom(JdbcTemplate jdbc, long sessionId) {
         String roomName = "room-" + UUID.randomUUID();

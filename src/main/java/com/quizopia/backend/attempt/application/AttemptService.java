@@ -402,6 +402,11 @@ public class AttemptService {
             // back together; the attempt row must exist for the FK).
             if (consumedLease != null) {
                 cameraPreflight.attachAttemptToBinding(consumedLease.bindingId(), attempt.getId());
+                // P4-D: the camera typically published during preflight —
+                // evaluate recording work AFTER COMMIT (the coordinator
+                // no-ops when the camera is not actually connected).
+                eventPublisher.publishEvent(new com.quizopia.backend.evidence.application.RecordingEvents.CameraPresence(
+                        consumedLease.bindingId(), attempt.getId(), session.getId(), true));
             }
 
             List<QuestionRow> qRows = queryOrderedQuestions(session.getExamId());

@@ -514,7 +514,7 @@ class AiDetectionIngestIntegrationTests {
 
     @Test
     void lookingAwayAggregatesIntoItsOwnAlertWithTheGazeModelIdentity() {
-        // Gaze observation (V40): face box + direction label, gaze model id.
+        // Gaze observation (V43): face box + direction label, gaze model id.
         AiDetectionBatchResponse first = ingestService.ingestStudent(studentId, attemptId,
                 batch(lookingAway(base, 1, "gaze:left:-38:3")));
         assertThat(first.results().get(0).status().name()).isEqualTo("ACCEPTED");

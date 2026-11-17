@@ -83,10 +83,11 @@ class P4AMigrationMatrixTest {
 
         // Valid SERVER row (no client fields needed).
         insert(st, eventInsert(uuid, f.attemptId, "ATTEMPT_STARTED", "SERVER", "NULL", "NULL"));
-        // The event-type allowlist rejects still-future AI/recording types.
-        // (P4-B V37 admitted the CAMERA_* set as SERVER-confirmed types, so
-        // CAMERA_CONNECTED moved from the rejected list to the admitted set.)
-        for (String futureType : new String[]{"AI_ALERT_CREATED", "RECORDING_STARTED", "CAMERA_SPOOFED"}) {
+        // The event-type allowlist rejects still-future types.
+        // (P4-B V37 admitted the CAMERA_* set; P4-C V38 admitted AI_ALERT_*;
+        // P4-D V40 admitted RECORDING_*/EVIDENCE_* as SERVER-confirmed — so
+        // each moved from this rejected list to the admitted set over time.)
+        for (String futureType : new String[]{"AI_ALERT_CREATED", "EVIDENCE_ARCHIVED", "CAMERA_SPOOFED"}) {
             assertThatThrownBy(() -> execute(st, eventInsert(
                     UUID.randomUUID().toString(), f.attemptId, futureType, "SERVER", "NULL", "NULL")))
                     .as("event_type %s must be rejected by the CHECK allowlist", futureType)
@@ -232,7 +233,7 @@ class P4AMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain reached V38")
-                .containsExactly("40");
+                .containsExactly("43");
     }
 
     // ==================================================================

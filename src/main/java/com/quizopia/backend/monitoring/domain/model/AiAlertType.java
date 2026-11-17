@@ -2,7 +2,7 @@ package com.quizopia.backend.monitoring.domain.model;
 
 /**
  * Server-aggregated AI alert types (P4-C, CONTRACT §5, V38 CHECK;
- * {@code LOOKING_AWAY} added by V40 — an estimated gaze deviation is the
+ * {@code LOOKING_AWAY} added by V43 — an estimated gaze deviation is the
  * most inconclusive of the observations: human-review context only).
  *
  * <p>DETECTED / NOT_VISIBLE are the server-aggregated vocabulary — a raw

@@ -85,7 +85,7 @@ class P4CMigrationMatrixTest {
         Fixture f = scaffold(st);
         insert(st, detectionInsert(f.attemptId, UUID.randomUUID().toString(),
                 "CLIENT_MODEL", "PHONE_OBSERVED", "false", "NULL", "'[]'::jsonb", "NULL"));
-        // V40: the gaze observation is admitted next to the V38 four…
+        // V43: the gaze observation is admitted next to the V38 four…
         insert(st, detectionInsert(f.attemptId, UUID.randomUUID().toString(),
                 "CLIENT_MODEL", "LOOKING_AWAY_OBSERVED", "false", "NULL", "'[]'::jsonb",
                 "NULL"));
@@ -158,7 +158,7 @@ class P4CMigrationMatrixTest {
                 .isInstanceOf(SQLException.class);
         // …while a different type coexists…
         insert(st, alertInsert(f.attemptId, "SCREEN_DETECTED", "OPEN"));
-        // …including the V40 gaze alert type.
+        // …including the V43 gaze alert type.
         insert(st, alertInsert(f.attemptId, "LOOKING_AWAY", "OPEN"));
         assertThatThrownBy(() -> execute(st,
                 alertInsert(f.attemptId, "LOOKING_AWAY_OBSERVED", "OPEN")))
@@ -251,7 +251,7 @@ class P4CMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain reached V38")
-                .containsExactly("40");
+                .containsExactly("43");
     }
 
     // ==================================================================

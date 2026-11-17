@@ -10,6 +10,8 @@ import com.quizopia.backend.monitoring.domain.model.MonitoringMediaBinding;
 import com.quizopia.backend.monitoring.dto.AiDetectionBatchRequest;
 import com.quizopia.backend.monitoring.dto.AiDetectionBatchResponse;
 import com.quizopia.backend.monitoring.dto.AiDetectionBatchResponse.ItemResult;
+import com.quizopia.backend.exam.repository.SessionMonitoringPolicyRepository;
+import java.util.Map;
 import com.quizopia.backend.monitoring.dto.AiDetectionBatchResponse.Status;
 import com.quizopia.backend.monitoring.dto.AiWorkerDetectionBatchRequest;
 import com.quizopia.backend.monitoring.exception.MonitoringErrorCode;
@@ -104,6 +106,9 @@ public class AiDetectionIngestService {
     private final MonitoringAiDetectionRepository detectionRepo;
     private final MonitoringMediaBindingRepository bindingRepo;
     private final AiAlertAggregationService aggregationService;
+    private final SessionMonitoringPolicyRepository policyRepository;
+    /** Concurrent per-JVM policy cache (singleton service, many HTTP threads). */
+    private final Map<Long, Boolean> snapshotsEnabledCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final ActivityIngestRateLimiter rateLimiter;
     private final AiIngestProperties properties;
     private final ObjectMapper objectMapper;
@@ -114,6 +119,7 @@ public class AiDetectionIngestService {
             MonitoringAiDetectionRepository detectionRepo,
             MonitoringMediaBindingRepository bindingRepo,
             AiAlertAggregationService aggregationService,
+            SessionMonitoringPolicyRepository policyRepository,
             ActivityIngestRateLimiter rateLimiter,
             AiIngestProperties properties,
             ObjectMapper objectMapper,
@@ -123,6 +129,7 @@ public class AiDetectionIngestService {
         this.detectionRepo = detectionRepo;
         this.bindingRepo = bindingRepo;
         this.aggregationService = aggregationService;
+        this.policyRepository = policyRepository;
         this.rateLimiter = rateLimiter;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -287,9 +294,25 @@ public class AiDetectionIngestService {
             return Outcome.duplicate(detection.eventId());
         }
         // Aggregation in the SAME transaction (CONTRACT §5).
-        aggregationService.aggregate(attempt, detection.toAggregated(), provenance,
-                detection.maxConfidence());
+        Long openedAlertId = aggregationService.aggregate(attempt, detection.toAggregated(),
+                provenance, detection.maxConfidence());
+        if (openedAlertId != null && provenance == AiProvenance.CLIENT_MODEL
+                && snapshotsEnabledFor(attempt.getExamSessionId())) {
+            // P4-D (#91): honest CLIENT_CAPTURE snapshot request at the
+            // moment the window opened (browser answers from its live
+            // MediaStream). Worker provenance never gets snapshot requests.
+            return Outcome.acceptedWithSnapshot(detection.eventId(), openedAlertId);
+        }
         return Outcome.accepted(detection.eventId());
+    }
+
+    /** Frozen-policy read; false for legacy (no-policy) sessions. */
+    private boolean snapshotsEnabledFor(long examSessionId) {
+        return snapshotsEnabledCache.computeIfAbsent(examSessionId, id -> {
+            var policy = policyRepository.findByExamSessionId(id);
+            return policy.map(p -> p.isMonitoringEnabled() && p.isAiDetectionEnabled()
+                    && p.isEvidenceSnapshotsEnabled()).orElse(Boolean.FALSE);
+        });
     }
 
     private int store(ValidatedDetection detection, Attempt attempt, AiProvenance provenance,
@@ -442,6 +465,13 @@ public class AiDetectionIngestService {
 
     private record Outcome(ItemResult result, boolean accepted, boolean duplicate,
             boolean quarantined, boolean rejected) {
+
+        static Outcome acceptedWithSnapshot(UUID eventId, long alertId) {
+            return new Outcome(new ItemResult(eventId, Status.ACCEPTED, null,
+                    new ItemResult.SnapshotRequest(alertId, "ALERT_OPENED")),
+                    true, false, false, false);
+        }
+
 
         static Outcome accepted(UUID eventId) {
             return new Outcome(ItemResult.of(eventId, Status.ACCEPTED), true, false, false, false);

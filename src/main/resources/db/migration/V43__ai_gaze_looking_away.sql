@@ -1,5 +1,5 @@
 -- =====================================================================
--- V40 (gaze proctoring): admit the gaze observation / alert vocabulary.
+-- V43 (gaze proctoring): admit the gaze observation / alert vocabulary.
 --
 --   * monitoring_ai_detections.event_type  += LOOKING_AWAY_OBSERVED
 --   * monitoring_ai_alerts.alert_type      += LOOKING_AWAY
@@ -38,6 +38,6 @@ BEGIN
                WHERE t.relname IN ('monitoring_ai_detections', 'monitoring_ai_alerts')
                  AND c.contype = 'f'
                  AND c.confrelid IN ('grades'::regclass, 'grade_items'::regclass)) THEN
-        RAISE EXCEPTION 'V40 verification failed: AI tables must have no FK into grades/grade_items';
+        RAISE EXCEPTION 'V43 verification failed: AI tables must have no FK into grades/grade_items';
     END IF;
 END $$;

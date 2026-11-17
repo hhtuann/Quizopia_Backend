@@ -9,6 +9,7 @@ import com.quizopia.backend.attempt.dto.SubmitRequest;
 import com.quizopia.backend.attempt.dto.SubmitResponse;
 import com.quizopia.backend.attempt.exception.AttemptErrorCode;
 import com.quizopia.backend.attempt.exception.AttemptException;
+import com.quizopia.backend.monitoring.repository.MonitoringMediaBindingRepository;
 import com.quizopia.backend.attempt.repository.AttemptRepository;
 import com.quizopia.backend.attempt.repository.IdempotencyRecordRepository;
 import com.quizopia.backend.realtime.event.AttemptRealtimeEvent;
@@ -66,6 +67,7 @@ public class AttemptSubmitService {
     private final ObjectMapper objectMapper;
     private final Clock clock;
     private final ApplicationEventPublisher eventPublisher;
+    private final MonitoringMediaBindingRepository bindingRepo;
     private final com.quizopia.backend.grading.AttemptGradingService gradingService;
     private final com.quizopia.backend.notification.application.NotificationService notificationService;
     private final com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder;
@@ -74,6 +76,7 @@ public class AttemptSubmitService {
     public AttemptSubmitService(AttemptAuthorizationService auth, AttemptRepository attemptRepo,
                                 IdempotencyRecordRepository idempotencyRepo, ObjectMapper objectMapper,
                                 Clock clock, ApplicationEventPublisher eventPublisher,
+                                MonitoringMediaBindingRepository bindingRepo,
                                 com.quizopia.backend.grading.AttemptGradingService gradingService,
                                 com.quizopia.backend.notification.application.NotificationService notificationService,
                                 com.quizopia.backend.monitoring.application.ActivityEventRecorder activityRecorder) {
@@ -83,6 +86,7 @@ public class AttemptSubmitService {
         this.objectMapper = objectMapper;
         this.clock = clock;
         this.eventPublisher = eventPublisher;
+        this.bindingRepo = bindingRepo;
         this.gradingService = gradingService;
         this.notificationService = notificationService;
         this.activityRecorder = activityRecorder;
@@ -181,6 +185,12 @@ public class AttemptSubmitService {
         activityRecorder.recordServerEvent(attemptId, attempt.getExamSessionId(), userId,
                 com.quizopia.backend.monitoring.domain.model.ActivityEventType.ATTEMPT_SUBMITTED,
                 now, null);
+        // P4-D (#92): stop any active recording for this attempt AFTER COMMIT
+        // (final segments finalize honestly; never blocks submit/grading —
+        // the coordinator swallows its own failures).
+        bindingRepo.findFirstByAttemptIdOrderByEpochDesc(attemptId).ifPresent(binding ->
+                eventPublisher.publishEvent(new com.quizopia.backend.evidence.application.RecordingEvents.CameraPresence(
+                        binding.getId(), attemptId, attempt.getExamSessionId(), false)));
         // Notify the student that their result is graded.
         notificationService.create(userId,
                 com.quizopia.backend.notification.domain.model.NotificationType.RESULT_GRADED,

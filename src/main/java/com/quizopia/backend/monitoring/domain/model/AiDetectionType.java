@@ -2,7 +2,7 @@ package com.quizopia.backend.monitoring.domain.model;
 
 /**
  * Client-observation detection event types (P4-C, CONTRACT §3.1, V38 CHECK;
- * {@code LOOKING_AWAY_OBSERVED} added by V40 — gaze estimate of the
+ * {@code LOOKING_AWAY_OBSERVED} added by V43 — gaze estimate of the
  * dedicated face + gaze models, CONTRACT §9).
  *
  * <p>Naming is deliberate: the word <b>OBSERVED</b> marks raw model

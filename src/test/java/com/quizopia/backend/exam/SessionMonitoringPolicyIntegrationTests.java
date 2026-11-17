@@ -130,10 +130,14 @@ class SessionMonitoringPolicyIntegrationTests {
     }
 
     @Test
-    void createClipsWithoutRecordingRejected() {
-        assertThatThrownBy(() -> create(monitoring(true, true, false, false, false, true),
-                "CLASS_RESTRICTED", List.of(classroomId)))
-                .satisfies(e -> assertThat(examCode(e)).isEqualTo("EXAM_SESSION_MONITORING_INVALID"));
+    void createClipsWithoutRecordingAcceptedSinceP4D() {
+        // P4-D (V40): clips WITHOUT full recording = rolling-buffer mode —
+        // the P4-A rejection was a capability placeholder, not a domain rule.
+        ExamSessionDetailResponse detail = create(
+                monitoring(true, true, false, false, false, true),
+                "CLASS_RESTRICTED", List.of(classroomId));
+        assertThat(detail.monitoring().evidenceClipsEnabled()).isTrue();
+        assertThat(detail.monitoring().fullRecordingEnabled()).isFalse();
     }
 
     @Test
