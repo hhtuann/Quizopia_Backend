@@ -23,7 +23,12 @@ public record AttemptMonitoringReportResponse(
         RecordingReport recording,
         AiReport ai,
         List<EvidenceRow> evidence,
+        /** F11: honest completeness — totals and truncation flags. */
+        long evidenceTotal,
+        boolean evidenceTruncated,
         List<ReviewRow> reviews,
+        long reviewsTotal,
+        boolean reviewsTruncated,
         Retention retention,
         String disclaimer) {
 

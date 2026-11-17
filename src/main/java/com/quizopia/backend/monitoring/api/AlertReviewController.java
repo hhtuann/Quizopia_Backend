@@ -1,6 +1,7 @@
 package com.quizopia.backend.monitoring.api;
 
 import com.quizopia.backend.monitoring.application.AlertReviewService;
+import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewAttemptPageResponse;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewHistoryResponse;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewRequest;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewResponse;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -64,5 +66,19 @@ public class AlertReviewController {
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable Long alertId) {
         return reviewService.history(Long.valueOf(jwt.getSubject()), alertId);
+    }
+
+    /**
+     * F11 drilldown: cursor-paged attempt-scoped review history (the
+     * report's completeness path). Same read gate as the alert feed.
+     */
+    @GetMapping("/api/attempts/{attemptId}/monitoring/reviews")
+    public AlertReviewAttemptPageResponse attemptReviews(
+            @AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long attemptId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false, defaultValue = "50") int limit) {
+        return reviewService.attemptReviews(Long.valueOf(jwt.getSubject()),
+                attemptId, cursor, limit);
     }
 }

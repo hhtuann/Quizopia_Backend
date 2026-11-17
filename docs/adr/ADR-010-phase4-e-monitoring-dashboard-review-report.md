@@ -111,5 +111,7 @@ dispositions). Two decisions worth restating: the review append moved to a
 REQUIRES_NEW-transaction orchestrator (an aborted PostgreSQL transaction can
 never serve the idempotency replay), and coverage/camera-period semantics are
 anchored to the attempt's monitoring window rather than report-read time.
-Activity/review retention sweeping is explicitly deferred (P4-A scope, product
-decision — see design §7).
+The approved 90d activity-metadata retention is now ENFORCED
+(`sweepActivityMetadata` — see design §7 for the boundary/isolation tests);
+nothing outside the approved window contracts (answer history, grades) is
+ever deleted.

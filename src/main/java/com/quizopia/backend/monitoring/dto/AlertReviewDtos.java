@@ -59,6 +59,27 @@ public final class AlertReviewDtos {
             Instant reviewedAt) {
     }
 
+    /**
+     * F11 drilldown row: the history row PLUS the alert reference the
+     * report renderer shows ("alert #N") — matches the report's own rows.
+     */
+    public record AttemptReviewRow(
+            long reviewId,
+            Long alertId,
+            int version,
+            String action,
+            String note,
+            String reviewerName,
+            Instant reviewedAt) {
+    }
+
+    /** F11 drilldown: cursor-paged attempt-scoped review history. */
+    public record AlertReviewAttemptPageResponse(
+            Long attemptId,
+            List<AttemptReviewRow> items,
+            @org.springframework.lang.Nullable String nextCursor) {
+    }
+
     /** Body of {@code GET /api/monitoring/alerts/{alertId}/reviews}. */
     public record AlertReviewHistoryResponse(
             Long alertId,

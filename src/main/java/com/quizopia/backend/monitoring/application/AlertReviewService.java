@@ -7,6 +7,8 @@ import com.quizopia.backend.identity.repository.UserRepository;
 import com.quizopia.backend.monitoring.domain.model.ActivityEventType;
 import com.quizopia.backend.monitoring.domain.model.MonitoringAiAlert;
 import com.quizopia.backend.monitoring.domain.model.MonitoringAlertReview;
+import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewAttemptPageResponse;
+import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AttemptReviewRow;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewHistoryResponse;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.AlertReviewResponse;
 import com.quizopia.backend.monitoring.dto.AlertReviewDtos.CurrentReview;
@@ -40,7 +42,7 @@ import tools.jackson.databind.ObjectMapper;
  * {@code expectedVersion} give optimistic concurrency; the unique
  * {@code idempotency_key} gives exactly-once appends for retried POSTs.
  *
- * <p>Reviews emit an {@code ALERT_REVIEW_RECORDED} activity event (same
+ * <p>Append-only modulo the APPROVED retention window: rows older than the session activity_retention_days are swept by EvidenceRetentionJob (the denormalized alert state survives; version numbering derives from the alert, never the ledger). Reviews emit an {@code ALERT_REVIEW_RECORDED} activity event (same
  * transaction, via the MANDATORY-tx recorder) so they ride the unified
  * per-attempt timeline and the existing STOMP invalidation ping.
  *
@@ -54,6 +56,7 @@ public class AlertReviewService {
     private final MonitoringAiAlertRepository alertRepo;
     private final MonitoringAlertReviewRepository reviewRepo;
     private final UserRepository userRepo;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final ActivityEventRecorder activity;
     private final ObjectMapper objectMapper;
     private final Clock clock;
@@ -74,12 +77,14 @@ public class AlertReviewService {
             ActivityEventRecorder activity,
             ObjectMapper objectMapper,
             Clock clock,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.auth = auth;
         this.sessionRepo = sessionRepo;
         this.alertRepo = alertRepo;
         this.reviewRepo = reviewRepo;
         this.userRepo = userRepo;
+        this.jdbc = jdbc;
         this.activity = activity;
         this.objectMapper = objectMapper;
         this.clock = clock;
@@ -172,6 +177,74 @@ public class AlertReviewService {
             throw new MonitoringException(MonitoringErrorCode.MONITORING_REVIEW_VERSION_CONFLICT,
                     "Alert review was updated by another reviewer; reload and retry");
         }
+    }
+
+    /**
+     * F11 drilldown: cursor-paged attempt-scoped review history (newest
+     * first, opaque numeric cursor = last review id) for the report's
+     * completeness path. Same read gate as the feed.
+     */
+    @Transactional(readOnly = true)
+    public AlertReviewAttemptPageResponse attemptReviews(Long userId,
+            Long attemptId, String cursor, int limit) {
+        try {
+            auth.requireLearnerWithPermission(userId, "AI_ALERTS_READ");
+        } catch (AttemptException e) {
+            throw new MonitoringException(MonitoringErrorCode.MONITORING_ACCESS_DENIED);
+        }
+        Long sessionId;
+        try {
+            sessionId = jdbc.queryForObject(
+                    "SELECT exam_session_id FROM attempts WHERE id = ?", Long.class, attemptId);
+        } catch (org.springframework.dao.EmptyResultDataAccessException e) {
+            throw new MonitoringException(MonitoringErrorCode.MONITORING_ATTEMPT_NOT_FOUND);
+        }
+        sessionRepo.findById(sessionId)
+                .filter(ses -> userId.equals(ses.getCreatedBy()))
+                .orElseThrow(() -> new MonitoringException(
+                        MonitoringErrorCode.MONITORING_ACCESS_DENIED));
+        int pageSize = Math.max(1, Math.min(limit <= 0 ? 50 : limit, 200));
+        Long cursorId = null;
+        if (cursor != null && !cursor.isBlank()) {
+            try {
+                cursorId = Long.parseLong(cursor.trim());
+            } catch (NumberFormatException e) {
+                throw new MonitoringException(MonitoringErrorCode.MONITORING_CURSOR_INVALID);
+            }
+        }
+        StringBuilder sql = new StringBuilder(
+                "SELECT r.id, r.alert_id, r.action, r.note, u.display_name AS reviewer, "
+                        + "r.created_at, r.review_version "
+                        + "FROM monitoring_alert_reviews r "
+                        + "JOIN users u ON u.id = r.reviewer_user_id "
+                        + "WHERE r.alert_id IN "
+                        + "(SELECT id FROM monitoring_ai_alerts WHERE attempt_id = ?) ");
+        java.util.List<Object> args = new java.util.ArrayList<>();
+        args.add(attemptId);
+        if (cursorId != null) {
+            sql.append(" AND r.id < ?");
+            args.add(cursorId);
+        }
+        sql.append(" ORDER BY r.id DESC LIMIT ?");
+        args.add(pageSize + 1);
+        java.util.List<AttemptReviewRow> rows = new java.util.ArrayList<>();
+        jdbc.query(sql.toString(), (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            rows.add(new AttemptReviewRow(
+                    rs.getLong("id"),
+                    (Long) rs.getObject("alert_id"),
+                    rs.getInt("review_version"),
+                    rs.getString("action"),
+                    rs.getString("note"),
+                    rs.getString("reviewer"),
+                    rs.getTimestamp("created_at").toInstant()));
+        }, args.toArray());
+        boolean hasNext = rows.size() > pageSize;
+        java.util.List<AttemptReviewRow> items =
+                hasNext ? rows.subList(0, pageSize) : rows;
+        String nextCursor = hasNext && !items.isEmpty()
+                ? String.valueOf(items.get(items.size() - 1).reviewId())
+                : null;
+        return new AlertReviewAttemptPageResponse(attemptId, items, nextCursor);
     }
 
     /** Append-only history + current denormalized state. */

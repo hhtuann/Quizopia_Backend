@@ -125,6 +125,8 @@ public class MonitoringReportService {
         // F02/F06 share the authoritative window: periods and coverage are
         // both bounded by it.
 
+        long evidenceTotal = evidenceTotalOf(attemptId);
+        long reviewTotal = reviewTotalOf(attemptId);
         return new AttemptMonitoringReportResponse(
                 attemptMeta(attemptId, sessionId, attempt, session),
                 new AttemptMonitoringReportResponse.Policy(
@@ -143,8 +145,12 @@ public class MonitoringReportService {
                 cameraReport(attemptId, attempt),
                 recordingReport(sessionId, attemptId, mediaPolicy, windowFrom, windowTo),
                 aiReport(attemptId),
-                evidenceRows(sessionId, attemptId),
-                reviewRows(attemptId),
+                evidencePage(sessionId, attemptId),
+                evidenceTotal,
+                evidenceTotal > EVIDENCE_LIMIT,
+                reviewPage(attemptId),
+                reviewTotal,
+                reviewTotal > REVIEWS_LIMIT,
                 new Retention(mediaPolicy.mediaRetentionDays(),
                         mediaPolicy.activityRetentionDays(), Instant.now(clock)),
                 DISCLAIMER);
@@ -200,15 +206,21 @@ public class MonitoringReportService {
 
     private CameraReport cameraReport(Long attemptId,
             com.quizopia.backend.attempt.domain.model.Attempt attempt) {
-        // Periods are bounded by the attempt's monitoring window (F02): a
-        // report opened days after submission must never imply the camera
-        // was monitored through those days. Authoritative end = submittedAt
-        // when closed, else the report's now (attempt still live).
+        // Periods are bounded by the attempt's monitoring window (F02). F12:
+        // a single finite-state reducer over the ordered event stream —
+        // repeated CONNECTED while already connected is IGNORED (no second
+        // open period), a disconnect closes the one open period, and only
+        // one period is ever open per side. Result: exact, non-overlapping,
+        // always-closed ranges with no dangling historical intervals.
         Instant windowStart = attempt.getStartedAt();
         Instant windowEnd = attempt.getSubmittedAt() != null
                 ? attempt.getSubmittedAt() : Instant.now(clock);
         List<CameraReport.Period> connected = new ArrayList<>();
         List<CameraReport.Period> disconnected = new ArrayList<>();
+        // Null = that side currently has no open period. Held in
+        // single-element arrays so the row callback can mutate them.
+        final Instant[] connectedFrom = { null };
+        final Instant[] disconnectedFrom = { null };
         jdbc.query("""
                 SELECT event_type, server_received_at FROM attempt_activity_events
                 WHERE attempt_id = ? AND source = 'SERVER'
@@ -218,35 +230,40 @@ public class MonitoringReportService {
                 """, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
                     String type = rs.getString("event_type");
                     Instant at = rs.getTimestamp("server_received_at").toInstant();
-                    if ("CAMERA_CONNECTED".equals(type) || "CAMERA_RECONNECTED".equals(type)) {
-                        connected.add(new CameraReport.Period(at, null));
-                        if (!disconnected.isEmpty()
-                                && disconnected.get(disconnected.size() - 1).to() == null) {
-                            closeLast(disconnected, at);
+                    boolean isConnect =
+                            "CAMERA_CONNECTED".equals(type) || "CAMERA_RECONNECTED".equals(type);
+                    if (isConnect) {
+                        if (connectedFrom[0] == null) {
+                            connectedFrom[0] = at; // duplicate CONNECTED: ignored
+                        }
+                        if (disconnectedFrom[0] != null) {
+                            disconnected.add(
+                                    new CameraReport.Period(disconnectedFrom[0], at));
+                            disconnectedFrom[0] = null;
                         }
                     } else {
-                        disconnected.add(new CameraReport.Period(at, null));
-                        if (!connected.isEmpty()
-                                && connected.get(connected.size() - 1).to() == null) {
-                            closeLast(connected, at);
+                        if (disconnectedFrom[0] == null) {
+                            disconnectedFrom[0] = at; // duplicate DISCONNECTED: ignored
+                        }
+                        if (connectedFrom[0] != null) {
+                            connected.add(new CameraReport.Period(connectedFrom[0], at));
+                            connectedFrom[0] = null;
                         }
                     }
                 }, attemptId);
+        // Close the trailing open period at the window end (submittedAt for
+        // finished attempts, now for a live one) — never left null.
+        if (connectedFrom[0] != null) {
+            connected.add(new CameraReport.Period(connectedFrom[0], windowEnd));
+        }
+        if (disconnectedFrom[0] != null) {
+            disconnected.add(new CameraReport.Period(disconnectedFrom[0], windowEnd));
+        }
         Long gaps = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM attempt_activity_events "
                         + "WHERE attempt_id = ? AND event_type = 'MONITORING_GAP'",
                 Long.class, attemptId);
         String lastEvent = queryLastCameraEvent(attemptId);
-        // Close any still-open trailing period at the WINDOW end (F02) —
-        // submittedAt for finished attempts, now for a live one.
-        if (!connected.isEmpty() && connected.get(connected.size() - 1).to() == null) {
-            closeLast(connected, windowEnd);
-        }
-        if (!disconnected.isEmpty() && disconnected.get(disconnected.size() - 1).to() == null) {
-            closeLast(disconnected, windowEnd);
-        }
-        // Honesty guards: clamp into [windowStart, windowEnd] and drop
-        // degenerate/overlapping artifacts (tied or out-of-order events).
         List<CameraReport.Period> sanitizedConnected =
                 sanitizePeriods(connected, windowStart, windowEnd);
         List<CameraReport.Period> sanitizedDisconnected =
@@ -338,23 +355,29 @@ public class MonitoringReportService {
         if (merged != null) {
             coveredMs += merged[1] - merged[0];
         }
-        // Gap list over the window (leading + between + trailing holes).
-        Instant cursor = windowStart;
-        for (var seg : complete) {
-            Instant segEnd = seg.endedAt() != null ? seg.endedAt() : seg.startedAt();
-            if (seg.startedAt().isAfter(cursor)) {
-                addGap(gaps, cursor, seg.startedAt());
-            }
-            if (segEnd.isAfter(cursor)) {
-                cursor = segEnd;
+        // F13: gaps derive from the SAME clamped merged intervals as the
+        // coverage numerator — segment timestamps outside the monitoring
+        // window can never emit gaps beyond its bounds.
+        long windowMs = Duration.between(windowStart, windowEnd).toMillis();
+        long cursorMs = 0;
+        long[] span = null;
+        for (long[] iv : intervals) {
+            if (span == null || iv[0] > span[1]) {
+                // Leading hole (span==null, cursorMs==0 → window start) and
+                // between-hole both emit here.
+                addGapMs(gaps, windowStart, cursorMs, iv[0]);
+                span = iv;
+                cursorMs = iv[1];
+            } else if (iv[1] > span[1]) {
+                span[1] = iv[1];
+                cursorMs = iv[1];
             }
         }
-        if (cursor.isBefore(windowEnd)) {
-            addGap(gaps, cursor, windowEnd);
+        if (cursorMs < windowMs) {
+            addGap(gaps, windowStart.plusMillis(cursorMs), windowEnd);
         }
         // Attempt coverage = covered union / monitoring window (F06
         // semantics). A zero-length window with any coverage reads as 1.0.
-        long windowMs = Duration.between(windowStart, windowEnd).toMillis();
         double coverage = windowMs <= 0
                 ? (complete.isEmpty() ? 0.0 : 1.0)
                 : Math.max(0.0, Math.min(1.0, coveredMs / (double) windowMs));
@@ -404,7 +427,22 @@ public class MonitoringReportService {
                 LIMITS_NOTE);
     }
 
-    private List<EvidenceRow> evidenceRows(Long sessionId, Long attemptId) {
+    private long evidenceTotalOf(Long attemptId) {
+        Long n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_evidence WHERE attempt_id = ?",
+                Long.class, attemptId);
+        return n == null ? 0 : n;
+    }
+
+    private long reviewTotalOf(Long attemptId) {
+        Long n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM monitoring_alert_reviews r WHERE r.alert_id IN "
+                        + "(SELECT id FROM monitoring_ai_alerts WHERE attempt_id = ?)",
+                Long.class, attemptId);
+        return n == null ? 0 : n;
+    }
+
+    private List<EvidenceRow> evidencePage(Long sessionId, Long attemptId) {
         List<EvidenceRow> rows = new ArrayList<>();
         jdbc.query("""
                 SELECT id, kind, status, provenance, captured_at, window_start, window_end,
@@ -437,7 +475,7 @@ public class MonitoringReportService {
         return rows;
     }
 
-    private List<ReviewRow> reviewRows(Long attemptId) {
+    private List<ReviewRow> reviewPage(Long attemptId) {
         List<ReviewRow> rows = new ArrayList<>();
         jdbc.query("""
                 SELECT r.id, r.alert_id, r.action, r.note, u.display_name AS reviewer,
@@ -474,17 +512,21 @@ public class MonitoringReportService {
                         MonitoringErrorCode.MONITORING_ACCESS_DENIED));
     }
 
+    /** Gap between two window-relative offsets (ms), window-clamped by
+     *  construction — the interval list is already clamped to the window. */
+    private void addGapMs(List<RecordingReport.Gap> gaps, Instant windowStart,
+            long fromMs, long toMs) {
+        if (toMs <= fromMs) {
+            return;
+        }
+        addGap(gaps, windowStart.plusMillis(fromMs), windowStart.plusMillis(toMs));
+    }
+
     private void addGap(List<RecordingReport.Gap> gaps, Instant from, Instant to) {
         double seconds = Duration.between(from, to).toMillis() / 1000.0;
         if (seconds > GAP_THRESHOLD_SECONDS) {
             gaps.add(new RecordingReport.Gap(from, to, round2(seconds)));
         }
-    }
-
-    private void closeLast(List<CameraReport.Period> periods, Instant to) {
-        int last = periods.size() - 1;
-        CameraReport.Period open = periods.get(last);
-        periods.set(last, new CameraReport.Period(open.from(), to));
     }
 
     @Nullable
