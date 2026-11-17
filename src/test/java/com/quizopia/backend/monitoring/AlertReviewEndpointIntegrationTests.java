@@ -17,7 +17,6 @@ import com.quizopia.backend.attempt.dto.StartAttemptRequest;
 import com.quizopia.backend.testsupport.MutableClock;
 import com.quizopia.backend.testsupport.PostgresTestContainerConfiguration;
 import com.quizopia.backend.testsupport.TestClockConfig;
-import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -64,8 +63,8 @@ class AlertReviewEndpointIntegrationTests {
                 .build();
         base = Instant.parse("2026-11-17T12:00:00Z");
         clock.setInstant(base);
-        teacherId = newTeacherUser(jdbc, "endpointteacher");
-        studentId = newUser(jdbc, "endpointstudent");
+        teacherId = newTeacherUser(jdbc, "endpointteacher" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        studentId = newUser(jdbc, "endpointstudent" + "-" + UUID.randomUUID().toString().substring(0, 8));
         sessionId = insertOpenSession(jdbc, teacherId, base);
         jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) "
                 + "VALUES (?,?,?)", studentId, sessionId, teacherId);
@@ -99,8 +98,7 @@ class AlertReviewEndpointIntegrationTests {
     }
 
     @Test
-    @Transactional
-    void reviewRoundTripOverHttp() throws Exception {
+        void reviewRoundTripOverHttp() throws Exception {
         mockMvc.perform(post("/api/monitoring/alerts/{alertId}/reviews", alertId)
                         .with(jwt().jwt(j -> j.claim("sub", String.valueOf(teacherId))))
                         .header("Idempotency-Key", UUID.randomUUID().toString())
@@ -120,8 +118,7 @@ class AlertReviewEndpointIntegrationTests {
     }
 
     @Test
-    @Transactional
-    void versionConflictMapsTo409WithCode() throws Exception {
+        void versionConflictMapsTo409WithCode() throws Exception {
         // version already moved to 1 by a first review
         jdbc.update("INSERT INTO monitoring_alert_reviews "
                 + "(alert_id, reviewer_user_id, action, review_version, idempotency_key) "
@@ -142,8 +139,7 @@ class AlertReviewEndpointIntegrationTests {
     }
 
     @Test
-    @Transactional
-    void missingIdempotencyKeyRejected() throws Exception {
+        void missingIdempotencyKeyRejected() throws Exception {
         mockMvc.perform(post("/api/monitoring/alerts/{alertId}/reviews", alertId)
                         .with(jwt().jwt(j -> j.claim("sub", String.valueOf(teacherId))))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -152,8 +148,7 @@ class AlertReviewEndpointIntegrationTests {
     }
 
     @Test
-    @Transactional
-    void studentGets403OverHttp() throws Exception {
+        void studentGets403OverHttp() throws Exception {
         mockMvc.perform(post("/api/monitoring/alerts/{alertId}/reviews", alertId)
                         .with(jwt().jwt(j -> j.claim("sub", String.valueOf(studentId))))
                         .header("Idempotency-Key", UUID.randomUUID().toString())

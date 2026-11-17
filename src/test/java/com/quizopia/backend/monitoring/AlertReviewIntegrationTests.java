@@ -31,7 +31,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * P4-E alert review integration tests (issue #96, ADR-010 §2.2): append-only
@@ -41,7 +40,6 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
-@Transactional
 class AlertReviewIntegrationTests {
 
     @Autowired private AlertReviewService reviewService;
@@ -63,9 +61,9 @@ class AlertReviewIntegrationTests {
     void setUp() {
         base = Instant.parse("2026-11-17T09:00:00Z");
         clock.setInstant(base);
-        teacherId = newTeacherUser(jdbc, "revteacher");
-        otherTeacherId = newTeacherUser(jdbc, "revother");
-        studentId = newUser(jdbc, "revstudent");
+        teacherId = newTeacherUser(jdbc, "revteacher" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        otherTeacherId = newTeacherUser(jdbc, "revother" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        studentId = newUser(jdbc, "revstudent" + "-" + UUID.randomUUID().toString().substring(0, 8));
         sessionId = insertOpenSession(jdbc, teacherId, base);
         jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) "
                 + "VALUES (?,?,?)", studentId, sessionId, teacherId);
@@ -259,10 +257,10 @@ class AlertReviewIntegrationTests {
         assertThat(history.history().get(1).version()).isEqualTo(2);
         // note trimmed
         assertThat(history.history().get(1).note()).isEqualTo("artefact");
-        assertThat(history.history().get(1).reviewerName()).isEqualTo("REVTEACHER");
+        assertThat(history.history().get(1).reviewerName()).startsWith("REVTEACHER");
         assertThat(history.currentReview().status()).isEqualTo("FALSE_POSITIVE");
         assertThat(history.currentReview().version()).isEqualTo(2);
-        assertThat(history.currentReview().reviewerName()).isEqualTo("REVTEACHER");
+        assertThat(history.currentReview().reviewerName()).startsWith("REVTEACHER");
     }
 
     @Test

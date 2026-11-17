@@ -102,3 +102,14 @@ reconnect backfill by refetch.
 - **Presigned URLs inside the report** — bypasses per-mint audit + TTL budgeting of P4-D.
 - **New STOMP monitoring topic** — interceptor surface + payload pressure for zero gain over
   the existing invalidation ping.
+
+## 5. Amendment — pre-merge hardening (2026-11-17 gate)
+
+F01–F09 from the independent gate audit are closed in the PR branch (see
+docs/phase4/P4E_MONITORING_DASHBOARD_DESIGN.md §7 for the per-finding
+dispositions). Two decisions worth restating: the review append moved to a
+REQUIRES_NEW-transaction orchestrator (an aborted PostgreSQL transaction can
+never serve the idempotency replay), and coverage/camera-period semantics are
+anchored to the attempt's monitoring window rather than report-read time.
+Activity/review retention sweeping is explicitly deferred (P4-A scope, product
+decision — see design §7).

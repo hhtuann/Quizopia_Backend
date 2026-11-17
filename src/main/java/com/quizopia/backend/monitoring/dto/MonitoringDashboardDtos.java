@@ -33,7 +33,10 @@ public final class MonitoringDashboardDtos {
 
         public record CameraOverview(
                 boolean policyRequired,
+                /** Open transport connection (presence), per user. */
                 int connected,
+                /** Connected AND a verified published track (F04). */
+                int publishing,
                 int reconnecting,
                 int idle,
                 int revoked) {
@@ -64,11 +67,20 @@ public final class MonitoringDashboardDtos {
         }
     }
 
-    /** {@code GET /api/exam-sessions/{id}/monitoring/participants}. */
+    /**
+     * {@code GET /api/exam-sessions/{id}/monitoring/participants}.
+     *
+     * @param teacherSubscriptionState honestly {@code NOT_AVAILABLE}: the
+     *     backend cannot observe which camera the TEACHER's browser is
+     *     subscribed to (LiveKit subscribe state is client-side; the
+     *     backend never fabricates it — F04). The teacher UI derives this
+     *     from its own room handle.
+     */
     public record MonitoringParticipantsResponse(
             Long sessionId,
             List<Item> items,
-            @Nullable String nextCursor) {
+            @Nullable String nextCursor,
+            String teacherSubscriptionState) {
 
         public record Item(
                 Long attemptId,
@@ -92,14 +104,24 @@ public final class MonitoringDashboardDtos {
                     String state,
                     @Nullable Instant connectedSince,
                     @Nullable Instant lastVerifiedAt,
-                    @Nullable String mediaIdentity) {
+                    @Nullable String mediaIdentity,
+                    /** F04: verified published track on the open connection. */
+                    boolean publishing,
+                    /** F04: transport presence (open connection). */
+                    boolean online) {
             }
 
             public record AiState(
+                    /** Session policy flag — false ⇒ the whole AI block is DISABLED. */
+                    boolean enabled,
                     @Nullable Instant lastDetectionAt,
                     int openAlerts,
                     int totalAlerts,
-                    int unreviewedAlerts) {
+                    int unreviewedAlerts,
+                    /** F04: raw accepted detections — separate from alerts. */
+                    long detections,
+                    /** F04: quarantined (late/dup) — an honest DEGRADED signal. */
+                    long quarantined) {
             }
 
             public record RecordingState(

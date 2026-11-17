@@ -28,7 +28,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * P4-E attempt monitoring report tests (issue #96, ADR-010 §2.4): three-layer
@@ -38,7 +37,6 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
-@Transactional
 class MonitoringReportIntegrationTests {
 
     @Autowired private MonitoringReportService reportService;
@@ -61,9 +59,9 @@ class MonitoringReportIntegrationTests {
     void setUp() {
         base = Instant.parse("2026-11-17T11:00:00Z");
         clock.setInstant(base.plusSeconds(600));
-        teacherId = newTeacherUser(jdbc, "repteacher");
-        otherTeacherId = newTeacherUser(jdbc, "repother");
-        studentId = newUser(jdbc, "repstudent");
+        teacherId = newTeacherUser(jdbc, "repteacher" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        otherTeacherId = newTeacherUser(jdbc, "repother" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        studentId = newUser(jdbc, "repstudent" + "-" + UUID.randomUUID().toString().substring(0, 8));
         sessionId = insertOpenSession(jdbc, teacherId, base);
         jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) "
                 + "VALUES (?,?,?)", studentId, sessionId, teacherId);
@@ -135,11 +133,12 @@ class MonitoringReportIntegrationTests {
                 + "SELECT ?, id, 1, '{}'::jsonb, ? FROM attempt_questions WHERE attempt_id = ? "
                 + "ORDER BY id LIMIT 1", attemptId, Timestamp.from(base.plusSeconds(10)), attemptId);
 
-        // camera lifecycle: connected 10s → disconnected 10s → reconnected
-        activity("CAMERA_CONNECTED", base.plusSeconds(10));
-        activity("CAMERA_DISCONNECTED", base.plusSeconds(20));
-        activity("CAMERA_RECONNECTED", base.plusSeconds(30));
-        activity("MONITORING_GAP", base.plusSeconds(35));
+        // camera lifecycle AFTER the attempt's real start (setUp clock is
+        // base+600 — periods are clamped to [startedAt, windowEnd] per F02)
+        activity("CAMERA_CONNECTED", base.plusSeconds(610));
+        activity("CAMERA_DISCONNECTED", base.plusSeconds(620));
+        activity("CAMERA_RECONNECTED", base.plusSeconds(630));
+        activity("MONITORING_GAP", base.plusSeconds(635));
 
         // AI: 3 raw detections, 1 quarantined, ONE grouped window
         insertDetections(3, "PHONE_OBSERVED");
@@ -167,10 +166,12 @@ class MonitoringReportIntegrationTests {
         insertEvidence("SNAPSHOT", "EXPIRED", true);
         insertEvidence("CLIP", "FAILED", false);
 
-        // two COMPLETE segments with a 10s hole > 2s threshold
-        insertJob("COMPLETE", base.plusSeconds(60), base.plusSeconds(90));
-        insertJob("COMPLETE", base.plusSeconds(100), base.plusSeconds(130));
-        insertJob("FAILED", base.plusSeconds(140), base.plusSeconds(150));
+        // two COMPLETE segments INSIDE the monitoring window (600→800) with
+        // a 10s hole between them; FAILED excluded everywhere (F06: the gap
+        // list covers leading + between + trailing holes of the window).
+        insertJob("COMPLETE", base.plusSeconds(650), base.plusSeconds(680));
+        insertJob("COMPLETE", base.plusSeconds(690), base.plusSeconds(720));
+        insertJob("FAILED", base.plusSeconds(730), base.plusSeconds(740));
 
         // close the attempt + session — the report must survive both
         // (submitted_at AFTER every fixture event and the attempt's real
@@ -208,16 +209,24 @@ class MonitoringReportIntegrationTests {
         assertThat(report.camera().neverConnected()).isFalse();
         assertThat(report.camera().connectedPeriods()).hasSize(2);
         assertThat(report.camera().connectedPeriods().get(0).from())
-                .isEqualTo(base.plusSeconds(10));
+                .isEqualTo(base.plusSeconds(610));
         assertThat(report.camera().disconnectPeriods()).hasSize(2);
         assertThat(report.camera().monitoringGaps()).isEqualTo(1);
         assertThat(report.camera().lastEvent()).isEqualTo("CAMERA_RECONNECTED");
 
-        // recording: two COMPLETE segments, one 10s gap, FAILED excluded
+        // recording: FAILED excluded; gaps = leading 50s + between 10s +
+        // trailing 80s (window 600→800, coverage ends at 720) — F06
+        // semantics relative to the MONITORING WINDOW, exact values.
         assertThat(report.recording().segments()).hasSize(3);
-        assertThat(report.recording().gaps()).hasSize(1);
-        assertThat(report.recording().gaps().get(0).seconds()).isEqualTo(10.0);
-        assertThat(report.recording().coverageRatio()).isBetween(0.0, 1.0);
+        assertThat(report.recording().gaps()).hasSize(3);
+        assertThat(report.recording().gaps().stream()
+                .filter(g -> g.seconds() == 10.0).count()).isEqualTo(1);
+        assertThat(report.recording().gaps().stream()
+                .filter(g -> g.seconds() == 50.0).count()).isEqualTo(1);
+        assertThat(report.recording().gaps().stream()
+                .filter(g -> g.seconds() == 80.0).count()).isEqualTo(1);
+        // covered union = 30+30s of a 200s window — exact, not just [0,1]
+        assertThat(report.recording().coverageRatio()).isEqualTo(0.3);
 
         assertThat(report.reviews()).hasSize(1);
         assertThat(report.reviews().get(0).note()).isEqualTo("artefact");
@@ -271,6 +280,28 @@ class MonitoringReportIntegrationTests {
         assertThatThrownBy(() -> reportService.report(teacherId, 999999L))
                 .satisfies(e -> assertThat(((MonitoringException) e).getErrorCode())
                         .isEqualTo(MonitoringErrorCode.MONITORING_ATTEMPT_NOT_FOUND));
+    }
+
+    @Test
+    void cameraPeriodsNeverExtendBeyondSubmittedAttemptF02() {
+        // Attempt still IN_PROGRESS with an open connected period; submitted
+        // 24h BEFORE the report is read — the trailing period must end at
+        // submittedAt, never at the report's now (F02).
+        activity("CAMERA_CONNECTED", base.plusSeconds(610));
+        Instant submitted = base.plusSeconds(700);
+        jdbc.update("UPDATE attempts SET status='SUBMITTED', submitted_at=?, "
+                + "submission_idempotency_key=? WHERE id=?",
+                Timestamp.from(submitted), "f02-" + attemptId, attemptId);
+        clock.advance(java.time.Duration.ofHours(24));
+
+        var report = reportService.report(teacherId, attemptId);
+        assertThat(report.camera().connectedPeriods()).hasSize(1);
+        var period = report.camera().connectedPeriods().get(0);
+        assertThat(period.from()).isEqualTo(base.plusSeconds(610));
+        assertThat(period.to()).as("bounded by submittedAt, not report-now")
+                .isEqualTo(submitted);
+        // Coverage relative to the attempt window, not the 24h-since clock.
+        assertThat(report.monitoringWindow().to()).isEqualTo(submitted);
     }
 
     @Test

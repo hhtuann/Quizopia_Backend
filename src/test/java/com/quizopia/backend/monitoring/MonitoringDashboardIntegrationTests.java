@@ -31,7 +31,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * P4-E dashboard read tests (issue #95, ADR-010 §2.3): overview counters,
@@ -41,7 +40,6 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest
 @ActiveProfiles("test")
 @Import({PostgresTestContainerConfiguration.class, TestClockConfig.class})
-@Transactional
 class MonitoringDashboardIntegrationTests {
 
     @Autowired private MonitoringDashboardService dashboard;
@@ -65,11 +63,11 @@ class MonitoringDashboardIntegrationTests {
     void setUp() {
         base = Instant.parse("2026-11-17T10:00:00Z");
         clock.setInstant(base.plusSeconds(600));
-        teacherId = newTeacherUser(jdbc, "dashteacher");
-        otherTeacherId = newTeacherUser(jdbc, "dashother");
-        connectedStudentId = newUser(jdbc, "dashconnected");
-        idleStudentId = newUser(jdbc, "dashidle");
-        noBindingStudentId = newUser(jdbc, "dashnobinding");
+        teacherId = newTeacherUser(jdbc, "dashteacher" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        otherTeacherId = newTeacherUser(jdbc, "dashother" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        connectedStudentId = newUser(jdbc, "dashconnected" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        idleStudentId = newUser(jdbc, "dashidle" + "-" + UUID.randomUUID().toString().substring(0, 8));
+        noBindingStudentId = newUser(jdbc, "dashnobinding" + "-" + UUID.randomUUID().toString().substring(0, 8));
         sessionId = insertOpenSession(jdbc, teacherId, base);
         for (long sid : new long[] {connectedStudentId, idleStudentId, noBindingStudentId}) {
             jdbc.update("INSERT INTO exam_session_participants (user_id, exam_session_id, added_by) "
@@ -202,7 +200,7 @@ class MonitoringDashboardIntegrationTests {
         assertThat(connected.recording().mode()).isEqualTo("ROLLING");
         assertThat(connected.recording().completeJobs()).isEqualTo(1);
         assertThat(connected.evidence().snapshots()).isEqualTo(1);
-        assertThat(connected.displayName()).isEqualTo("DASHCONNECTED");
+        assertThat(connected.displayName()).startsWith("DASHCONNECTED");
 
         var idle = response.items().stream()
                 .filter(i -> i.attemptId().equals(idleAttempt)).findFirst().orElseThrow();

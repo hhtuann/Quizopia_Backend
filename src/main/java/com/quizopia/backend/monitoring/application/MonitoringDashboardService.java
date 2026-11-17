@@ -75,7 +75,7 @@ public class MonitoringDashboardService {
         // Legacy sessions may have NO policy row (policyOf treats that as
         // all-OFF) — the overview must not 500 for them.
         Boolean aiFlag = jdbc.queryForObject(
-                "SELECT COALESCE((SELECT ai_detection_enabled "
+                "SELECT COALESCE((SELECT ai_detection_enabled AND monitoring_enabled "
                         + "FROM session_monitoring_policies WHERE exam_session_id = ?), false)",
                 Boolean.class, sessionId);
         boolean aiEnabled = Boolean.TRUE.equals(aiFlag);
@@ -93,18 +93,11 @@ public class MonitoringDashboardService {
         int graded = countOf(attemptCounts, "GRADED");
 
         Map<String, Integer> cameraStates = cameraStatesByUser(sessionId);
-        int connected = 0;
-        int reconnecting = 0;
-        int idle = 0;
-        int revoked = 0;
-        for (int state : cameraStates.values()) {
-            switch (state) {
-                case 1 -> connected++;
-                case 2 -> reconnecting++;
-                case 3 -> revoked++;
-                default -> idle++;
-            }
-        }
+        int connected = cameraStates.getOrDefault("CONNECTED", 0);
+        int reconnecting = cameraStates.getOrDefault("RECONNECTING", 0);
+        int idle = cameraStates.getOrDefault("IDLE", 0);
+        int revoked = cameraStates.getOrDefault("REVOKED", 0);
+        int publishing = cameraStates.getOrDefault("PUBLISHING", 0);
 
         Map<String, Long> alertCounts = new HashMap<>();
         jdbc.query("""
@@ -149,7 +142,8 @@ public class MonitoringDashboardService {
                 new MonitoringOverviewResponse.AttemptsOverview(
                         inProgress + submitted + graded, inProgress, submitted, graded),
                 new MonitoringOverviewResponse.CameraOverview(
-                        policy.monitoringEnabled(), connected, reconnecting, idle, revoked),
+                        policy.monitoringEnabled(), connected, publishing, reconnecting,
+                        idle, revoked),
                 new MonitoringOverviewResponse.AiOverview(
                         aiEnabled, openAlerts, closedAlerts, unreviewedAlerts,
                         lastDetectionAt),
@@ -170,7 +164,10 @@ public class MonitoringDashboardService {
     public MonitoringParticipantsResponse participants(Long userId, Long sessionId,
             String cursor, int limit, String status, String cameraState, String reviewStatus) {
         requireTeacherReader(userId, sessionId);
-        var policy = policyReader.policyOf(sessionId);
+        Boolean aiEnabled = jdbc.queryForObject(
+                "SELECT COALESCE((SELECT ai_detection_enabled AND monitoring_enabled "
+                        + "FROM session_monitoring_policies WHERE exam_session_id = ?), false)",
+                Boolean.class, sessionId);
 
         String statusFilter = normalizeEnum(status, "status",
                 List.of("IN_PROGRESS", "SUBMITTED", "GRADED"));
@@ -182,168 +179,192 @@ public class MonitoringDashboardService {
         int pageSize = normalizeLimit(limit);
         Long cursorId = decodeCursor(cursor);
 
-        // Page of attempts (attemptId DESC keyset) — the join anchor.
+        // F03: EVERY filter runs server-side in the keyset query — a page
+        // is only attempts that match, so filtered pagination can never
+        // surface a false "no participants" while matches exist later.
+        // F07: camera state resolves from the user's LATEST binding only
+        // (active_from DESC, id DESC) — historical bindings never override.
+        // F04: transport (connection open) vs publishing (verified track)
+        // vs presence are separate columns; AI liveness (detections,
+        // quarantined, lastDetectionAt) is separate from alert rollups.
+        // One lateral query — no per-row N+1.
         StringBuilder sql = new StringBuilder("""
                 SELECT a.id, a.user_id, u.display_name, a.attempt_number, a.status,
-                       a.started_at, a.deadline_at, a.submitted_at
-                FROM attempts a JOIN users u ON u.id = a.user_id
+                       a.started_at, a.deadline_at, a.submitted_at,
+                       last_act.last_activity_at,
+                       cam.media_identity, cam.connected_at, cam.last_verified_at,
+                       cam.track_sid, cam.active_to, cam.revoked_at, cam.binding_attempt_status,
+                       ai.total_alerts, ai.open_alerts, ai.unreviewed_alerts,
+                       ai.distinct_reviewed, ai.reviewed_state,
+                       det.detections, det.quarantined, det.last_detection_at,
+                       rec.active_jobs, rec.complete_jobs, rec.failed_jobs,
+                       ev.snapshots, ev.clips
+                FROM attempts a
+                JOIN users u ON u.id = a.user_id
+                LEFT JOIN LATERAL (SELECT MAX(e.server_received_at) AS last_activity_at
+                                   FROM attempt_activity_events e
+                                   WHERE e.attempt_id = a.id) last_act ON true
+                LEFT JOIN LATERAL (
+                    SELECT b.media_identity, cc.connected_at, cc.last_verified_at,
+                           cc.track_sid, b.active_to, b.revoked_at,
+                           ba.status AS binding_attempt_status
+                    FROM monitoring_media_bindings b
+                    LEFT JOIN monitoring_camera_connections cc
+                      ON cc.binding_id = b.id AND cc.disconnected_at IS NULL
+                    LEFT JOIN attempts ba ON ba.id = b.attempt_id
+                    WHERE b.exam_session_id = a.exam_session_id AND b.user_id = a.user_id
+                    ORDER BY b.active_from DESC, b.id DESC
+                    LIMIT 1) cam ON true
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) AS total_alerts,
+                           COUNT(*) FILTER (WHERE status = 'OPEN') AS open_alerts,
+                           COUNT(*) FILTER (WHERE review_status = 'UNREVIEWED') AS unreviewed_alerts,
+                           COUNT(DISTINCT review_status)
+                               FILTER (WHERE review_status <> 'UNREVIEWED') AS distinct_reviewed,
+                           MIN(review_status)
+                               FILTER (WHERE review_status <> 'UNREVIEWED') AS reviewed_state
+                    FROM monitoring_ai_alerts al WHERE al.attempt_id = a.id) ai ON true
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FILTER (WHERE quarantined = false) AS detections,
+                           COUNT(*) FILTER (WHERE quarantined = true) AS quarantined,
+                           MAX(observed_at) FILTER (WHERE quarantined = false) AS last_detection_at
+                    FROM monitoring_ai_detections d WHERE d.attempt_id = a.id) det ON true
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FILTER (WHERE status IN ('STARTING','ACTIVE','ENDING')) AS active_jobs,
+                           COUNT(*) FILTER (WHERE status = 'COMPLETE') AS complete_jobs,
+                           COUNT(*) FILTER (WHERE status IN ('FAILED','ABORTED')) AS failed_jobs
+                    FROM monitoring_recording_jobs r WHERE r.attempt_id = a.id) rec ON true
+                LEFT JOIN LATERAL (
+                    SELECT COUNT(*) FILTER (WHERE kind = 'SNAPSHOT') AS snapshots,
+                           COUNT(*) FILTER (WHERE kind = 'CLIP') AS clips
+                    FROM monitoring_evidence ev2 WHERE ev2.attempt_id = a.id) ev ON true
                 WHERE a.exam_session_id = ?
                 """);
-        if (statusFilter != null) {
-            sql.append(" AND a.status = ?");
-        }
-        if (cursorId != null) {
-            sql.append(" AND a.id < ?");
-        }
-        sql.append(" ORDER BY a.id DESC LIMIT ?");
         List<Object> args = new ArrayList<>();
         args.add(sessionId);
         if (statusFilter != null) {
+            sql.append(" AND a.status = ?");
             args.add(statusFilter);
         }
         if (cursorId != null) {
+            sql.append(" AND a.id < ?");
             args.add(cursorId);
         }
-        args.add(pageSize + 1);
-        List<Long> attemptIds = jdbc.query(sql.toString(),
-                (rs, n) -> rs.getLong("id"), args.toArray());
-        boolean hasNext = attemptIds.size() > pageSize;
-        List<Long> page = hasNext ? attemptIds.subList(0, pageSize) : attemptIds;
-
-        List<MonitoringParticipantsResponse.Item> items = new ArrayList<>();
-        for (Long attemptId : page) {
-            items.add(loadItem(attemptId, policy));
+        if (cameraFilter != null) {
+            sql.append(" AND ").append(CAMERA_STATE_CASE).append(" = ?");
+            args.add(cameraFilter);
         }
+        if (reviewFilter != null) {
+            if ("REVIEWED".equals(reviewFilter)) {
+                sql.append(" AND ").append(REVIEW_AGG_CASE).append(" <> 'UNREVIEWED'");
+            } else {
+                sql.append(" AND ").append(REVIEW_AGG_CASE).append(" = ?");
+                args.add(reviewFilter);
+            }
+        }
+        sql.append(" ORDER BY a.id DESC LIMIT ?");
+        args.add(pageSize + 1);
 
-        // Post-filters narrow within the page (deterministic under the
-        // attemptId cursor — filters never reorder, they only drop rows).
-        List<MonitoringParticipantsResponse.Item> filtered = items.stream()
-                .filter(i -> cameraFilter == null || i.camera().state().equals(cameraFilter))
-                .filter(i -> reviewFilter == null || matchesReview(i.reviewStatus(), reviewFilter))
-                .toList();
-
-        String nextCursor = hasNext && !page.isEmpty()
-                ? String.valueOf(page.get(page.size() - 1))
+        var policy = policyReader.policyOf(sessionId);
+        String mode = policy.fullRecordingEnabled() ? "FULL"
+                : policy.rollingBufferActive() ? "ROLLING" : "NONE";
+        List<MonitoringParticipantsResponse.Item> page = jdbc.query(sql.toString(),
+                (rs, n) -> toItem(rs, mode, Boolean.TRUE.equals(aiEnabled)),
+                args.toArray());
+        boolean hasNext = page.size() > pageSize;
+        List<MonitoringParticipantsResponse.Item> items =
+                hasNext ? page.subList(0, pageSize) : page;
+        String nextCursor = hasNext && !items.isEmpty()
+                ? String.valueOf(items.get(items.size() - 1).attemptId())
                 : null;
-        return new MonitoringParticipantsResponse(sessionId, filtered, nextCursor);
+        return new MonitoringParticipantsResponse(sessionId, items, nextCursor,
+                "NOT_AVAILABLE");
     }
 
-    private MonitoringParticipantsResponse.Item loadItem(Long attemptId,
-            EvidencePolicyReader.MediaPolicy policy) {
-        Map<String, Object> attempt = jdbc.queryForMap(
-                "SELECT a.id, a.user_id, u.display_name, a.attempt_number, a.status, "
-                        + "a.started_at, a.deadline_at, a.submitted_at "
-                        + "FROM attempts a JOIN users u ON u.id = a.user_id WHERE a.id = ?",
-                attemptId);
-        Long sessionUserId = (Long) attempt.get("user_id");
+    /** Camera state over the latest binding (F07; cameraStatus precedent). */
+    private static final String CAMERA_STATE_CASE = """
+            CASE WHEN cam.media_identity IS NULL THEN 'NONE'
+                 WHEN cam.revoked_at IS NOT NULL THEN 'REVOKED'
+                 WHEN cam.connected_at IS NOT NULL THEN 'CONNECTED'
+                 WHEN cam.active_to IS NULL
+                      AND cam.binding_attempt_status = 'IN_PROGRESS' THEN 'RECONNECTING'
+                 ELSE 'IDLE' END""";
 
-        // Camera — latest binding of the attempt's user (per-user view; the
-        // per-binding grid stays /monitoring/camera-status). NO binding at
-        // all is the honest NONE state, distinct from IDLE (bound, offline).
-        List<Map<String, Object>> camRows = jdbc.queryForList(
-                "SELECT b.media_identity, cc.connected_at, cc.last_verified_at, "
-                        + "b.active_to, b.revoked_at, ba.status AS binding_attempt_status "
-                        + "FROM monitoring_media_bindings b "
-                        + "LEFT JOIN monitoring_camera_connections cc "
-                        + "  ON cc.binding_id = b.id AND cc.disconnected_at IS NULL "
-                        + "LEFT JOIN attempts ba ON ba.id = b.attempt_id "
-                        + "WHERE b.exam_session_id = (SELECT exam_session_id FROM attempts WHERE id = ?) "
-                        + "  AND b.user_id = ? "
-                        + "ORDER BY b.active_from DESC, b.id DESC LIMIT 1",
-                attemptId, sessionUserId);
-        Map<String, Object> cam = camRows.isEmpty() ? Map.of() : camRows.get(0);
-        Instant connectedSince = instant(cam.get("connected_at"));
-        Instant lastVerifiedAt = instant(cam.get("last_verified_at"));
-        String mediaIdentity = (String) cam.get("media_identity");
+    /** Review aggregate (per-state when unanimous, REVIEWED when mixed). */
+    private static final String REVIEW_AGG_CASE = """
+            CASE WHEN ai.total_alerts IS NULL OR ai.total_alerts = 0
+                      OR ai.unreviewed_alerts > 0 THEN 'UNREVIEWED'
+                 WHEN ai.distinct_reviewed = 1 THEN ai.reviewed_state
+                 ELSE 'REVIEWED' END""";
+
+    private MonitoringParticipantsResponse.Item toItem(java.sql.ResultSet rs,
+            String recordingMode, boolean aiEnabled) throws java.sql.SQLException {
         String state;
-        if (cam.isEmpty()) {
+        if (rs.getObject("media_identity") == null) {
             state = "NONE";
-        } else if (cam.get("revoked_at") != null) {
+        } else if (rs.getTimestamp("revoked_at") != null) {
             state = "REVOKED";
-        } else if (connectedSince != null) {
+        } else if (rs.getTimestamp("connected_at") != null) {
             state = "CONNECTED";
-        } else if (cam.get("active_to") == null
-                // The BINDING's attempt drives reconnection, not the roster
-                // row's attempt (max_attempts > 1 can diverge — cameraStatus
-                // precedent).
-                && "IN_PROGRESS".equals(cam.get("binding_attempt_status"))) {
+        } else if (rs.getTimestamp("active_to") == null
+                && "IN_PROGRESS".equals(rs.getString("binding_attempt_status"))) {
             state = "RECONNECTING";
         } else {
             state = "IDLE";
         }
-
-        Map<String, Object> ai = jdbc.queryForMap(
-                "SELECT COUNT(*) AS total, "
-                        + "COUNT(*) FILTER (WHERE status = 'OPEN') AS open, "
-                        + "COUNT(*) FILTER (WHERE review_status = 'UNREVIEWED') AS unreviewed, "
-                        + "COUNT(DISTINCT review_status) FILTER ("
-                        + "    WHERE review_status <> 'UNREVIEWED') AS distinct_reviewed, "
-                        + "MIN(review_status) FILTER ("
-                        + "    WHERE review_status <> 'UNREVIEWED') AS reviewed_state "
-                        + "FROM monitoring_ai_alerts WHERE attempt_id = ?", attemptId);
-        Instant lastDetectionAt = queryInstant(
-                "SELECT MAX(observed_at) FROM monitoring_ai_detections "
-                        + "WHERE attempt_id = ? AND quarantined = false", attemptId);
-        int totalAlerts = ((Number) ai.get("total")).intValue();
-        int unreviewedAlerts = ((Number) ai.get("unreviewed")).intValue();
-        int distinctReviewed = ai.get("distinct_reviewed") == null
-                ? 0 : ((Number) ai.get("distinct_reviewed")).intValue();
-        String reviewedState = (String) ai.get("reviewed_state");
-        // Aggregate semantics (design §3.2): UNREVIEWED while ANY alert is
-        // unreviewed (or none exist); otherwise the single shared review
-        // state, or REVIEWED when the alerts carry mixed states.
+        int totalAlerts = rs.getInt("total_alerts");
+        int unreviewedAlerts = rs.getInt("unreviewed_alerts");
+        int distinctReviewed = rs.getInt("distinct_reviewed");
         String reviewStatus;
         if (totalAlerts == 0 || unreviewedAlerts > 0) {
             reviewStatus = MonitoringAiAlert.REVIEW_UNREVIEWED;
         } else if (distinctReviewed == 1) {
-            reviewStatus = reviewedState;
+            reviewStatus = rs.getString("reviewed_state");
         } else {
             reviewStatus = "REVIEWED";
         }
-
-        Map<String, Object> jobs = jdbc.queryForMap(
-                "SELECT COUNT(*) FILTER (WHERE status IN ('STARTING','ACTIVE','ENDING')) AS active, "
-                        + "COUNT(*) FILTER (WHERE status = 'COMPLETE') AS complete, "
-                        + "COUNT(*) FILTER (WHERE status IN ('FAILED','ABORTED')) AS failed "
-                        + "FROM monitoring_recording_jobs WHERE attempt_id = ?", attemptId);
-        String mode = policy.fullRecordingEnabled() ? "FULL"
-                : policy.rollingBufferActive() ? "ROLLING" : "NONE";
-
-        Map<String, Object> evidence = jdbc.queryForMap(
-                "SELECT COUNT(*) FILTER (WHERE kind = 'SNAPSHOT') AS snapshots, "
-                        + "COUNT(*) FILTER (WHERE kind = 'CLIP') AS clips "
-                        + "FROM monitoring_evidence WHERE attempt_id = ?", attemptId);
-
-        Instant lastActivityAt = queryInstant(
-                "SELECT MAX(server_received_at) FROM attempt_activity_events "
-                        + "WHERE attempt_id = ?", attemptId);
-
         return new MonitoringParticipantsResponse.Item(
-                attemptId,
-                sessionUserId,
-                (String) attempt.get("display_name"),
-                ((Number) attempt.get("attempt_number")).intValue(),
-                (String) attempt.get("status"),
-                instant(attempt.get("started_at")),
-                instant(attempt.get("deadline_at")),
-                instant(attempt.get("submitted_at")),
-                lastActivityAt,
+                rs.getLong("id"),
+                rs.getLong("user_id"),
+                rs.getString("display_name"),
+                rs.getInt("attempt_number"),
+                rs.getString("status"),
+                ts(rs.getTimestamp("started_at")),
+                ts(rs.getTimestamp("deadline_at")),
+                ts(rs.getTimestamp("submitted_at")),
+                ts(rs.getTimestamp("last_activity_at")),
                 new MonitoringParticipantsResponse.Item.CameraState(
-                        state, connectedSince, lastVerifiedAt, mediaIdentity),
+                        state,
+                        ts(rs.getTimestamp("connected_at")),
+                        ts(rs.getTimestamp("last_verified_at")),
+                        rs.getString("media_identity"),
+                        // F04: publishing = a VERIFIED published track
+                        // (track_sid on the open connection); online =
+                        // transport connected. Separate honest signals.
+                        rs.getString("track_sid") != null,
+                        "CONNECTED".equals(state)),
                 new MonitoringParticipantsResponse.Item.AiState(
-                        lastDetectionAt,
-                        ((Number) ai.get("open")).intValue(),
+                        aiEnabled,
+                        ts(rs.getTimestamp("last_detection_at")),
+                        rs.getInt("open_alerts"),
                         totalAlerts,
-                        unreviewedAlerts),
+                        unreviewedAlerts,
+                        rs.getLong("detections"),
+                        rs.getLong("quarantined")),
                 new MonitoringParticipantsResponse.Item.RecordingState(
-                        mode,
-                        ((Number) jobs.get("active")).intValue(),
-                        ((Number) jobs.get("complete")).intValue(),
-                        ((Number) jobs.get("failed")).intValue()),
+                        recordingMode,
+                        rs.getInt("active_jobs"),
+                        rs.getInt("complete_jobs"),
+                        rs.getInt("failed_jobs")),
                 new MonitoringParticipantsResponse.Item.EvidenceState(
-                        ((Number) evidence.get("snapshots")).intValue(),
-                        ((Number) evidence.get("clips")).intValue()),
+                        rs.getInt("snapshots"),
+                        rs.getInt("clips")),
                 reviewStatus);
+    }
+
+    @Nullable
+    private static Instant ts(java.sql.Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.toInstant();
     }
 
     // ------------------------------------------------------------------
@@ -351,42 +372,40 @@ public class MonitoringDashboardService {
     // ------------------------------------------------------------------
 
     /**
-     * REVIEWED is the aggregate wildcard (every alert reviewed, any state);
-     * the other values match the exact aggregate state.
+     * F07: per-USER camera state from the LATEST binding only
+     * (DISTINCT ON ... ORDER BY user, active_from DESC, id DESC) — a
+     * historical REVOKED binding can never override a newer CONNECTED one.
+     * Returns state name -> user count; also counts publishing (verified
+     * track on the open connection — F04).
      */
-    private static boolean matchesReview(String aggregate, String filter) {
-        if ("REVIEWED".equals(filter)) {
-            return !MonitoringAiAlert.REVIEW_UNREVIEWED.equals(aggregate);
-        }
-        return aggregate.equals(filter);
-    }
-
-    /** Per-USER camera state (1 CONNECTED, 2 RECONNECTING, 3 REVOKED, 0 IDLE). */
     private Map<String, Integer> cameraStatesByUser(Long sessionId) {
         Map<String, Integer> states = new HashMap<>();
         jdbc.query("""
-                SELECT b.user_id, b.media_identity,
-                       cc.connected_at, b.active_to, b.revoked_at, a.status AS attempt_status
+                SELECT DISTINCT ON (b.user_id)
+                       b.user_id, cc.connected_at, cc.track_sid, b.active_to,
+                       b.revoked_at, ba.status AS binding_attempt_status
                 FROM monitoring_media_bindings b
                 LEFT JOIN monitoring_camera_connections cc
                   ON cc.binding_id = b.id AND cc.disconnected_at IS NULL
-                LEFT JOIN attempts a ON a.id = b.attempt_id
+                LEFT JOIN attempts ba ON ba.id = b.attempt_id
                 WHERE b.exam_session_id = ?
-                ORDER BY b.active_from ASC, b.id ASC
+                ORDER BY b.user_id, b.active_from DESC, b.id DESC
                 """, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
-                    String key = rs.getString("user_id");
-                    int state;
+                    String state;
                     if (rs.getTimestamp("revoked_at") != null) {
-                        state = 3;
+                        state = "REVOKED";
                     } else if (rs.getTimestamp("connected_at") != null) {
-                        state = 1;
+                        state = "CONNECTED";
                     } else if (rs.getTimestamp("active_to") == null
-                            && "IN_PROGRESS".equals(rs.getString("attempt_status"))) {
-                        state = 2;
+                            && "IN_PROGRESS".equals(rs.getString("binding_attempt_status"))) {
+                        state = "RECONNECTING";
                     } else {
-                        state = 0;
+                        state = "IDLE";
                     }
-                    states.merge(key, state, Math::max);
+                    states.merge(state, 1, Integer::sum);
+                    if ("CONNECTED".equals(state) && rs.getString("track_sid") != null) {
+                        states.merge("PUBLISHING", 1, Integer::sum);
+                    }
                 }, sessionId);
         return states;
     }

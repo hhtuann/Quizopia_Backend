@@ -17,6 +17,9 @@ import com.quizopia.backend.monitoring.repository.MonitoringAiAlertRepository;
 import com.quizopia.backend.monitoring.repository.MonitoringAlertReviewRepository;
 import java.time.Clock;
 import java.time.Instant;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,14 @@ public class AlertReviewService {
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
+    /**
+     * F01: the ledger append (+ denorm update + timeline event) runs in its
+     * own REQUIRES_NEW transaction; a lost unique-constraint race rolls it
+     * back atomically and the idempotency probe below runs on the caller's
+     * clean (transaction-less) connection.
+     */
+    private final TransactionTemplate appendTx;
+
     public AlertReviewService(AttemptAuthorizationService auth,
             ExamSessionRepository sessionRepo,
             MonitoringAiAlertRepository alertRepo,
@@ -62,7 +73,8 @@ public class AlertReviewService {
             UserRepository userRepo,
             ActivityEventRecorder activity,
             ObjectMapper objectMapper,
-            Clock clock) {
+            Clock clock,
+            PlatformTransactionManager transactionManager) {
         this.auth = auth;
         this.sessionRepo = sessionRepo;
         this.alertRepo = alertRepo;
@@ -71,6 +83,9 @@ public class AlertReviewService {
         this.activity = activity;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.appendTx = template;
     }
 
     /**
@@ -84,7 +99,6 @@ public class AlertReviewService {
      *   <li>Same key, different alert ⇒ generic rejection (key reuse).</li>
      * </ul>
      */
-    @Transactional
     public AlertReviewResponse review(Long userId, Long alertId, int expectedVersion,
             String action, String note, UUID idempotencyKey) {
         requireReviewer(userId, alertId);
@@ -114,14 +128,32 @@ public class AlertReviewService {
                             + alert.getReviewVersion() + "); reload and retry");
         }
 
-        MonitoringAlertReview appended = MonitoringAlertReview.append(alert, userId,
-                normalizedAction, normalizedNote, idempotencyKey);
+        // F01: the append runs in its own REQUIRES_NEW transaction. When a
+        // racing append wins a unique constraint, the loser's append
+        // transaction rolls back COMPLETELY (no half-marked outer tx, no
+        // UnexpectedRollbackException on commit) and this method — which has
+        // NO transaction of its own — probes the winner on a clean
+        // connection and returns the replay/conflict verdict.
         try {
-            reviewRepo.saveAndFlush(appended);
+            return appendTx.execute(status -> {
+                MonitoringAiAlert locked = alertRepo.findById(alertId)
+                        .orElseThrow(() -> new MonitoringException(
+                                MonitoringErrorCode.MONITORING_ALERT_NOT_FOUND));
+                MonitoringAlertReview appended = MonitoringAlertReview.append(locked, userId,
+                        normalizedAction, normalizedNote, idempotencyKey);
+                reviewRepo.saveAndFlush(appended);
+                Instant reviewedAt = Instant.now(clock);
+                locked.applyReview(appended.getReviewVersion(),
+                        reviewStatusOf(normalizedAction), userId, reviewedAt);
+                alertRepo.saveAndFlush(locked);
+                recordReviewEvent(locked, appended);
+                return new AlertReviewResponse(alertId, appended.getReviewVersion(),
+                        reviewStatusOf(normalizedAction), normalizedAction, normalizedNote,
+                        userId, reviewedAt, false);
+            });
         } catch (DataIntegrityViolationException e) {
             // Concurrent same-key append (idempotency unique) or a lost
-            // version race ((alert_id, review_version) unique) — both are
-            // conflicts; a same-key loser replays the winner's row.
+            // version race ((alert_id, review_version) unique).
             var winner = reviewRepo.findByIdempotencyKey(idempotencyKey);
             if (winner.isPresent() && winner.get().getAlertId().equals(alertId)) {
                 return toResponse(winner.get(), true);
@@ -129,17 +161,6 @@ public class AlertReviewService {
             throw new MonitoringException(MonitoringErrorCode.MONITORING_REVIEW_VERSION_CONFLICT,
                     "Alert review was updated by another reviewer; reload and retry");
         }
-
-        Instant reviewedAt = Instant.now(clock);
-        alert.applyReview(appended.getReviewVersion(), reviewStatusOf(normalizedAction),
-                userId, reviewedAt);
-        alertRepo.saveAndFlush(alert);
-
-        recordReviewEvent(alert, appended);
-
-        return new AlertReviewResponse(alertId, appended.getReviewVersion(),
-                reviewStatusOf(normalizedAction), normalizedAction, normalizedNote, userId,
-                reviewedAt, false);
     }
 
     /** Append-only history + current denormalized state. */
