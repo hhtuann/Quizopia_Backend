@@ -233,7 +233,7 @@ class P4AMigrationMatrixTest {
                         ORDER BY installed_rank DESC LIMIT 1
                         """))
                 .as("migration chain reached V38")
-                .containsExactly("41");
+                .containsExactly("42");
     }
 
     // ==================================================================

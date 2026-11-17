@@ -46,7 +46,8 @@ public class AiAlertQueryService {
             SELECT a.id, a.attempt_id, a.user_id, u.display_name AS student_name,
                    a.alert_type, a.status, a.first_detected_at, a.last_detected_at,
                    a.detection_count, a.max_confidence, a.model_id, a.model_version,
-                   a.provenance, a.latest_payload
+                   a.provenance, a.latest_payload,
+                   a.review_status, a.review_version, a.reviewed_at
             FROM monitoring_ai_alerts a
             JOIN users u ON u.id = a.user_id
             WHERE a.exam_session_id = ?
@@ -69,10 +70,11 @@ public class AiAlertQueryService {
 
     @Transactional(readOnly = true)
     public AiAlertPageResponse alerts(Long userId, Long sessionId, String cursor,
-            int limit, String status) {
+            int limit, String status, String review) {
         requireTeacherReader(userId, sessionId);
 
         String statusFilter = normalizeStatus(status);
+        String reviewFilter = normalizeReview(review);
         int pageSize = normalizeLimit(limit);
         Long cursorId = decodeCursor(cursor);
 
@@ -80,13 +82,16 @@ public class AiAlertQueryService {
         if (statusFilter != null) {
             sql.append(" AND a.status = ?");
         }
+        if (reviewFilter != null) {
+            sql.append(" AND a.review_status = ?");
+        }
         if (cursorId != null) {
             sql.append(" AND a.id < ?");
         }
         sql.append(" ORDER BY a.id DESC LIMIT ?");
         // fetch one extra row to detect whether another page follows
 
-        Object[] args = buildArgs(sessionId, statusFilter, cursorId, pageSize + 1);
+        Object[] args = buildArgs(sessionId, statusFilter, reviewFilter, cursorId, pageSize + 1);
         List<Item> page = jdbc.query(sql.toString(), ALERT_ROW_MAPPER, args);
         boolean hasNext = page.size() > pageSize;
         List<Item> items = hasNext ? page.subList(0, pageSize) : page;
@@ -109,19 +114,37 @@ public class AiAlertQueryService {
                 .orElseThrow(() -> new MonitoringException(MonitoringErrorCode.MONITORING_ACCESS_DENIED));
     }
 
-    private static Object[] buildArgs(Long sessionId, String statusFilter, Long cursorId, int limit) {
-        int n = 1 + (statusFilter != null ? 1 : 0) + (cursorId != null ? 1 : 0) + 1;
+    private static Object[] buildArgs(Long sessionId, String statusFilter,
+            String reviewFilter, Long cursorId, int limit) {
+        int n = 1 + (statusFilter != null ? 1 : 0) + (reviewFilter != null ? 1 : 0)
+                + (cursorId != null ? 1 : 0) + 1;
         Object[] args = new Object[n];
         int i = 0;
         args[i++] = sessionId;
         if (statusFilter != null) {
             args[i++] = statusFilter;
         }
+        if (reviewFilter != null) {
+            args[i++] = reviewFilter;
+        }
         if (cursorId != null) {
             args[i++] = cursorId;
         }
         args[i] = limit;
         return args;
+    }
+
+    /** Optional review-state filter (V42 states; UNREVIEWED is the default view). */
+    private String normalizeReview(String review) {
+        if (review == null || review.isBlank()) {
+            return null;
+        }
+        String value = review.trim().toUpperCase();
+        if (!MonitoringAiAlert.REVIEW_STATES.contains(value)) {
+            throw new MonitoringException(MonitoringErrorCode.MONITORING_VALIDATION_ERROR,
+                    "review must be one of " + String.join(", ", MonitoringAiAlert.REVIEW_STATES));
+        }
+        return value;
     }
 
     private String normalizeStatus(String status) {
@@ -173,7 +196,10 @@ public class AiAlertQueryService {
             rs.getString("model_id"),
             rs.getString("model_version"),
             rs.getString("provenance"),
-            parsePayload(rs.getString("latest_payload")));
+            parsePayload(rs.getString("latest_payload")),
+            rs.getString("review_status"),
+            rs.getInt("review_version"),
+            toInstant(rs.getTimestamp("reviewed_at")));
 
     private static Instant toInstant(Timestamp ts) {
         return ts == null ? null : ts.toInstant();

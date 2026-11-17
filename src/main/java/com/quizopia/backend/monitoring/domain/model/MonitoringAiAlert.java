@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Set;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
@@ -39,6 +40,12 @@ public class MonitoringAiAlert {
     /** Live window state (V38 CHECK admits OPEN and CLOSED). */
     public static final String STATUS_OPEN = "OPEN";
     public static final String STATUS_CLOSED = "CLOSED";
+
+    /** Current human-review states (V42 CHECK) — never a misconduct verdict. */
+    public static final String REVIEW_UNREVIEWED = "UNREVIEWED";
+    public static final Set<String> REVIEW_STATES = Set.of(REVIEW_UNREVIEWED,
+            "VIEWED", "FALSE_POSITIVE", "NEEDS_FOLLOW_UP", "NOTED",
+            "REVIEWED_NO_CONCLUSION");
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -86,6 +93,21 @@ public class MonitoringAiAlert {
     @Enumerated(EnumType.STRING)
     @Column(name = "provenance", nullable = false, length = 20)
     private AiProvenance provenance;
+
+    // P4-E denormalized current review state (V42). Detector fields above
+    // are NEVER rewritten by a review — only these four move, in the same
+    // transaction as the ledger append.
+    @Column(name = "review_status", nullable = false, length = 24)
+    private String reviewStatus = REVIEW_UNREVIEWED;
+
+    @Column(name = "review_version", nullable = false)
+    private int reviewVersion = 0;
+
+    @Column(name = "reviewed_by")
+    private Long reviewedBy;
+
+    @Column(name = "reviewed_at")
+    private Instant reviewedAt;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -157,6 +179,35 @@ public class MonitoringAiAlert {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public String getReviewStatus() {
+        return reviewStatus;
+    }
+
+    public int getReviewVersion() {
+        return reviewVersion;
+    }
+
+    public Long getReviewedBy() {
+        return reviewedBy;
+    }
+
+    public Instant getReviewedAt() {
+        return reviewedAt;
+    }
+
+    /**
+     * Applies the denormalized current-review state after the ledger row is
+     * appended in the SAME transaction (AlertReviewService). Caller has
+     * already verified optimistic concurrency on {@code reviewVersion}.
+     */
+    public void applyReview(int newVersion, String action, Long reviewerUserId,
+            Instant reviewedAt) {
+        this.reviewVersion = newVersion;
+        this.reviewStatus = action;
+        this.reviewedBy = reviewerUserId;
+        this.reviewedAt = reviewedAt;
     }
 
     public Instant getUpdatedAt() {

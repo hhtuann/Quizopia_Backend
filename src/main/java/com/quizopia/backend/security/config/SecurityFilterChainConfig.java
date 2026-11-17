@@ -178,6 +178,8 @@ public class SecurityFilterChainConfig {
                         .requestMatchers("/api/exams/**").authenticated()
                         .requestMatchers("/api/exam-sessions/**").authenticated()
                         .requestMatchers("/api/attempts/**").authenticated()
+                        // P4-E review surface (module gates are service-layer)
+                        .requestMatchers("/api/monitoring/**").authenticated()
                         // Classroom API (class management + members). Permissions (CLASSROOM_CREATE /
                         // CLASSROOM_READ / CLASSROOM_UPDATE / CLASSROOM_MEMBER_*) are enforced in
                         // ClassroomService (deny-by-default); this rule only lets an authenticated JWT

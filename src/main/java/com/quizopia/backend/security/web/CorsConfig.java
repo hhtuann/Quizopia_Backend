@@ -27,7 +27,10 @@ import java.util.List;
 @Configuration
 public class CorsConfig {
 
-    private static final List<String> ALLOWED_HEADERS = List.of("Authorization", "Content-Type", "Accept", "Origin");
+    // "Idempotency-Key": P4-E alert-review POSTs carry it (design §3.3) —
+    // without an allowlist entry the browser preflight rejects the request.
+    private static final List<String> ALLOWED_HEADERS =
+            List.of("Authorization", "Content-Type", "Accept", "Origin", "Idempotency-Key");
     private static final List<String> ALLOWED_METHODS = List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     private static final long MAX_AGE_SECONDS = 3600L;
 

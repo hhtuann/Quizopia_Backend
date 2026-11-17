@@ -150,8 +150,10 @@ public class GlobalExceptionHandler implements ResponseBodyAdvice<Object> {
             com.quizopia.backend.monitoring.exception.MonitoringException ex, HttpServletRequest request) {
         com.quizopia.backend.monitoring.exception.MonitoringErrorCode code = ex.getErrorCode();
         String mpath = request != null ? request.getRequestURI() : null;
+        // MonitoringException carries either the code default or a specific
+        // safe message (constructor-set); both are client-displayable.
         ApiError mbody = new ApiError(
-                Instant.now(), code.status().value(), code.code(), code.defaultMessage(),
+                Instant.now(), code.status().value(), code.code(), ex.getMessage(),
                 mpath, MDC.get("traceId"));
         ResponseEntity.BodyBuilder mresponse = ResponseEntity.status(code.status().value());
         if (ex.getRetryAfterSeconds() > 0) {
@@ -164,7 +166,9 @@ public class GlobalExceptionHandler implements ResponseBodyAdvice<Object> {
             MethodArgumentNotValidException.class,
             MethodArgumentTypeMismatchException.class,
             ConstraintViolationException.class,
-            HttpMessageNotReadableException.class
+            HttpMessageNotReadableException.class,
+            org.springframework.web.bind.MissingRequestHeaderException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class
     })
     public ResponseEntity<ApiError> handleValidation(Exception ex, HttpServletRequest request) {
         ApiError body = apiErrorWriter.build(AuthErrorCode.AUTH_VALIDATION_ERROR, request);

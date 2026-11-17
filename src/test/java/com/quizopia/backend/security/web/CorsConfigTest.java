@@ -38,4 +38,20 @@ class CorsConfigTest {
         assertThat(CorsConfig.normalizedOrigins(properties))
                 .containsExactly("http://localhost:3000", "http://prod.example.com");
     }
+
+    @org.junit.jupiter.api.Test
+    void idempotencyKeyHeaderIsAllowedForP4EReviewPosts() {
+        // P4-E review POSTs carry Idempotency-Key (design §3.3); a missing
+        // allowlist entry makes the browser preflight reject the request —
+        // e2e regression guard.
+        var properties = new com.quizopia.backend.security.config.SecurityProperties();
+        var source = (org.springframework.web.cors.UrlBasedCorsConfigurationSource)
+                new CorsConfig().corsConfigurationSource(properties);
+        var config = source.getCorsConfigurations().get("/**");
+        assertThat(config).isNotNull();
+        assertThat(config.getAllowedHeaders())
+                .as("browser preflight accepts the Idempotency-Key header")
+                .contains("Authorization", "Content-Type", "Accept", "Origin",
+                        "Idempotency-Key");
+    }
 }
