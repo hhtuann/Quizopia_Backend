@@ -140,13 +140,16 @@ class AiAlertBackfillIntegrationTests {
         clock.advance(Duration.ofSeconds(10));
         ingestWithBox(base.plusSeconds(10), "PHONE_OBSERVED", 67, "cell phone", 0.50);
 
-        AiAlertPageResponse page = alertQueryService.alerts(teacherId, sessionId, null, 50, null);
+        AiAlertPageResponse page = alertQueryService.alerts(teacherId, sessionId, null, 50, null, null);
         AiAlertPageResponse.Item phone = page.items().stream()
                 .filter(i -> i.alertType().equals("PHONE_DETECTED")).findFirst().orElseThrow();
         assertThat(phone.detectionCount()).isEqualTo(2);
         assertThat(phone.firstDetections().get(0).get("bbox").get(0).asDouble()).isEqualTo(0.10);
         assertThat(phone.firstDetections().get(0).get("label").asString()).isEqualTo("cell phone");
         assertThat(phone.latestDetections().get(0).get("bbox").get(0).asDouble()).isEqualTo(0.50);
+        // P4-E review rollup travels next to the boxes, untouched by them.
+        assertThat(phone.reviewStatus()).isEqualTo("UNREVIEWED");
+        assertThat(phone.reviewVersion()).isZero();
 
         AiAlertPageResponse.Item screen = page.items().stream()
                 .filter(i -> i.alertType().equals("SCREEN_DETECTED")).findFirst().orElseThrow();

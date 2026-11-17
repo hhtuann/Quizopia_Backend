@@ -42,7 +42,8 @@ public class AiAlertQueryService {
     static final int MAX_PAGE_SIZE = 100;
     static final int DEFAULT_PAGE_SIZE = 50;
 
-    private static final String SELECT_PAGE = """
+    /** Package-private for the CASE-coverage test (every AiAlertType). */
+    static final String SELECT_PAGE = """
             SELECT a.id, a.attempt_id, a.user_id, u.display_name AS student_name,
                    a.alert_type, a.status, a.first_detected_at, a.last_detected_at,
                    a.detection_count, a.max_confidence, a.model_id, a.model_version,
@@ -57,6 +58,7 @@ public class AiAlertQueryService {
                      WHERE d.attempt_id = a.attempt_id
                        AND d.observed_at = a.first_detected_at
                        AND NOT d.quarantined
+                       AND d.provenance = a.provenance
                        AND d.event_type = CASE a.alert_type
                                WHEN 'PHONE_DETECTED' THEN 'PHONE_OBSERVED'
                                WHEN 'SCREEN_DETECTED' THEN 'SCREEN_OBSERVED'
