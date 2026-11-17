@@ -36,6 +36,7 @@ public class EvidenceRetentionJob {
     private final MonitoringRecordingJobRepository jobs;
     private final EvidenceStorage storage;
     private final TransactionTemplate tx;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final Clock clock;
 
     public EvidenceRetentionJob(MonitoringEvidenceRepository evidence,
@@ -43,13 +44,15 @@ public class EvidenceRetentionJob {
             MonitoringRecordingJobRepository jobs,
             EvidenceStorage storage,
             TransactionTemplate tx,
-            Clock clock) {
+            Clock clock,
+            org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.evidence = evidence;
         this.accessLog = accessLog;
         this.jobs = jobs;
         this.storage = storage;
         this.tx = tx;
         this.clock = clock;
+        this.jdbc = jdbc;
     }
 
     @Scheduled(fixedDelayString = "PT1H")
@@ -58,6 +61,11 @@ public class EvidenceRetentionJob {
         expireRecordings();
         sweepAccessLog();
         sweepStalePending();
+        try {
+            sweepActivityMetadata();
+        } catch (RuntimeException e) {
+            log.warn("activity-metadata retention pass failed: {}", e.getMessage());
+        }
         try {
             reconcileAllOrphans();
         } catch (RuntimeException e) {
@@ -178,6 +186,43 @@ public class EvidenceRetentionJob {
         if (deleted != null && deleted > 0) {
             log.info("swept {} evidence access-audit rows", deleted);
         }
+    }
+
+    /**
+     * F10 (approved 30/90 retention, Epic #77 / E2 #96): sweeps monitoring
+     * ACTIVITY METADATA past the per-session {@code activity_retention_days}
+     * (default 90 for legacy sessions with no policy row): unified-timeline
+     * {@code attempt_activity_events} and the {@code monitoring_alert_reviews}
+     * ledger. NEVER touches {@code attempt_answer_history},
+     * {@code grades}/{@code grade_items}, attempts, sessions or evidence rows
+     * — those live under their own contracts. Bounded per session and
+     * idempotent (re-running past a clear cutoff is a no-op).
+     */
+    public void sweepActivityMetadata() {
+        Instant now = clock.instant();
+        String sessionsSql = "SELECT s.id, COALESCE(p.activity_retention_days, 90) AS days "
+                + "FROM exam_sessions s "
+                + "LEFT JOIN session_monitoring_policies p ON p.exam_session_id = s.id "
+                + "WHERE EXISTS (SELECT 1 FROM attempts a WHERE a.exam_session_id = s.id)";
+        jdbc.query(sessionsSql, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+            long sessionId = rs.getLong("id");
+            int days = rs.getInt("days");
+            Instant cutoff = now.minus(days, ChronoUnit.DAYS);
+            Integer reviews = tx.execute(status -> jdbc.update(
+                    "DELETE FROM monitoring_alert_reviews WHERE created_at < ? "
+                            + "AND alert_id IN (SELECT id FROM monitoring_ai_alerts "
+                            + "WHERE exam_session_id = ?)",
+                    java.sql.Timestamp.from(cutoff), sessionId));
+            Integer events = tx.execute(status -> jdbc.update(
+                    "DELETE FROM attempt_activity_events WHERE server_received_at < ? "
+                            + "AND attempt_id IN (SELECT id FROM attempts "
+                            + "WHERE exam_session_id = ?)",
+                    java.sql.Timestamp.from(cutoff), sessionId));
+            if ((reviews != null && reviews > 0) || (events != null && events > 0)) {
+                log.info("activity-retention sweep session {}: {} review rows, {} activity "
+                        + "events ({}d policy)", sessionId, reviews, events, days);
+            }
+        });
     }
 
     /** Legacy entry point — delegates to the per-type pass. */

@@ -76,7 +76,12 @@ public enum ActivityEventType {
     EVIDENCE_SNAPSHOT_REJECTED,
     EVIDENCE_CLIP_REQUESTED,
     EVIDENCE_CLIP_READY,
-    EVIDENCE_CLIP_FAILED;
+    EVIDENCE_CLIP_FAILED,
+
+    // Server-confirmed teacher review lifecycle (P4-E, issues #95/#96;
+    // V42 CHECK). Written by AlertReviewService only — never
+    // client-ingestable (CLIENT_TYPES below keeps rejecting it).
+    ALERT_REVIEW_RECORDED;
 
     /** Types the browser ingest endpoint accepts (source=CLIENT only). */
     public static final Set<ActivityEventType> CLIENT_TYPES = Set.of(

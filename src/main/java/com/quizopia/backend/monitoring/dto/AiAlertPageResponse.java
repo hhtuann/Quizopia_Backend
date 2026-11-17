@@ -40,6 +40,10 @@ public record AiAlertPageResponse(
             /** Boxes of the detection that OPENED this alert window — the
              *  frame its evidence snapshot was captured on. Omitted when
              *  that detection row is no longer available. */
-            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode firstDetections) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) JsonNode firstDetections,
+            /** P4-E current human-review state (V42) — never a verdict. */
+            String reviewStatus,
+            int reviewVersion,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Instant reviewedAt) {
     }
 }
