@@ -168,7 +168,10 @@ public class EvidenceQueryService {
             boolean rollingBufferActive, boolean snapshotsEnabled) {
     }
 
-    private void requireTeacherReader(long userId, long sessionId) {
+    /** Shared authorization gate (permission + session ownership). Public so
+     *  destructive endpoints (e.g. demo purge) authorize EXPLICITLY instead
+     *  of relying on a read probe's side effect (security review F-1). */
+    public void requireTeacherReader(long userId, long sessionId) {
         try {
             auth.requireLearnerWithPermission(userId, "MONITORING_EVIDENCE_READ");
         } catch (AttemptException e) {

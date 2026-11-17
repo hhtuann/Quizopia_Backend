@@ -159,8 +159,9 @@ public class EvidenceControllers {
             @AuthenticationPrincipal Jwt jwt,
             @PathVariable("sessionId") Long sessionId) {
         long userId = Long.parseLong(jwt.getSubject());
-        // ownership re-check via the same gate as reads
-        queries.listEvidence(userId, sessionId, null, "SNAPSHOT", 1);
+        // Explicit destructive-endpoint authorization via the shared gate
+        // (security review F-1): never rely on a read probe's side effect.
+        queries.requireTeacherReader(userId, sessionId);
         int deleted = retention.purgeSession(sessionId);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(deleted);
     }

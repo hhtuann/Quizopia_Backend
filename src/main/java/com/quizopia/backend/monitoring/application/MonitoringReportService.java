@@ -115,9 +115,19 @@ public class MonitoringReportService {
                         + "FROM session_monitoring_policies WHERE exam_session_id = ?), false) AS activity_tracking_enabled",
                 sessionId, sessionId, sessionId);
 
-        Map<String, Object> session = jdbc.queryForMap(
+        // Robustness (security review F-4): queryForMap would 500 if the
+        // user row were ever gone; fall back to a generic label instead.
+        Map<String, Object> session = jdbc.query(
                 "SELECT s.title, s.code, u.display_name FROM exam_sessions s "
-                        + "JOIN users u ON u.id = ? WHERE s.id = ?", attempt.getUserId(), sessionId);
+                        + "JOIN users u ON u.id = ? WHERE s.id = ?",
+                rs -> {
+                    if (rs.next()) {
+                        return Map.of("title", rs.getString(1), "code", rs.getString(2),
+                                "display_name", rs.getString(3));
+                    }
+                    return Map.of("title", "Session " + sessionId, "code", "",
+                            "display_name", "Participant");
+                }, attempt.getUserId(), sessionId);
 
         Instant windowFrom = attempt.getStartedAt();
         Instant windowTo = attempt.getSubmittedAt() != null

@@ -107,7 +107,11 @@ public class AiDetectionIngestService {
     private final MonitoringMediaBindingRepository bindingRepo;
     private final AiAlertAggregationService aggregationService;
     private final SessionMonitoringPolicyRepository policyRepository;
-    /** Concurrent per-JVM policy cache (singleton service, many HTTP threads). */
+    /** Concurrent per-JVM policy cache (singleton service, many HTTP threads).
+     *  Size-bounded (security review F-2): a long-lived JVM can never grow
+     *  this map without limit; on overflow the whole cache resets (cheap
+     *  re-read, policy rows are frozen once attempts exist). */
+    private static final int SNAPSHOTS_CACHE_MAX = 10_000;
     private final Map<Long, Boolean> snapshotsEnabledCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final ActivityIngestRateLimiter rateLimiter;
     private final AiIngestProperties properties;
@@ -181,7 +185,12 @@ public class AiDetectionIngestService {
     @Transactional
     public AiDetectionBatchResponse ingestWorker(AiWorkerDetectionBatchRequest request) {
         requireBatchShape(request == null ? null : request.detections());
-
+        // Request-level admission FIRST (security review F-3): a key holder
+        // fan-out across many attemptIds must not burn one DB read per item
+        // before any bucket decision. The per-attempt buckets below still
+        // bound writes per attempt.
+        rateLimiter.admit(WORKER_RATE_DOMAIN, 0L,
+                properties.getWorkerRateLimit(), properties.getWindow());
         List<ItemResult> results = new ArrayList<>(request.detections().size());
         int accepted = 0;
         int duplicates = 0;
@@ -308,6 +317,9 @@ public class AiDetectionIngestService {
 
     /** Frozen-policy read; false for legacy (no-policy) sessions. */
     private boolean snapshotsEnabledFor(long examSessionId) {
+        if (snapshotsEnabledCache.size() >= SNAPSHOTS_CACHE_MAX) {
+            snapshotsEnabledCache.clear();
+        }
         return snapshotsEnabledCache.computeIfAbsent(examSessionId, id -> {
             var policy = policyRepository.findByExamSessionId(id);
             return policy.map(p -> p.isMonitoringEnabled() && p.isAiDetectionEnabled()
