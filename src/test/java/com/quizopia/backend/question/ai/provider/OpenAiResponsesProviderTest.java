@@ -192,4 +192,36 @@ class OpenAiResponsesProviderTest {
                 .isInstanceOfSatisfying(AiProviderException.class,
                         ex -> assertThat(ex.getKind()).isEqualTo(AiProviderException.Kind.PROTOCOL));
     }
+
+    /**
+     * Gate review P1: upstream error bodies (which may echo keys or document
+     * content) must never reach the application log — only status, a bounded
+     * error-type token and the provider request id.
+     */
+    @Test
+    void upstreamErrorBodiesAreNeverLogged() {
+        ch.qos.logback.classic.Logger providerLogger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(OpenAiResponsesProvider.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        providerLogger.addAppender(appender);
+        try {
+            respond(500, "{\"error\":{\"message\":\"boom sk-live-SECRET-SENTINEL-9f3a "
+                    + "with teacher lecture content SECRET-SENTINEL-9f3a\",\"type\":\"server_error\"}}");
+
+            assertThatThrownBy(() -> provider(10).complete(turns()))
+                    .isInstanceOf(AiProviderException.class);
+
+            String logged = appender.list.stream()
+                    .map(e -> e.getFormattedMessage())
+                    .reduce("", (a, b) -> a + "\n" + b);
+            assertThat(logged).contains("status=500");
+            assertThat(logged).contains("errorType=server_error");
+            assertThat(logged).doesNotContain("SECRET-SENTINEL-9f3a");
+            assertThat(logged).doesNotContain("sk-live");
+        } finally {
+            providerLogger.detachAppender(appender);
+        }
+    }
 }

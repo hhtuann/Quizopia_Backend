@@ -36,7 +36,14 @@ public class AiProviderConfig {
 
     @Bean
     @ConditionalOnProperty(prefix = "quizopia.ai.authoring", name = "provider", havingValue = "mock")
-    public AiQuizProvider mockAiQuizProvider() {
+    public AiQuizProvider mockAiQuizProvider(org.springframework.core.env.Environment environment) {
+        if (!environment.acceptsProfiles(
+                org.springframework.core.env.Profiles.of("test"))) {
+            // Fail closed: the deterministic mock must never serve a real
+            // deployment (issue #112: no fake success in live demo).
+            throw new IllegalStateException(
+                    "quizopia.ai.authoring.provider=mock is only allowed with the 'test' profile");
+        }
         return new MockAiQuizProvider();
     }
 

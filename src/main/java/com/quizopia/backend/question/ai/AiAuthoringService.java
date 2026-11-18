@@ -162,25 +162,31 @@ public class AiAuthoringService {
     /**
      * Per-user sliding-window quota on provider calls: at most
      * {@code maxAuthorRequestsPerWindow} within {@code authoringWindowSeconds}.
-     * Buckets are pruned lazily on each call.
+     * Prune/check/append run ATOMICALLY per bucket (synchronized on the
+     * deque instance, which is stable for the map's lifetime) so concurrent
+     * requests from one user can never exceed the cap. Single-node policy —
+     * a shared store is needed for multi-instance deployments (accepted MVP
+     * limitation).
      */
     private void requireAuthoringQuota(Long userId) {
         java.time.Instant now = java.time.Instant.now();
         java.time.Instant windowStart = now.minusSeconds(properties.authoringWindowSeconds());
         java.util.Deque<java.time.Instant> calls = authoringCalls.computeIfAbsent(userId, k ->
                 new java.util.concurrent.ConcurrentLinkedDeque<>());
-        while (true) {
-            java.time.Instant oldest = calls.peekFirst();
-            if (oldest == null || oldest.isAfter(windowStart)) {
-                break;
+        synchronized (calls) {
+            while (true) {
+                java.time.Instant oldest = calls.peekFirst();
+                if (oldest == null || oldest.isAfter(windowStart)) {
+                    break;
+                }
+                calls.pollFirst();
             }
-            calls.pollFirst();
+            if (calls.size() >= properties.maxAuthorRequestsPerWindow()) {
+                throw new AiAuthoringException(AiAuthoringErrorCode.AI_AUTHORING_RATE_LIMITED,
+                        "Too many AI authoring requests — try again later");
+            }
+            calls.addLast(now);
         }
-        if (calls.size() >= properties.maxAuthorRequestsPerWindow()) {
-            throw new AiAuthoringException(AiAuthoringErrorCode.AI_AUTHORING_RATE_LIMITED,
-                    "Too many AI authoring requests — try again later");
-        }
-        calls.addLast(now);
     }
 
     // ------------------------------------------------------------------

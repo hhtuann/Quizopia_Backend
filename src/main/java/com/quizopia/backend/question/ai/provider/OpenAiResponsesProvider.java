@@ -40,8 +40,8 @@ public class OpenAiResponsesProvider implements AiQuizProvider {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiResponsesProvider.class);
 
-    /** Maximum upstream error body kept for diagnostics logging (bytes). */
-    private static final int MAX_ERROR_BODY_SNIPPET = 512;
+    /** Maximum length of the schema-constrained error type token logged. */
+    private static final int MAX_ERROR_TYPE_CHARS = 64;
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
@@ -91,8 +91,12 @@ public class OpenAiResponsesProvider implements AiQuizProvider {
                     "AI provider rate limit (429)");
         }
         if (status < 200 || status >= 300) {
-            log.warn("OpenAI responses call failed: status={} bodySnippet={}",
-                    status, errorSnippet(response.body()));
+            // NEVER log the upstream body: it may echo request/document
+            // content. Log status + a bounded, schema-constrained error
+            // type token + the provider request id only.
+            log.warn("OpenAI responses call failed: status={} errorType={} requestId={}",
+                    status, providerErrorType(response.body()),
+                    response.headers().firstValue("x-request-id").orElse("unknown"));
             throw new AiProviderException(AiProviderException.Kind.UPSTREAM_ERROR,
                     "AI provider error (HTTP " + status + ")");
         }
@@ -178,11 +182,20 @@ public class OpenAiResponsesProvider implements AiQuizProvider {
         return new AiProviderResult(reply, markdown);
     }
 
-    private static String errorSnippet(String body) {
-        if (body == null) {
-            return "";
+    /**
+     * Extracts ONLY the provider's schema-constrained {@code error.type}
+     * token (e.g. {@code server_error}) for logging. Never returns message
+     * bodies or any free-form upstream content.
+     */
+    private static String providerErrorType(String body) {
+        try {
+            String type = JSON.readTree(body).path("error").path("type").asText("");
+            if (type.isBlank()) {
+                return "unknown";
+            }
+            return type.length() <= MAX_ERROR_TYPE_CHARS ? type : type.substring(0, MAX_ERROR_TYPE_CHARS);
+        } catch (Exception e) {
+            return "unparseable";
         }
-        String flat = body.replaceAll("\\s+", " ").trim();
-        return flat.length() <= MAX_ERROR_BODY_SNIPPET ? flat : flat.substring(0, MAX_ERROR_BODY_SNIPPET);
     }
 }

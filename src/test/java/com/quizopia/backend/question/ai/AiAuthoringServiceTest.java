@@ -475,4 +475,51 @@ class AiAuthoringServiceTest {
         AiAuthorResponse other = service.author(8L, 9L, request("gen", "", null, null));
         assertThat(other.valid()).isTrue();
     }
+
+    /**
+     * Gate review P2: quota admission must be atomic per user — 20 concurrent
+     * calls with a cap of 5 may let EXACTLY 5 reach the provider, never more.
+     */
+    @Test
+    void concurrentAuthorCallsNeverExceedQuota() throws Exception {
+        AiAuthoringProperties tinyQuota = new AiAuthoringProperties(
+                true, "openai", "https://api.example.test/v1", "test-key", "gpt-test",
+                30, 5_000_000, 60_000, 5, 100_000, 4_000, 20, 8_000, 262_144, 16_000, 1, 5, 3_600);
+        java.util.concurrent.atomic.AtomicInteger providerAdmissions = new java.util.concurrent.atomic.AtomicInteger();
+        provider = new RecordingProvider() {
+            @Override
+            public AiProviderResult complete(List<AiProviderTurn> turns) {
+                providerAdmissions.incrementAndGet();
+                calls.add(List.copyOf(turns));
+                return new AiProviderResult("ok", VALID_DOC);
+            }
+        };
+        service = new AiAuthoringService(guard, provider, new AiDocumentExtractor(tinyQuota), tinyQuota);
+
+        int threads = 20;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        service.author(7L, 9L, request("gen", "", null, null));
+                    } catch (AiAuthoringException expected) {
+                        // quota rejections land here
+                    }
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (java.util.concurrent.Future<?> f : futures) {
+                f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(providerAdmissions.get()).isEqualTo(5);
+    }
 }
