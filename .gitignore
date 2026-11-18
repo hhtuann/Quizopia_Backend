@@ -45,3 +45,8 @@ Dockerfile.e2e*
 *.log
 nohup.out
 __pycache__/
+
+# Never commit real local environment files; only the documented template.
+.env
+.env.*
+!.env.example
