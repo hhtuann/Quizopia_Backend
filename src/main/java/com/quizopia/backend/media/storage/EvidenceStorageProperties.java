@@ -25,6 +25,13 @@ public class EvidenceStorageProperties {
      *  may be a host-mapped URL the container cannot use. */
     private String egressEndpoint = "http://host.docker.internal:9000";
 
+    /** Base URL baked into presigned GET URLs (teacher playback). Set to the
+     *  BROWSER-reachable MinIO address when the backend runs inside Docker
+     *  (e.g. http://localhost:9000) — SigV4 signatures cover the host, so
+     *  the presign client is built on THIS endpoint, not the internal one.
+     *  Blank (default) presigns on the internal endpoint (host-run backend). */
+    private String publicEndpoint = "";
+
     public String getEndpoint() {
         return endpoint;
     }
@@ -63,6 +70,14 @@ public class EvidenceStorageProperties {
 
     public void setEgressEndpoint(String egressEndpoint) {
         this.egressEndpoint = egressEndpoint;
+    }
+
+    public String getPublicEndpoint() {
+        return publicEndpoint;
+    }
+
+    public void setPublicEndpoint(String publicEndpoint) {
+        this.publicEndpoint = publicEndpoint;
     }
 
     public Duration getPresignTtl() {

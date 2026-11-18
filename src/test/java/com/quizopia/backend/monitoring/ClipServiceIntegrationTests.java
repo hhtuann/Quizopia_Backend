@@ -105,7 +105,7 @@ class ClipServiceIntegrationTests {
                 java.sql.Timestamp.from(base), java.sql.Timestamp.from(base.plusSeconds(3600)));
         alertId = insertAlert(base.minusSeconds(10), base.plusSeconds(10));
         when(storage.head(anyString())).thenReturn(Optional.of(new ObjectHead(1)));
-        when(storage.presignedGet(anyString(), any())).thenReturn("http://storage/signed");
+        when(storage.presignedGetInternal(anyString(), any())).thenReturn("http://storage/signed");
         when(storage.put(anyString(), any(), anyString()))
                 .thenAnswer(inv -> {
                     byte[] bytes = inv.getArgument(1);

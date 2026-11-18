@@ -9,10 +9,18 @@ RUN mvn dependency:go-offline
 COPY src ./src
 RUN mvn clean package -DskipTests
 
+# Static ffmpeg/ffprobe (P4-D server-side evidence clip extraction). Copied
+# from the canonical static build — no Alpine package fetch at build time
+# (the Alpine CDN is the slow path) and no runtime libc dependencies.
+FROM mwader/static-ffmpeg:7.1 AS ffmpeg
+
 # Production stage
 FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
+
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
 
 RUN addgroup -S spring && adduser -S spring -G spring
 
