@@ -145,6 +145,13 @@
             <version>5.2.5</version>
         </dependency>
 
+        <!-- Apache PDFBox for AI-assisted authoring text-PDF extraction (P5, issue #113). -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.5</version>
+        </dependency>
+
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>

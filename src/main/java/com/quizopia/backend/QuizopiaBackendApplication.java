@@ -17,7 +17,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         com.quizopia.backend.monitoring.application.ActivityIngestProperties.class,
         com.quizopia.backend.monitoring.application.AiIngestProperties.class,
         com.quizopia.backend.media.storage.EvidenceStorageProperties.class,
-        com.quizopia.backend.evidence.application.EvidenceProperties.class})
+        com.quizopia.backend.evidence.application.EvidenceProperties.class,
+        com.quizopia.backend.question.ai.AiAuthoringProperties.class})
 @EnableScheduling
 public class QuizopiaBackendApplication {
 
