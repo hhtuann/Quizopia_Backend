@@ -187,7 +187,7 @@ public class ClipService {
 
         List<SegmentInput> inputs = new ArrayList<>();
         for (Covered part : coverage.effective()) {
-            String url = storage.presignedGet(part.objectKey(),
+            String url = storage.presignedGetInternal(part.objectKey(),
                     properties.getFfmpegTimeout().plus(Duration.ofSeconds(30)));
             inputs.add(new SegmentInput(url, part.inSeconds(), part.outSeconds()));
         }
