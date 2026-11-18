@@ -193,7 +193,10 @@ public class OpenAiResponsesProvider implements AiQuizProvider {
             if (type.isBlank()) {
                 return "unknown";
             }
-            return type.length() <= MAX_ERROR_TYPE_CHARS ? type : type.substring(0, MAX_ERROR_TYPE_CHARS);
+            // Strip control characters so a hostile upstream cannot forge
+            // log lines, then bound the length.
+            String safe = type.replaceAll("\\p{Cntrl}", " ").strip();
+            return safe.length() <= MAX_ERROR_TYPE_CHARS ? safe : safe.substring(0, MAX_ERROR_TYPE_CHARS);
         } catch (Exception e) {
             return "unparseable";
         }

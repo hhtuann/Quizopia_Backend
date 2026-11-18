@@ -489,8 +489,9 @@ class AiAuthoringServiceTest {
         provider = new RecordingProvider() {
             @Override
             public AiProviderResult complete(List<AiProviderTurn> turns) {
+                // Count ONLY: the inherited calls list is a plain ArrayList,
+                // and admitted calls run concurrently (P3 from re-review).
                 providerAdmissions.incrementAndGet();
-                calls.add(List.copyOf(turns));
                 return new AiProviderResult("ok", VALID_DOC);
             }
         };
