@@ -34,15 +34,32 @@ public class MinioEvidenceStorage implements EvidenceStorage {
 
     private static final Logger log = LoggerFactory.getLogger(MinioEvidenceStorage.class);
     private static final String NO_SUCH_KEY = "NoSuchKey";
+    private static final String REGION = "us-east-1";
 
     private final io.minio.MinioClient client;
+    /** Presign-only client: same credentials, but the browser-reachable
+     *  endpoint when public-endpoint is configured (SigV4 covers the host).
+     *  Region is pinned so presigning stays a LOCAL computation — without
+     *  it minio-java resolves the bucket region over the network, which
+     *  would fail on an endpoint that is intentionally unreachable from
+     *  this container (the browser-facing host). */
+    private final io.minio.MinioClient presignClient;
     private final String bucket;
 
     public MinioEvidenceStorage(EvidenceStorageProperties properties) {
         this.client = io.minio.MinioClient.builder()
                 .endpoint(properties.getEndpoint())
                 .credentials(properties.getAccessKey(), properties.getSecretKey())
+                .region(REGION)
                 .build();
+        String publicEndpoint = properties.getPublicEndpoint();
+        this.presignClient = (publicEndpoint == null || publicEndpoint.isBlank())
+                ? this.client
+                : io.minio.MinioClient.builder()
+                        .endpoint(publicEndpoint)
+                        .credentials(properties.getAccessKey(), properties.getSecretKey())
+                        .region(REGION)
+                        .build();
         this.bucket = properties.getBucket();
     }
 
@@ -93,6 +110,20 @@ public class MinioEvidenceStorage implements EvidenceStorage {
 
     @Override
     public String presignedGet(String key, Duration ttl) {
+        assertNoTransaction();
+        try {
+            return presignClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                    .method(io.minio.http.Method.GET)
+                    .bucket(bucket).object(key)
+                    .expiry((int) Math.min(ttl.toSeconds(), Integer.MAX_VALUE))
+                    .build());
+        } catch (Exception e) {
+            throw new EvidenceStorageException("presign " + key + " failed", e);
+        }
+    }
+
+    @Override
+    public String presignedGetInternal(String key, Duration ttl) {
         assertNoTransaction();
         try {
             return client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()

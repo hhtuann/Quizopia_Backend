@@ -29,8 +29,14 @@ public interface EvidenceStorage {
     /** HEAD the object; empty when absent. */
     Optional<ObjectHead> head(String key);
 
-    /** Short-lived presigned GET URL (teacher playback; audited by callers). */
+    /** Short-lived presigned GET URL (teacher playback; audited by callers).
+     *  Carries the BROWSER-reachable host when public-endpoint is configured. */
     String presignedGet(String key, Duration ttl);
+
+    /** Presigned GET URL on the INTERNAL endpoint — for server-side
+     *  consumers (e.g. ffmpeg segment fetch inside the backend container),
+     *  which must not cross the public host mapping. */
+    String presignedGetInternal(String key, Duration ttl);
 
     /** Deletes the object; false when it was already gone. */
     boolean delete(String key);

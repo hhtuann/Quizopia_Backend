@@ -64,6 +64,11 @@ public class EvidenceStorageConfig {
         }
 
         @Override
+        public String presignedGetInternal(String key, java.time.Duration ttl) {
+            throw unavailable();
+        }
+
+        @Override
         public boolean delete(String key) {
             throw unavailable();
         }
